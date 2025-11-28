@@ -10,17 +10,15 @@ async fn main() -> anyhow::Result<()> {
     let app_state = init_app_state().await?;
 
     // Read bind address from config before moving app_state
-    let bind_addr = app_state.config.bind_addr.clone();
+    let bind_addr = app_state.config.bind_addr;
 
     let app = create_app(app_state);
 
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
 
-    info!("Backend listening at {}", &listener.local_addr().unwrap());
+    info!("Backend listening at {}", &listener.local_addr()?);
 
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app).await?;
 
     Ok(())
 }

@@ -1,19 +1,28 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use base64::Engine;
 use chrono::{NaiveDateTime, Utc};
 use sha2::{Digest, Sha256};
 use tracing::instrument;
 use uuid::Uuid;
-use base64::Engine;
 
 use crate::app_error::AppResult;
 
 #[async_trait]
 pub trait UserRepo: Send + Sync {
     async fn find_or_create_by_email(&self, email: &str) -> AppResult<Uuid>;
-    async fn create_magic_link(&self, user_id: Uuid, token_hash: &str, expires_at: NaiveDateTime) -> AppResult<()>;
-    async fn get_valid_magic_link(&self, token_hash: &str, now: NaiveDateTime) -> AppResult<Option<Uuid>>;
+    async fn create_magic_link(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+        expires_at: NaiveDateTime,
+    ) -> AppResult<()>;
+    async fn get_valid_magic_link(
+        &self,
+        token_hash: &str,
+        now: NaiveDateTime,
+    ) -> AppResult<Option<Uuid>>;
     async fn consume_magic_link(&self, token_hash: &str) -> AppResult<()>;
 }
 
@@ -31,7 +40,11 @@ pub struct AuthUseCases {
 
 impl AuthUseCases {
     pub fn new(repo: Arc<dyn UserRepo>, email: Arc<dyn EmailSender>, app_origin: String) -> Self {
-        Self { repo, email, app_origin }
+        Self {
+            repo,
+            email,
+            app_origin,
+        }
     }
 
     #[instrument(skip(self))]
@@ -40,9 +53,17 @@ impl AuthUseCases {
         let raw = generate_token();
         let token_hash = hash_token(&raw);
         let expires_at = (Utc::now() + chrono::Duration::minutes(ttl_minutes)).naive_utc();
-        self.repo.create_magic_link(user_id, &token_hash, expires_at).await?;
+        self.repo
+            .create_magic_link(user_id, &token_hash, expires_at)
+            .await?;
         let link = format!("{}/magic?token={}", self.app_origin, raw);
-        self.email.send(email, "Your login link", &format!("<a href=\"{}\">Sign in</a>", link)).await
+        self.email
+            .send(
+                email,
+                "Your login link",
+                &format!("<a href=\"{}\">Sign in</a>", link),
+            )
+            .await
     }
 
     #[instrument(skip(self))]

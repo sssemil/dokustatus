@@ -1,8 +1,5 @@
 use crate::{
-    adapters::{
-        email::resend::ResendEmailSender,
-        http::app_state::AppState,
-    },
+    adapters::{email::resend::ResendEmailSender, http::app_state::AppState},
     infra::{config::AppConfig, postgres_persistence},
     use_cases::user::{AuthUseCases, UserRepo},
 };
@@ -26,7 +23,10 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         config.app_origin.to_string(),
     );
 
-    Ok(AppState { config: Arc::new(config), auth_use_cases: Arc::new(auth_use_cases) })
+    Ok(AppState {
+        config: Arc::new(config),
+        auth_use_cases: Arc::new(auth_use_cases),
+    })
 }
 
 pub fn init_tracing() {

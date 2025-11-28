@@ -1,9 +1,9 @@
 use std::net::SocketAddr;
 
-use time::Duration;
-use secrecy::SecretString;
-use url::Url;
 use env_helpers::{get_env, get_env_default};
+use secrecy::SecretString;
+use time::Duration;
+use url::Url;
 
 pub struct AppConfig {
     pub jwt_secret: SecretString,
@@ -24,7 +24,8 @@ impl AppConfig {
 
         let access_token_ttl_secs: i64 = get_env_default("ACCESS_TOKEN_TTL_SECS", 30);
 
-        let resend_api_key: SecretString = SecretString::new(get_env::<String>("RESEND_API_KEY").into());
+        let resend_api_key: SecretString =
+            SecretString::new(get_env::<String>("RESEND_API_KEY").into());
         let email_from: String = get_env("EMAIL_FROM");
         let app_origin: Url = get_env("APP_ORIGIN");
         let magic_link_ttl_minutes: i64 = get_env_default("MAGIC_LINK_TTL_MINUTES", 15);

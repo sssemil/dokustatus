@@ -2,7 +2,10 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::Serialize;
 
-use crate::{app_error::{AppError, AppResult}, use_cases::user::EmailSender};
+use crate::{
+    app_error::{AppError, AppResult},
+    use_cases::user::EmailSender,
+};
 use secrecy::ExposeSecret;
 
 #[derive(Clone)]
@@ -14,7 +17,11 @@ pub struct ResendEmailSender {
 
 impl ResendEmailSender {
     pub fn new(api_key: secrecy::SecretString, from: String) -> Self {
-        Self { client: Client::new(), api_key, from }
+        Self {
+            client: Client::new(),
+            api_key,
+            from,
+        }
     }
 }
 
@@ -29,7 +36,12 @@ struct ResendReq<'a> {
 #[async_trait]
 impl EmailSender for ResendEmailSender {
     async fn send(&self, to: &str, subject: &str, html: &str) -> AppResult<()> {
-        let body = ResendReq { from: &self.from, to: [to], subject, html };
+        let body = ResendReq {
+            from: &self.from,
+            to: [to],
+            subject,
+            html,
+        };
         self.client
             .post("https://api.resend.com/emails")
             .bearer_auth(self.api_key.expose_secret())

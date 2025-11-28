@@ -21,28 +21,27 @@ pub struct UserDb {
 impl UserRepo for PostgresPersistence {
     async fn find_or_create_by_email(&self, email: &str) -> AppResult<Uuid> {
         // Try find
-        if let Some(rec) = sqlx::query!(
-            "SELECT id FROM users WHERE email = $1",
-            email
-        )
-        .fetch_optional(&self.pool)
-        .await? {
+        if let Some(rec) = sqlx::query!("SELECT id FROM users WHERE email = $1", email)
+            .fetch_optional(&self.pool)
+            .await?
+        {
             return Ok(rec.id);
         }
         // Insert
         let id = Uuid::new_v4();
-        sqlx::query!(
-            "INSERT INTO users (id, email) VALUES ($1, $2)",
-            id,
-            email
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(AppError::from)?;
+        sqlx::query!("INSERT INTO users (id, email) VALUES ($1, $2)", id, email)
+            .execute(&self.pool)
+            .await
+            .map_err(AppError::from)?;
         Ok(id)
     }
 
-    async fn create_magic_link(&self, user_id: Uuid, token_hash: &str, expires_at: NaiveDateTime) -> AppResult<()> {
+    async fn create_magic_link(
+        &self,
+        user_id: Uuid,
+        token_hash: &str,
+        expires_at: NaiveDateTime,
+    ) -> AppResult<()> {
         sqlx::query!(
             "INSERT INTO magic_links (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
             token_hash,
@@ -55,7 +54,11 @@ impl UserRepo for PostgresPersistence {
         Ok(())
     }
 
-    async fn get_valid_magic_link(&self, token_hash: &str, now: NaiveDateTime) -> AppResult<Option<Uuid>> {
+    async fn get_valid_magic_link(
+        &self,
+        token_hash: &str,
+        now: NaiveDateTime,
+    ) -> AppResult<Option<Uuid>> {
         let rec = sqlx::query!(
             r#"SELECT user_id FROM magic_links
                WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > $2"#,
