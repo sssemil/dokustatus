@@ -49,10 +49,15 @@ impl AuthUseCases {
     }
 
     #[instrument(skip(self))]
-    pub async fn request_magic_link(&self, email: &str, ttl_minutes: i64) -> AppResult<()> {
+    pub async fn request_magic_link(
+        &self,
+        email: &str,
+        session_id: &str,
+        ttl_minutes: i64,
+    ) -> AppResult<()> {
         let user_id = self.repo.find_or_create_by_email(email).await?;
         let raw = generate_token();
-        let token_hash = hash_token(&raw);
+        let token_hash = hash_token(&raw, session_id);
         let expires_at = (Utc::now() + chrono::Duration::minutes(ttl_minutes)).naive_utc();
         self.repo
             .create_magic_link(user_id, &token_hash, expires_at)
@@ -68,8 +73,12 @@ impl AuthUseCases {
     }
 
     #[instrument(skip(self))]
-    pub async fn consume_magic_link(&self, raw_token: &str) -> AppResult<Option<Uuid>> {
-        let token_hash = hash_token(raw_token);
+    pub async fn consume_magic_link(
+        &self,
+        raw_token: &str,
+        session_id: &str,
+    ) -> AppResult<Option<Uuid>> {
+        let token_hash = hash_token(raw_token, session_id);
         let now = Utc::now().naive_utc();
         if let Some(user_id) = self.repo.get_valid_magic_link(&token_hash, now).await? {
             self.repo.consume_magic_link(&token_hash).await?;
@@ -86,9 +95,10 @@ fn generate_token() -> String {
     base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
 }
 
-fn hash_token(raw: &str) -> String {
+fn hash_token(raw: &str, session_id: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
+    hasher.update(session_id.as_bytes());
     let out = hasher.finalize();
     hex::encode(out)
 }

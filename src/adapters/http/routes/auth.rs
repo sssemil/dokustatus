@@ -10,6 +10,7 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::Deserialize;
 use time;
+use uuid::Uuid;
 
 use crate::{
     adapters::http::app_state::AppState, app_error::AppResult, application::jwt,
@@ -36,20 +37,32 @@ pub fn router() -> Router<AppState> {
 
 async fn request(
     State(app_state): State<AppState>,
+    jar: CookieJar,
     Json(payload): Json<RequestPayload>,
 ) -> AppResult<impl IntoResponse> {
+    let (jar, session_id) = ensure_login_session(jar, app_state.config.magic_link_ttl_minutes);
     let auth: Arc<AuthUseCases> = app_state.auth_use_cases.clone();
-    auth.request_magic_link(&payload.email, app_state.config.magic_link_ttl_minutes)
-        .await?;
-    Ok((StatusCode::ACCEPTED, ()))
+    auth.request_magic_link(
+        &payload.email,
+        &session_id,
+        app_state.config.magic_link_ttl_minutes,
+    )
+    .await?;
+    Ok((StatusCode::ACCEPTED, jar))
 }
 
 async fn consume(
     State(app_state): State<AppState>,
+    jar: CookieJar,
     Json(payload): Json<ConsumePayload>,
 ) -> AppResult<impl IntoResponse> {
+    let Some(session_cookie) = jar.get("login_session") else {
+        return Ok((StatusCode::UNAUTHORIZED, HeaderMap::new()));
+    };
+    let session_id = session_cookie.value().to_owned();
+
     let auth = app_state.auth_use_cases.clone();
-    if let Some(user_id) = auth.consume_magic_link(&payload.token).await? {
+    if let Some(user_id) = auth.consume_magic_link(&payload.token, &session_id).await? {
         // Get user email
         let email = app_state
             .repo
@@ -129,4 +142,18 @@ async fn logout() -> impl IntoResponse {
     headers.append("set-cookie", refresh.to_string().parse().unwrap());
     headers.append("set-cookie", email.to_string().parse().unwrap());
     (StatusCode::OK, headers)
+}
+
+fn ensure_login_session(jar: CookieJar, ttl_minutes: i64) -> (CookieJar, String) {
+    let session_id = jar
+        .get("login_session")
+        .map(|c| c.value().to_owned())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+    let cookie = Cookie::build(("login_session", session_id.clone()))
+        .http_only(true)
+        .same_site(SameSite::Lax)
+        .path("/")
+        .max_age(time::Duration::minutes(ttl_minutes))
+        .build();
+    (jar.add(cookie), session_id)
 }
