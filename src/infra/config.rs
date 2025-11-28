@@ -10,6 +10,7 @@ pub struct AppConfig {
     pub email_from: String,
     pub app_origin: String,
     pub magic_link_ttl_minutes: i64,
+    pub bind_addr: String,
 }
 
 impl AppConfig {
@@ -34,6 +35,8 @@ impl AppConfig {
             .parse()
             .expect("MAGIC_LINK_TTL_MINUTES must be a valid number");
 
+        let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
+
         Self {
             jwt_secret,
             access_token_ttl: Duration::seconds(access_token_ttl_secs),
@@ -42,6 +45,7 @@ impl AppConfig {
             email_from,
             app_origin,
             magic_link_ttl_minutes,
+            bind_addr,
         }
     }
 }

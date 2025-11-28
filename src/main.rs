@@ -9,9 +9,12 @@ async fn main() -> anyhow::Result<()> {
 
     let app_state = init_app_state().await?;
 
+    // Read bind address from config before moving app_state
+    let bind_addr = app_state.config.bind_addr.clone();
+
     let app = create_app(app_state);
 
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3001")
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
         .await
         .unwrap();
 
