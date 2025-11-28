@@ -1,7 +1,10 @@
 use crate::{
-    adapters::http::app_state::AppState,
-    infra::{argon2_password_hasher, config::AppConfig, postgres_persistence},
-    use_cases::user::UserUseCases,
+    adapters::{
+        email::resend::ResendEmailSender,
+        http::app_state::AppState,
+    },
+    infra::{config::AppConfig, postgres_persistence},
+    use_cases::user::{AuthUseCases, UserRepo},
 };
 use std::fs::File;
 use std::sync::Arc;
@@ -11,14 +14,19 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let config = AppConfig::from_env();
 
     let postgres_arc = Arc::new(postgres_persistence().await?);
-    let argon_hasher = argon2_password_hasher();
 
-    let user_use_cases = UserUseCases::new(Arc::new(argon_hasher), postgres_arc.clone());
+    let email = Arc::new(ResendEmailSender::new(
+        config.resend_api_key.clone(),
+        config.email_from.clone(),
+    ));
 
-    Ok(AppState {
-        config: Arc::new(config),
-        user_use_cases: Arc::new(user_use_cases),
-    })
+    let auth_use_cases = AuthUseCases::new(
+        postgres_arc.clone() as Arc<dyn UserRepo>,
+        email,
+        config.app_origin.clone(),
+    );
+
+    Ok(AppState { config: Arc::new(config), auth_use_cases: Arc::new(auth_use_cases) })
 }
 
 pub fn init_tracing() {
