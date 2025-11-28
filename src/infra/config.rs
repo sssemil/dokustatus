@@ -1,5 +1,6 @@
 use std::net::SocketAddr;
 
+use axum::http::HeaderValue;
 use env_helpers::{get_env, get_env_default};
 use secrecy::SecretString;
 use time::Duration;
@@ -12,6 +13,7 @@ pub struct AppConfig {
     pub resend_api_key: SecretString,
     pub email_from: String,
     pub app_origin: Url,
+    pub cors_origin: HeaderValue,
     pub magic_link_ttl_minutes: i64,
     pub bind_addr: SocketAddr,
 }
@@ -29,6 +31,10 @@ impl AppConfig {
         let email_from: String = get_env("EMAIL_FROM");
         let app_origin: Url = get_env("APP_ORIGIN");
         let magic_link_ttl_minutes: i64 = get_env_default("MAGIC_LINK_TTL_MINUTES", 15);
+        let cors_origin: HeaderValue =
+            get_env_default("CORS_ORIGIN", String::from("http://localhost:3000"))
+                .parse()
+                .expect("CORS_ORIGIN must be a valid header value");
 
         let bind_addr: SocketAddr = get_env_default("BIND_ADDR", "127.0.0.1:3001".parse().unwrap());
 
@@ -40,6 +46,7 @@ impl AppConfig {
             email_from,
             app_origin,
             magic_link_ttl_minutes,
+            cors_origin,
             bind_addr,
         }
     }
