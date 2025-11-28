@@ -3,3 +3,15 @@
 .env
 .env.test
 .idea
+
+# sqlx offline data cache should be committed, but ignore any generated db dumps
+*.sql.dump
+
+# Node/Next.js (ui)
+ui/node_modules
+ui/.next
+ui/.turbo
+ui/.vercel
+ui/npm-debug.log*
+ui/yarn-error.log*
+ui/package-lock.json
