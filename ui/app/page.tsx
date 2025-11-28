@@ -9,6 +9,7 @@ export default function Page() {
   const [checkingAuth, setCheckingAuth] = useState(true);
   const [authenticated, setAuthenticated] = useState(false);
   const [userEmail, setUserEmail] = useState<string>("");
+  const [dropdownOpen, setDropdownOpen] = useState(false);
 
   useEffect(() => {
     // Extract email from cookie
@@ -104,18 +105,122 @@ export default function Page() {
           top: 0,
           zIndex: 100
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)' }}>
-            <h1 style={{ margin: 0, fontSize: '18px', borderBottom: 'none', padding: 0 }}>
-              📊 dokustatus
-            </h1>
-            <span style={{ color: 'var(--text-muted)', fontSize: '14px' }}>|</span>
-            <span style={{ color: 'var(--text-secondary)', fontSize: '14px' }}>
-              {userEmail || 'Authenticated'}
-            </span>
+          <h1 style={{ margin: 0, fontSize: '18px', borderBottom: 'none', padding: 0 }}>
+            📊 dokustatus
+          </h1>
+          
+          {/* User Dropdown */}
+          <div style={{ position: 'relative' }}>
+            <button
+              onClick={() => setDropdownOpen(!dropdownOpen)}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--spacing-sm)',
+                padding: 'var(--spacing-sm) var(--spacing-md)',
+                backgroundColor: dropdownOpen ? 'var(--bg-hover)' : 'var(--bg-tertiary)',
+                border: '1px solid var(--border-primary)',
+                borderRadius: 'var(--radius-sm)',
+                cursor: 'pointer',
+                color: 'var(--text-primary)'
+              }}
+            >
+              <span style={{ 
+                width: '24px', 
+                height: '24px', 
+                borderRadius: '50%', 
+                backgroundColor: 'var(--accent-blue)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '12px',
+                fontWeight: 'bold',
+                color: '#000'
+              }}>
+                {userEmail ? userEmail[0].toUpperCase() : 'U'}
+              </span>
+              <span style={{ fontSize: '14px' }}>
+                {userEmail || 'User'}
+              </span>
+              <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
+                {dropdownOpen ? '▲' : '▼'}
+              </span>
+            </button>
+
+            {/* Dropdown Menu */}
+            {dropdownOpen && (
+              <>
+                {/* Backdrop to close dropdown when clicking outside */}
+                <div 
+                  onClick={() => setDropdownOpen(false)}
+                  style={{
+                    position: 'fixed',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    zIndex: 1000
+                  }}
+                />
+                
+                {/* Dropdown content */}
+                <div style={{
+                  position: 'absolute',
+                  top: 'calc(100% + 8px)',
+                  right: 0,
+                  backgroundColor: 'var(--bg-secondary)',
+                  border: '1px solid var(--border-primary)',
+                  borderRadius: 'var(--radius-md)',
+                  minWidth: '200px',
+                  boxShadow: 'var(--shadow-md)',
+                  overflow: 'hidden',
+                  zIndex: 1001
+                }}>
+                  <div style={{
+                    padding: 'var(--spacing-md)',
+                    borderBottom: '1px solid var(--border-primary)',
+                    backgroundColor: 'var(--bg-tertiary)'
+                  }}>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>
+                      Signed in as
+                    </div>
+                    <div style={{ fontSize: '14px', color: 'var(--text-primary)', fontWeight: 500 }}>
+                      {userEmail || 'User'}
+                    </div>
+                  </div>
+                  
+                  <button
+                    onClick={() => {
+                      setDropdownOpen(false);
+                      handleLogout();
+                    }}
+                    style={{
+                      width: '100%',
+                      textAlign: 'left',
+                      padding: 'var(--spacing-md)',
+                      backgroundColor: 'transparent',
+                      border: 'none',
+                      color: 'var(--text-error)',
+                      cursor: 'pointer',
+                      fontSize: '14px',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 'var(--spacing-sm)'
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'var(--bg-hover)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    <span>🚪</span>
+                    <span>Logout</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
-          <button onClick={handleLogout} className="danger">
-            Logout →
-          </button>
         </header>
 
         {/* Main Content */}
