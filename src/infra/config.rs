@@ -16,6 +16,10 @@ pub struct AppConfig {
     pub cors_origin: HeaderValue,
     pub magic_link_ttl_minutes: i64,
     pub bind_addr: SocketAddr,
+    pub pass_status_url: Url,
+    pub pass_status_poll_seconds: i64,
+    pub pass_status_info_url: Url,
+    pub pass_status_counter_url: Option<Url>,
 }
 
 impl AppConfig {
@@ -24,7 +28,7 @@ impl AppConfig {
 
         let refresh_token_ttl_days: i64 = get_env_default("REFRESH_TOKEN_TTL_DAYS", 30);
 
-        let access_token_ttl_secs: i64 = get_env_default("ACCESS_TOKEN_TTL_SECS", 30);
+        let access_token_ttl_secs: i64 = get_env_default("ACCESS_TOKEN_TTL_SECS", 86_400);
 
         let resend_api_key: SecretString =
             SecretString::new(get_env::<String>("RESEND_API_KEY").into());
@@ -36,7 +40,28 @@ impl AppConfig {
                 .parse()
                 .expect("CORS_ORIGIN must be a valid header value");
 
+        let pass_status_url: Url = get_env_default(
+            "PASS_STATUS_URL",
+            String::from(
+                "https://mpdz-passverfolgung.muenchen.de/api/passstatusabfrage-backend-service/rest/ausweisstatus/search",
+            ),
+        )
+        .parse()
+        .expect("PASS_STATUS_URL must be a valid URL");
+        let pass_status_info_url: Url = get_env_default(
+            "PASS_STATUS_INFO_URL",
+            String::from("https://mpdz-passverfolgung.muenchen.de/actuator/info"),
+        )
+        .parse()
+        .expect("PASS_STATUS_INFO_URL must be a valid URL");
+        let pass_status_counter_url: Option<Url> =
+            std::env::var("PASS_STATUS_COUNTER_URL").ok().map(|v| {
+                v.parse()
+                    .expect("PASS_STATUS_COUNTER_URL must be a valid URL")
+            });
+
         let bind_addr: SocketAddr = get_env_default("BIND_ADDR", "127.0.0.1:3001".parse().unwrap());
+        let pass_status_poll_seconds: i64 = get_env_default("PASS_STATUS_POLL_SECONDS", 3600);
 
         Self {
             jwt_secret,
@@ -48,6 +73,10 @@ impl AppConfig {
             magic_link_ttl_minutes,
             cors_origin,
             bind_addr,
+            pass_status_url,
+            pass_status_poll_seconds,
+            pass_status_info_url,
+            pass_status_counter_url,
         }
     }
 }

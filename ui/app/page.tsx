@@ -1,6 +1,21 @@
 "use client";
 import { useState, useEffect } from "react";
 
+type Track = {
+  id: string;
+  number: string;
+  typ: string;
+  status?: string | null;
+  pickup?: string | null;
+  checkedAt?: string | null;
+  changed?: boolean;
+};
+
+type DocTypeInfo = {
+  code: string;
+  prefixes: string[];
+};
+
 export default function Page() {
   const [email, setEmail] = useState("");
   const [sent, setSent] = useState(false);
@@ -10,6 +25,26 @@ export default function Page() {
   const [authenticated, setAuthenticated] = useState(false);
   const [userEmail, setUserEmail] = useState<string>("");
   const [dropdownOpen, setDropdownOpen] = useState(false);
+  const [docNumber, setDocNumber] = useState("");
+  const [tracks, setTracks] = useState<Track[]>([]);
+  const [tracksLoading, setTracksLoading] = useState(false);
+  const [tracksError, setTracksError] = useState<string | null>(null);
+  const [tracksSuccess, setTracksSuccess] = useState<string | null>(null);
+  const [docTypes, setDocTypes] = useState<DocTypeInfo[]>([]);
+
+  const fetchMetadata = async () => {
+    try {
+      const res = await fetch("/api/pass/documents/info", {
+        method: "GET",
+        credentials: "include",
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setDocTypes(data.docTypes || []);
+    } catch {
+      // ignore metadata errors
+    }
+  };
 
   useEffect(() => {
     // Extract email from cookie
@@ -50,6 +85,7 @@ export default function Page() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
+        credentials: "include",
       });
       
       if (!res.ok) {
@@ -64,6 +100,91 @@ export default function Page() {
       setLoading(false);
     }
   };
+
+  const fetchTracks = async () => {
+    setTracksLoading(true);
+    setTracksError(null);
+    setTracksSuccess(null);
+    try {
+      const res = await fetch("/api/pass/documents/check", {
+        method: "POST",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        throw new Error("Failed to refresh status");
+      }
+      const data = await res.json();
+      setTracks(data.items || []);
+    } catch (err: any) {
+      setTracksError(err.message || "Could not refresh status");
+    } finally {
+      setTracksLoading(false);
+    }
+  };
+
+  const addDocument = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!docNumber.trim()) {
+      setTracksError("Please enter a process number");
+      return;
+    }
+    setTracksError(null);
+    setTracksLoading(true);
+    try {
+      const res = await fetch("/api/pass/documents", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          number: docNumber.trim(),
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.message || "Failed to save document");
+      }
+      setDocNumber("");
+      setDocNumber("");
+      setTracksSuccess("Tracking added and confirmed. We'll email you on status changes.");
+      await fetchTracks();
+    } catch (err: any) {
+      setTracksError(err.message || "Could not save document");
+      setTracksLoading(false);
+    }
+  };
+
+  const deleteDocument = async (id: string) => {
+    setTracksError(null);
+    setTracksSuccess(null);
+    setTracksLoading(true);
+    try {
+      const res = await fetch(`/api/pass/documents/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        throw new Error("Failed to delete");
+      }
+      await fetchTracks();
+    } catch (err: any) {
+      setTracksError(err.message || "Could not delete document");
+      setTracksLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (authenticated) {
+      fetchTracks();
+      fetchMetadata();
+    }
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (authenticated) {
+      fetchTracks();
+      fetchMetadata();
+    }
+  }, [authenticated]);
 
   const handleLogout = async () => {
     try {
@@ -226,11 +347,174 @@ export default function Page() {
         {/* Main Content */}
         <main style={{ flex: 1, padding: 'var(--spacing-xl)' }}>
           <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-            <div className="card">
-              <h2>Welcome to dokustatus</h2>
-              <p style={{ marginBottom: 0 }}>
-                You are successfully authenticated. Your dashboard content will appear here.
+            <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+              <h2 style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                <span>🛂</span> Document status tracker
+              </h2>
+              <p style={{ marginTop: 0, color: 'var(--text-muted)' }}>
+                Add your passport or ID process number and we will pull the latest status and email you when it changes.
               </p>
+
+              <form
+                onSubmit={addDocument}
+                style={{
+                  display: 'grid',
+                  gap: '12px',
+                  gridTemplateColumns: 'minmax(0, 1fr) auto',
+                  alignItems: 'end',
+                  width: '100%'
+                }}
+              >
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  <label style={{ fontSize: '13px', color: 'var(--text-muted)' }}>Process number</label>
+                  <input
+                    type="text"
+                    value={docNumber}
+                    onChange={(e) => setDocNumber(e.target.value)}
+                    placeholder="e.g., CH1H123456"
+                    style={{
+                      width: '100%',
+                      padding: '14px 12px',
+                      borderRadius: '10px',
+                      border: '1px solid var(--border-primary)',
+                      background: 'var(--bg-secondary)',
+                      color: 'var(--text-primary)',
+                      fontWeight: 600,
+                      letterSpacing: '0.4px'
+                    }}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={tracksLoading}
+                  aria-label="Add tracking number"
+                  style={{
+                    width: '52px',
+                    height: '52px',
+                    borderRadius: '12px',
+                    border: 'none',
+                    background: 'linear-gradient(120deg, var(--accent-blue), #7dd3fc)',
+                    color: '#000',
+                    cursor: 'pointer',
+                    fontWeight: 800,
+                    fontSize: '20px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }}
+                >
+                  {tracksLoading ? '…' : '+'}
+                </button>
+              </form>
+
+              {docTypes.length > 0 && (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginTop: '8px', fontSize: '12px', color: 'var(--text-muted)' }}>
+                  {docTypes.map((dt) => (
+                    <div key={dt.code} style={{ padding: '6px 10px', borderRadius: '999px', border: '1px solid var(--border-primary)', background: 'var(--bg-secondary)' }}>
+                      <strong style={{ marginRight: '6px', color: 'var(--text-primary)' }}>{dt.code}</strong>
+                      <span>prefixes: {dt.prefixes.join(", ")}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {tracksError && (
+                <div className="message error" style={{ marginTop: '12px' }}>
+                  {tracksError}
+                </div>
+              )}
+              {tracksSuccess && (
+                <div className="message success" style={{ marginTop: '12px' }}>
+                  {tracksSuccess}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '20px', marginBottom: '8px' }}>
+                <h3 style={{ margin: 0 }}>Tracked documents</h3>
+                <button
+                  onClick={fetchTracks}
+                  disabled={tracksLoading}
+                  style={{
+                    padding: '8px 12px',
+                    borderRadius: '8px',
+                    border: '1px solid var(--border-primary)',
+                    background: 'var(--bg-secondary)',
+                    cursor: 'pointer',
+                    color: 'var(--text-primary)'
+                  }}
+                >
+                  {tracksLoading ? 'Refreshing…' : 'Refresh now'}
+                </button>
+              </div>
+
+              {tracksLoading && tracks.length === 0 ? (
+                <div className="loading-text" style={{ justifyContent: 'flex-start' }}>
+                  <span className="spinner" />
+                  <span>Checking status…</span>
+                </div>
+              ) : tracks.length === 0 ? (
+                <div className="message info">
+                  No documents added yet. Add your first number above to start tracking.
+                </div>
+              ) : (
+                <div style={{ display: 'grid', gap: '12px' }}>
+                  {tracks.map((track) => (
+                    <div
+                      key={track.id}
+                      style={{
+                        padding: '12px',
+                        border: '1px solid var(--border-primary)',
+                        borderRadius: '10px',
+                        background: 'var(--bg-secondary)',
+                        display: 'grid',
+                        gridTemplateColumns: '1fr 1fr 1fr auto',
+                        gap: '12px',
+                        alignItems: 'center'
+                      }}
+                    >
+                      <div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Number</div>
+                    <div style={{ fontWeight: 700, letterSpacing: '0.4px' }}>{track.number}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Type</div>
+                    <div>{track.typ}</div>
+                  </div>
+                      <div>
+                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Status</div>
+                        <div style={{ fontWeight: 700 }}>
+                          {track.status || 'Unknown'}
+                          {track.pickup ? ` — ${track.pickup}` : ''}
+                        </div>
+                        {track.checkedAt && (
+                          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                            Checked at {new Date(track.checkedAt).toLocaleString()}
+                          </div>
+                        )}
+                      </div>
+                      <div style={{ textAlign: 'right' }}>
+                        {track.changed && (
+                          <div style={{ color: 'var(--accent-blue)', fontWeight: 600, marginBottom: '6px' }}>
+                            Updated
+                          </div>
+                        )}
+                        <button
+                          onClick={() => deleteDocument(track.id)}
+                          disabled={tracksLoading}
+                          style={{
+                            border: 'none',
+                            background: 'transparent',
+                            color: 'var(--text-error)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </main>

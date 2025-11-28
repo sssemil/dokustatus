@@ -1,4 +1,5 @@
 use crate::app_error::AppError;
+use axum::Json;
 use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
@@ -16,6 +17,11 @@ impl IntoResponse for AppError {
             AppError::InvalidCredentials => {
                 (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
             }
+            AppError::InvalidInput(msg) => (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "message": msg })),
+            )
+                .into_response(),
             AppError::Internal(_) => {
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal error").into_response()
             }

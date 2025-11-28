@@ -2,6 +2,7 @@ use sqlx::PgPool;
 
 use crate::app_error::AppError;
 
+pub mod pass_status;
 pub mod user;
 
 #[derive(Clone)]

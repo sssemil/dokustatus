@@ -8,6 +8,9 @@ pub enum AppError {
     #[error("Invalid credentials")]
     InvalidCredentials,
 
+    #[error("Invalid input: {0}")]
+    InvalidInput(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

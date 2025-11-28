@@ -65,7 +65,7 @@ async fn consume(
     if let Some(user_id) = auth.consume_magic_link(&payload.token, &session_id).await? {
         // Get user email
         let email = app_state
-            .repo
+            .user_repo
             .get_email_by_id(user_id)
             .await?
             .unwrap_or_default();
@@ -86,11 +86,13 @@ async fn consume(
             .http_only(true)
             .same_site(SameSite::Lax)
             .path("/")
+            .max_age(app_state.config.access_token_ttl)
             .build();
         let refresh_cookie = Cookie::build(("refresh_token", refresh))
             .http_only(true)
             .same_site(SameSite::Lax)
             .path("/")
+            .max_age(app_state.config.refresh_token_ttl)
             .build();
         let email_cookie = Cookie::build(("user_email", email))
             .http_only(false)

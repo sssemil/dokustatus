@@ -1,7 +1,13 @@
 use crate::{
-    adapters::{email::resend::ResendEmailSender, http::app_state::AppState},
+    adapters::{
+        email::resend::ResendEmailSender, http::app_state::AppState,
+        pass_status::MunichPassStatusClient,
+    },
     infra::{config::AppConfig, postgres_persistence},
-    use_cases::user::{AuthUseCases, UserRepo},
+    use_cases::{
+        pass_status::{PassStatusRepo, PassStatusUseCases},
+        user::{AuthUseCases, UserRepo},
+    },
 };
 use std::fs::File;
 use std::sync::Arc;
@@ -17,14 +23,35 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         config.email_from.clone(),
     ));
 
-    let repo_arc = postgres_arc.clone() as Arc<dyn UserRepo>;
+    let user_repo_arc = postgres_arc.clone() as Arc<dyn UserRepo>;
+    let pass_repo_arc = postgres_arc.clone() as Arc<dyn PassStatusRepo>;
+    let status_client = Arc::new(MunichPassStatusClient::new(
+        config.pass_status_url.to_string(),
+        config.pass_status_info_url.to_string(),
+        config
+            .pass_status_counter_url
+            .as_ref()
+            .map(|u| u.to_string()),
+    ));
 
-    let auth_use_cases = AuthUseCases::new(repo_arc.clone(), email, config.app_origin.to_string());
+    let auth_use_cases = AuthUseCases::new(
+        user_repo_arc.clone(),
+        email.clone(),
+        config.app_origin.to_string(),
+    );
+
+    let pass_status_use_cases = PassStatusUseCases::new(
+        pass_repo_arc.clone(),
+        email,
+        status_client,
+        user_repo_arc.clone(),
+    );
 
     Ok(AppState {
         config: Arc::new(config),
         auth_use_cases: Arc::new(auth_use_cases),
-        repo: repo_arc,
+        pass_status_use_cases: Arc::new(pass_status_use_cases),
+        user_repo: user_repo_arc,
     })
 }
 
