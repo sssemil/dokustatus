@@ -23,8 +23,11 @@ pub fn router() -> Router<AppState> {
         .route("/consume", post(consume))
 }
 
-async fn request(State(auth): State<Arc<AuthUseCases>>, Json(payload): Json<RequestPayload>) -> AppResult<impl IntoResponse> {
-    auth.request_magic_link(&payload.email, 15).await?;
+async fn request(State(app_state): State<AppState>, Json(payload): Json<RequestPayload>) -> AppResult<impl IntoResponse> {
+    let auth: Arc<AuthUseCases> = app_state.auth_use_cases.clone();
+    auth
+        .request_magic_link(&payload.email, app_state.config.magic_link_ttl_minutes)
+        .await?;
     Ok((StatusCode::ACCEPTED, ()))
 }
 

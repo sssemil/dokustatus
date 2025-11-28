@@ -1,41 +1,35 @@
-use std::env;
+use std::net::SocketAddr;
 
 use time::Duration;
+use secrecy::SecretString;
+use url::Url;
+use env_helpers::{get_env, get_env_default};
 
 pub struct AppConfig {
-    pub jwt_secret: String,
+    pub jwt_secret: SecretString,
     pub access_token_ttl: Duration,
     pub refresh_token_ttl: Duration,
-    pub resend_api_key: String,
+    pub resend_api_key: SecretString,
     pub email_from: String,
-    pub app_origin: String,
+    pub app_origin: Url,
     pub magic_link_ttl_minutes: i64,
-    pub bind_addr: String,
+    pub bind_addr: SocketAddr,
 }
 
 impl AppConfig {
     pub fn from_env() -> Self {
-        let jwt_secret = env::var("JWT_SECRET").expect("JWT_SECRET must be set");
+        let jwt_secret: SecretString = SecretString::new(get_env::<String>("JWT_SECRET").into());
 
-        let refresh_token_ttl_days: i64 = env::var("REFRESH_TOKEN_TTL_DAYS")
-            .unwrap_or("30".to_string())
-            .parse()
-            .expect("REFRESH_TOKEN_TTL_DAYS must be a valid number");
+        let refresh_token_ttl_days: i64 = get_env_default("REFRESH_TOKEN_TTL_DAYS", 30);
 
-        let access_token_ttl_secs: i64 = env::var("ACCESS_TOKEN_TTL_SECS")
-            .unwrap_or("30".to_string())
-            .parse()
-            .expect("ACCESS_TOKEN_TTL_SECS must be a valid number");
+        let access_token_ttl_secs: i64 = get_env_default("ACCESS_TOKEN_TTL_SECS", 30);
 
-        let resend_api_key = env::var("RESEND_API_KEY").expect("RESEND_API_KEY must be set");
-        let email_from = env::var("EMAIL_FROM").expect("EMAIL_FROM must be set");
-        let app_origin = env::var("APP_ORIGIN").expect("APP_ORIGIN must be set");
-        let magic_link_ttl_minutes: i64 = env::var("MAGIC_LINK_TTL_MINUTES")
-            .unwrap_or("15".to_string())
-            .parse()
-            .expect("MAGIC_LINK_TTL_MINUTES must be a valid number");
+        let resend_api_key: SecretString = SecretString::new(get_env::<String>("RESEND_API_KEY").into());
+        let email_from: String = get_env("EMAIL_FROM");
+        let app_origin: Url = get_env("APP_ORIGIN");
+        let magic_link_ttl_minutes: i64 = get_env_default("MAGIC_LINK_TTL_MINUTES", 15);
 
-        let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:3001".to_string());
+        let bind_addr: SocketAddr = get_env_default("BIND_ADDR", "127.0.0.1:3001".parse().unwrap());
 
         Self {
             jwt_secret,

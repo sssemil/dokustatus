@@ -1,10 +1,10 @@
-use std::env;
+use env_helpers::get_env;
 
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tracing::info;
 
 pub async fn init_db() -> anyhow::Result<PgPool> {
-    let database_url = env::var("DATABASE_URL")?;
+    let database_url: String = get_env("DATABASE_URL");
 
     let pool = PgPoolOptions::new()
         .max_connections(5)

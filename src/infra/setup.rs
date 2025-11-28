@@ -23,7 +23,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let auth_use_cases = AuthUseCases::new(
         postgres_arc.clone() as Arc<dyn UserRepo>,
         email,
-        config.app_origin.clone(),
+        config.app_origin.to_string(),
     );
 
     Ok(AppState { config: Arc::new(config), auth_use_cases: Arc::new(auth_use_cases) })

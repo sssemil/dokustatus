@@ -28,4 +28,6 @@ sha2 = "0.10"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 rand = "0.8"
 hex = "0.4"
+env_helpers = "0.1.0"
+url = "2"
 
