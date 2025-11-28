@@ -36,6 +36,14 @@ impl UserRepo for PostgresPersistence {
         Ok(id)
     }
 
+    async fn get_email_by_id(&self, user_id: Uuid) -> AppResult<Option<String>> {
+        let rec = sqlx::query!("SELECT email FROM users WHERE id = $1", user_id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(AppError::from)?;
+        Ok(rec.map(|r| r.email))
+    }
+
     async fn create_magic_link(
         &self,
         user_id: Uuid,

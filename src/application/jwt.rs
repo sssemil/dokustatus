@@ -1,4 +1,4 @@
-use jsonwebtoken::{Algorithm, EncodingKey, Header, encode};
+use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
 use serde::{Deserialize, Serialize};
 use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
@@ -27,5 +27,16 @@ pub fn issue(user_id: Uuid, secret: &secrecy::SecretString, ttl: Duration) -> Ap
         &claims,
         &EncodingKey::from_secret(secret.expose_secret().as_bytes()),
     )
+    .map_err(|e| AppError::Internal(e.to_string()))
+}
+
+pub fn verify(token: &str, secret: &secrecy::SecretString) -> AppResult<Claims> {
+    let validation = Validation::new(Algorithm::HS256);
+    decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(secret.expose_secret().as_bytes()),
+        &validation,
+    )
+    .map(|data| data.claims)
     .map_err(|e| AppError::Internal(e.to_string()))
 }

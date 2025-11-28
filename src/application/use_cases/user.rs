@@ -12,6 +12,7 @@ use crate::app_error::AppResult;
 #[async_trait]
 pub trait UserRepo: Send + Sync {
     async fn find_or_create_by_email(&self, email: &str) -> AppResult<Uuid>;
+    async fn get_email_by_id(&self, user_id: Uuid) -> AppResult<Option<String>>;
     async fn create_magic_link(
         &self,
         user_id: Uuid,
