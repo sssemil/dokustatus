@@ -158,6 +158,14 @@ impl PassStatusClient for MunichPassStatusClient {
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(PassStatusInfo {
+                status: Some("UNBEKANNT".to_string()),
+                type_label: Some(typ.to_string()),
+                pickup: None,
+            });
+        }
+
         if let Some(counter_url) = &self.counter_url {
             let client = self.client.clone();
             let counter_url = counter_url.clone();

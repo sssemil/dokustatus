@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 type Track = {
   id: string;
   number: string;
-  typ: string;
+  typ?: string | null;
   status?: string | null;
   pickup?: string | null;
   checkedAt?: string | null;
@@ -14,6 +14,96 @@ type Track = {
 type DocTypeInfo = {
   code: string;
   prefixes: string[];
+};
+
+type Callout = {
+  tone: "success" | "warning" | "error" | "info";
+  title: string;
+  message?: string;
+  icon: string;
+};
+
+const STATUS_CALLOUTS: Record<string, Callout> = {
+  IN_BEARBEITUNG: {
+    tone: "warning",
+    title: "Ihr Ausweisdokument ist noch in Arbeit",
+    message:
+      "Bearbeitungszeiten:<br>• Express-Reisepass: 3–6 Werktage<br>• Reisepass/Personalausweis: 4–5 Wochen<br>• eID-Karte: 5–6 Wochen",
+    icon: "⚠️",
+  },
+  BEREIT_ZUR_ABHOLUNG: {
+    tone: "success",
+    title: "Ihr Ausweisdokument ist fertig",
+    message: "",
+    icon: "✅",
+  },
+  AUSGEHAENDIGT: {
+    tone: "warning",
+    title: "Ihr Ausweisdokument ist bereits ausgehändigt",
+    message: "Das Dokument wurde schon ausgegeben.",
+    icon: "⚠️",
+  },
+  IN_DIREKTVERSAND: {
+    tone: "warning",
+    title: "Ihr Ausweisdokument wurde versandt",
+    message: "Versand durch die Bundesdruckerei GmbH, unterwegs.",
+    icon: "⚠️",
+  },
+  DIREKTVERSAND_ZUGESTELLT: {
+    tone: "success",
+    title: "Ihr Ausweisdokument wurde zugestellt",
+    message: "",
+    icon: "✅",
+  },
+  DIREKTVERSAND_FEHLGESCHLAGEN: {
+    tone: "error",
+    title: "Ihr Ausweisdokument konnte Ihnen leider nicht zugestellt werden",
+    message:
+      "Wird 7 Tage bei der Deutschen Post bereitgehalten, danach Rücksendung an Bürgerbüro Ruppertstr. 19.",
+    icon: "❌",
+  },
+  UNBEKANNT: {
+    tone: "error",
+    title: "Der Status Ihres Ausweisdokuments ist unbekannt",
+    message: "Keine Statusinformationen verfügbar.",
+    icon: "❌",
+  },
+  DOKUMENT_UNBEKANNT: {
+    tone: "error",
+    title: "Die eingegebene Ausweisnummer ist uns nicht bekannt",
+    message: "Bitte Eingabe prüfen und erneut versuchen.",
+    icon: "❌",
+  },
+};
+
+const toneStyle = (tone: Callout["tone"]) => {
+  switch (tone) {
+    case "success":
+      return { bg: "rgba(16,185,129,0.12)", border: "1px solid rgba(16,185,129,0.35)", color: "#0f5132" };
+    case "warning":
+      return { bg: "rgba(234,179,8,0.14)", border: "1px solid rgba(234,179,8,0.35)", color: "#7c5e00" };
+    case "error":
+      return { bg: "rgba(248,113,113,0.14)", border: "1px solid rgba(248,113,113,0.35)", color: "#7f1d1d" };
+    default:
+      return { bg: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.35)", color: "#1d4ed8" };
+  }
+};
+
+const getCallout = (status?: string | null): Callout => {
+  if (!status) {
+    return {
+      tone: "info",
+      title: "Status wird geladen",
+      message: "Keine Statusinformationen verfügbar.",
+      icon: "ℹ️",
+    };
+  }
+  return STATUS_CALLOUTS[status] || {
+    tone: "info",
+    title: `Status: ${status}`,
+    message: "Noch keine Detailinformationen.",
+    icon: "ℹ️",
+  };
 };
 
 export default function Page() {
@@ -458,61 +548,91 @@ export default function Page() {
                 </div>
               ) : (
                 <div style={{ display: 'grid', gap: '12px' }}>
-                  {tracks.map((track) => (
-                    <div
-                      key={track.id}
-                      style={{
-                        padding: '12px',
-                        border: '1px solid var(--border-primary)',
-                        borderRadius: '10px',
-                        background: 'var(--bg-secondary)',
-                        display: 'grid',
-                        gridTemplateColumns: '1fr 1fr 1fr auto',
-                        gap: '12px',
-                        alignItems: 'center'
-                      }}
-                    >
-                      <div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Number</div>
-                    <div style={{ fontWeight: 700, letterSpacing: '0.4px' }}>{track.number}</div>
-                  </div>
-                  <div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Type</div>
-                    <div>{track.typ}</div>
-                  </div>
-                      <div>
-                        <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Status</div>
-                        <div style={{ fontWeight: 700 }}>
-                          {track.status || 'Unknown'}
-                          {track.pickup ? ` — ${track.pickup}` : ''}
+                  {tracks.map((track) => {
+                    const callout = getCallout(track.status);
+                    const tone = toneStyle(callout.tone);
+                    return (
+                      <div
+                        key={track.id}
+                        style={{
+                          padding: '12px',
+                          border: '1px solid var(--border-primary)',
+                          borderRadius: '10px',
+                          background: 'var(--bg-secondary)',
+                          display: 'grid',
+                          gridTemplateColumns: '1fr auto',
+                          gap: '12px',
+                        }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                          <div style={{ display: 'flex', gap: '12px', alignItems: 'center' }}>
+                            <div>
+                              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Number</div>
+                              <div style={{ fontWeight: 700, letterSpacing: '0.4px' }}>{track.number}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>Type</div>
+                              <div>{track.typ || 'Automatisch erkannt'}</div>
+                            </div>
+                            {track.checkedAt && (
+                              <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
+                                Checked at {new Date(track.checkedAt).toLocaleString()}
+                              </div>
+                            )}
+                          </div>
+                          <div
+                            style={{
+                              padding: '10px',
+                              borderRadius: '8px',
+                              background: tone.bg,
+                              border: tone.border,
+                              color: tone.color,
+                              display: 'grid',
+                              gridTemplateColumns: 'auto 1fr',
+                              gap: '10px',
+                              alignItems: 'center',
+                            }}
+                          >
+                            <div style={{ fontSize: '20px' }}>{callout.icon}</div>
+                            <div>
+                              <div style={{ fontWeight: 700, marginBottom: '4px' }}>{callout.title}</div>
+                              {callout.message && (
+                                <div
+                                  style={{ fontSize: '13px' }}
+                                  dangerouslySetInnerHTML={{ __html: callout.message }}
+                                />
+                              )}
+                              {track.pickup && (
+                                <div style={{ marginTop: '6px', fontSize: '13px' }}>
+                                  Abholort: {track.pickup}
+                                </div>
+                              )}
+                            </div>
+                          </div>
                         </div>
-                        {track.checkedAt && (
-                          <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>
-                            Checked at {new Date(track.checkedAt).toLocaleString()}
-                          </div>
-                        )}
+                        <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: '6px', justifyContent: 'space-between' }}>
+                          {track.changed && (
+                            <div style={{ color: 'var(--accent-blue)', fontWeight: 600 }}>
+                              Updated
+                            </div>
+                          )}
+                          <button
+                            onClick={() => deleteDocument(track.id)}
+                            disabled={tracksLoading}
+                            style={{
+                              border: 'none',
+                              background: 'transparent',
+                              color: 'var(--text-error)',
+                              cursor: 'pointer',
+                              alignSelf: 'flex-end'
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
-                      <div style={{ textAlign: 'right' }}>
-                        {track.changed && (
-                          <div style={{ color: 'var(--accent-blue)', fontWeight: 600, marginBottom: '6px' }}>
-                            Updated
-                          </div>
-                        )}
-                        <button
-                          onClick={() => deleteDocument(track.id)}
-                          disabled={tracksLoading}
-                          style={{
-                            border: 'none',
-                            background: 'transparent',
-                            color: 'var(--text-error)',
-                            cursor: 'pointer'
-                          }}
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </div>

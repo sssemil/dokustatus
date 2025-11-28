@@ -43,6 +43,7 @@ pub struct StatusCheckResult {
     pub pickup: Option<String>,
     pub changed: bool,
     pub checked_at: NaiveDateTime,
+    pub stopped: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -149,7 +150,7 @@ impl PassStatusUseCases {
             status_info
                 .type_label
                 .as_deref()
-                .unwrap_or_else(|| normalized_typ.as_str()),
+                .unwrap_or(normalized_typ.as_str()),
             pickup_line
         );
         self.email.send(&user_email, &subject, &body).await?;
@@ -185,6 +186,7 @@ impl PassStatusUseCases {
                 .await?;
 
             let changed = status_info.status.is_some() && status_info.status != track.last_status;
+            let final_state = is_final(status_info.status.as_deref());
 
             self.repo
                 .save_status(
@@ -195,29 +197,27 @@ impl PassStatusUseCases {
                 )
                 .await?;
 
-            if changed {
-                if let Some(email) = &user_email {
-                    let subject = format!(
-                        "Dokument {}: Status {}",
-                        track.number,
-                        status_info.status.as_deref().unwrap_or("Unbekannt")
-                    );
-                    let pickup_line = status_info
-                        .pickup
+            if changed && let Some(email) = &user_email {
+                let subject = format!(
+                    "Dokument {}: Status {}",
+                    track.number,
+                    status_info.status.as_deref().unwrap_or("Unbekannt")
+                );
+                let pickup_line = status_info
+                    .pickup
+                    .as_deref()
+                    .map(|p| format!("<p>Abholort: {}</p>", p))
+                    .unwrap_or_default();
+                let body = format!(
+                    "<p>Status: {}</p><p>Typ: {}</p>{}",
+                    status_info.status.as_deref().unwrap_or("Unbekannt"),
+                    status_info
+                        .type_label
                         .as_deref()
-                        .map(|p| format!("<p>Abholort: {}</p>", p))
-                        .unwrap_or_default();
-                    let body = format!(
-                        "<p>Status: {}</p><p>Typ: {}</p>{}",
-                        status_info.status.as_deref().unwrap_or("Unbekannt"),
-                        status_info
-                            .type_label
-                            .as_deref()
-                            .unwrap_or_else(|| normalized_typ.as_str()),
-                        pickup_line
-                    );
-                    self.email.send(email, &subject, &body).await?;
-                }
+                        .unwrap_or(normalized_typ.as_str()),
+                    pickup_line
+                );
+                self.email.send(email, &subject, &body).await?;
             }
 
             results.push(StatusCheckResult {
@@ -228,6 +228,7 @@ impl PassStatusUseCases {
                 pickup: status_info.pickup,
                 changed,
                 checked_at: now,
+                stopped: final_state,
             });
         }
 
@@ -252,6 +253,7 @@ impl PassStatusUseCases {
                 .await?;
 
             let changed = status_info.status.is_some() && status_info.status != track.last_status;
+            let final_state = is_final(status_info.status.as_deref());
 
             self.repo
                 .save_status(
@@ -262,29 +264,27 @@ impl PassStatusUseCases {
                 )
                 .await?;
 
-            if changed {
-                if let Some(email) = self.user_repo.get_email_by_id(track.user_id).await? {
-                    let subject = format!(
-                        "Dokument {}: Status {}",
-                        track.number,
-                        status_info.status.as_deref().unwrap_or("Unbekannt")
-                    );
-                    let pickup_line = status_info
-                        .pickup
+            if changed && let Some(email) = self.user_repo.get_email_by_id(track.user_id).await? {
+                let subject = format!(
+                    "Dokument {}: Status {}",
+                    track.number,
+                    status_info.status.as_deref().unwrap_or("Unbekannt")
+                );
+                let pickup_line = status_info
+                    .pickup
+                    .as_deref()
+                    .map(|p| format!("<p>Abholort: {}</p>", p))
+                    .unwrap_or_default();
+                let body = format!(
+                    "<p>Status: {}</p><p>Typ: {}</p>{}",
+                    status_info.status.as_deref().unwrap_or("Unbekannt"),
+                    status_info
+                        .type_label
                         .as_deref()
-                        .map(|p| format!("<p>Abholort: {}</p>", p))
-                        .unwrap_or_default();
-                    let body = format!(
-                        "<p>Status: {}</p><p>Typ: {}</p>{}",
-                        status_info.status.as_deref().unwrap_or("Unbekannt"),
-                        status_info
-                            .type_label
-                            .as_deref()
-                            .unwrap_or_else(|| normalized_typ.as_str()),
-                        pickup_line
-                    );
-                    self.email.send(&email, &subject, &body).await?;
-                }
+                        .unwrap_or(normalized_typ.as_str()),
+                    pickup_line
+                );
+                self.email.send(&email, &subject, &body).await?;
             }
 
             results.push(StatusCheckResult {
@@ -295,6 +295,7 @@ impl PassStatusUseCases {
                 pickup: status_info.pickup,
                 changed,
                 checked_at: now,
+                stopped: final_state,
             });
         }
 
@@ -312,4 +313,11 @@ fn normalize_number(input: &str) -> AppResult<String> {
             "Invalid tracking number format. Expected 10 alphanumeric characters.".into(),
         ))
     }
+}
+
+fn is_final(status: Option<&str>) -> bool {
+    matches!(
+        status,
+        Some("AUSGEHAENDIGT") | Some("DIREKTVERSAND_ZUGESTELLT")
+    )
 }
