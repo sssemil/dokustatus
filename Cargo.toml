@@ -1,5 +1,5 @@
 [package]
-name = "clean_architecture"
+name = "dokustatus"
 version = "0.1.0"
 edition = "2024"
 
