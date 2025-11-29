@@ -132,6 +132,8 @@ services:
       NODE_ENV: production
       PORT: ${UI_PORT:-3000}
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?}
+      # Internal API URL for server-side requests (SSR)
+      API_BASE: http://api:${API_PORT:-3001}
     depends_on:
       - api
     restart: unless-stopped
