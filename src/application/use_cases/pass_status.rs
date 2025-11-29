@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use chrono::{NaiveDateTime, Utc};
 use serde::Serialize;
 use sqlx::FromRow;
-use tracing::instrument;
+use tracing::{instrument, warn};
 use uuid::Uuid;
 
 use crate::{
@@ -87,6 +87,7 @@ pub struct PassStatusUseCases {
     email: Arc<dyn EmailSender>,
     status_client: Arc<dyn PassStatusClient>,
     user_repo: Arc<dyn UserRepo>,
+    refresh_interval_secs: i64,
 }
 
 impl PassStatusUseCases {
@@ -95,12 +96,14 @@ impl PassStatusUseCases {
         email: Arc<dyn EmailSender>,
         status_client: Arc<dyn PassStatusClient>,
         user_repo: Arc<dyn UserRepo>,
+        refresh_interval_secs: i64,
     ) -> Self {
         Self {
             repo,
             email,
             status_client,
             user_repo,
+            refresh_interval_secs,
         }
     }
 
@@ -207,23 +210,100 @@ impl PassStatusUseCases {
         let mut results = Vec::new();
 
         for track in tracks {
-            let normalized_typ = self.status_client.detect_type(&track.number).await?;
-            let status_info = self
+            if let Some(last_checked) = track.last_checked_at {
+                if (now - last_checked).num_seconds() < self.refresh_interval_secs {
+                    // Not due yet; return cached state.
+                    let status = track.last_status.clone();
+                    let stopped = is_final(status.as_deref());
+                    results.push(StatusCheckResult {
+                        id: track.id,
+                        number: track.number,
+                        typ: None,
+                        status,
+                        pickup: track.last_pickup.clone(),
+                        changed: false,
+                        checked_at: last_checked,
+                        stopped,
+                    });
+                    continue;
+                }
+            }
+
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            // Simple staggering: wait a short moment between API calls to avoid burst.
+
+            let normalized_typ = match self.status_client.detect_type(&track.number).await {
+                Ok(t) => t,
+                Err(err) => {
+                    warn!(error = ?err, track_id = %track.id, "detect_type failed; returning cached status");
+                    let status = track.last_status.clone();
+                    let stopped = is_final(status.as_deref());
+                    results.push(StatusCheckResult {
+                        id: track.id,
+                        number: track.number,
+                        typ: None,
+                        status,
+                        pickup: track.last_pickup.clone(),
+                        changed: false,
+                        checked_at: track.last_checked_at.unwrap_or(now),
+                        stopped,
+                    });
+                    continue;
+                }
+            };
+
+            let status_info = match self
                 .status_client
                 .fetch_status(&track.number, &normalized_typ)
-                .await?;
+                .await
+            {
+                Ok(info) => info,
+                Err(err) => {
+                    warn!(error = ?err, track_id = %track.id, "fetch_status failed; returning cached status");
+                    let status = track.last_status.clone();
+                    let stopped = is_final(status.as_deref());
+                    results.push(StatusCheckResult {
+                        id: track.id,
+                        number: track.number,
+                        typ: None,
+                        status,
+                        pickup: track.last_pickup.clone(),
+                        changed: false,
+                        checked_at: track.last_checked_at.unwrap_or(now),
+                        stopped,
+                    });
+                    continue;
+                }
+            };
 
             let changed = status_info.status.is_some() && status_info.status != track.last_status;
             let final_state = is_final(status_info.status.as_deref());
 
-            self.repo
+            if let Err(err) = self
+                .repo
                 .save_status(
                     track.id,
                     status_info.status.clone(),
                     status_info.pickup.clone(),
                     now,
                 )
-                .await?;
+                .await
+            {
+                warn!(error = ?err, track_id = %track.id, "persisting status failed; returning cached status");
+                let status = track.last_status.clone();
+                let stopped = is_final(status.as_deref());
+                results.push(StatusCheckResult {
+                    id: track.id,
+                    number: track.number,
+                    typ: Some(normalized_typ),
+                    status,
+                    pickup: track.last_pickup.clone(),
+                    changed: false,
+                    checked_at: track.last_checked_at.unwrap_or(now),
+                    stopped,
+                });
+                continue;
+            }
 
             if changed && let Some(email) = self.user_repo.get_email_by_id(track.user_id).await? {
                 let subject = format!(
@@ -245,7 +325,9 @@ impl PassStatusUseCases {
                         .unwrap_or(normalized_typ.as_str()),
                     pickup_line
                 );
-                self.email.send(&email, &subject, &body).await?;
+                if let Err(err) = self.email.send(&email, &subject, &body).await {
+                    warn!(error = ?err, track_id = %track.id, "sending email failed");
+                }
             }
 
             results.push(StatusCheckResult {

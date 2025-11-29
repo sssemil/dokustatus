@@ -31,16 +31,16 @@ async fn main() -> anyhow::Result<()> {
 }
 
 fn spawn_pass_status_poll(app_state: dokustatus::adapters::http::app_state::AppState) {
-    let poll_every = app_state.config.pass_status_poll_seconds;
     tokio::spawn(async move {
-        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(
-            poll_every.try_into().unwrap_or(3600),
-        ));
         loop {
-            interval.tick().await;
-            if let Err(err) = app_state.pass_status_use_cases.check_all_and_notify().await {
-                tracing::error!(error = ?err, "pass status poll failed");
-            }
+            match app_state.pass_status_use_cases.check_all_and_notify().await {
+                Ok(res) => !res.is_empty(),
+                Err(err) => {
+                    tracing::error!(error = ?err, "pass status poll failed");
+                    false
+                }
+            };
+            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
         }
     });
 }
