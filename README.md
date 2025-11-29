@@ -9,10 +9,10 @@ Prerequisites
 Steps
 1) Setup environment
    cp .env.example .env
-   # Set RESEND_API_KEY, EMAIL_FROM, APP_ORIGIN, JWT_SECRET, and DB settings as needed
+   # Set RESEND_API_KEY, EMAIL_FROM, APP_ORIGIN, JWT_SECRET, DB and REDIS settings as needed
 
-2) Start Postgres
-   docker compose up -d postgres
+2) Start Postgres + Redis
+   docker compose up -d postgres redis
 
 3) Create and migrate database
    export DATABASE_URL=postgres://user:password@localhost:5432/clean_architecture

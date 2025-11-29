@@ -175,62 +175,23 @@ impl PassStatusUseCases {
     pub async fn check_and_notify(&self, user_id: Uuid) -> AppResult<Vec<StatusCheckResult>> {
         let tracks = self.repo.list_tracks_for_user(user_id).await?;
         let now = Utc::now().naive_utc();
-        let mut results = Vec::new();
-        let user_email = self.user_repo.get_email_by_id(user_id).await?;
-
-        for track in tracks {
-            let normalized_typ = self.status_client.detect_type(&track.number).await?;
-            let status_info = self
-                .status_client
-                .fetch_status(&track.number, &normalized_typ)
-                .await?;
-
-            let changed = status_info.status.is_some() && status_info.status != track.last_status;
-            let final_state = is_final(status_info.status.as_deref());
-
-            self.repo
-                .save_status(
-                    track.id,
-                    status_info.status.clone(),
-                    status_info.pickup.clone(),
-                    now,
-                )
-                .await?;
-
-            if changed && let Some(email) = &user_email {
-                let subject = format!(
-                    "Dokument {}: Status {}",
-                    track.number,
-                    status_info.status.as_deref().unwrap_or("Unbekannt")
-                );
-                let pickup_line = status_info
-                    .pickup
-                    .as_deref()
-                    .map(|p| format!("<p>Abholort: {}</p>", p))
-                    .unwrap_or_default();
-                let body = format!(
-                    "<p>Status: {}</p><p>Typ: {}</p>{}",
-                    status_info.status.as_deref().unwrap_or("Unbekannt"),
-                    status_info
-                        .type_label
-                        .as_deref()
-                        .unwrap_or(normalized_typ.as_str()),
-                    pickup_line
-                );
-                self.email.send(email, &subject, &body).await?;
-            }
-
-            results.push(StatusCheckResult {
-                id: track.id,
-                number: track.number,
-                typ: Some(normalized_typ),
-                status: status_info.status,
-                pickup: status_info.pickup,
-                changed,
-                checked_at: now,
-                stopped: final_state,
-            });
-        }
+        let results = tracks
+            .into_iter()
+            .map(|track| {
+                let status = track.last_status.clone();
+                let stopped = is_final(status.as_deref());
+                StatusCheckResult {
+                    id: track.id,
+                    number: track.number,
+                    typ: None,
+                    status,
+                    pickup: track.last_pickup.clone(),
+                    changed: false,
+                    checked_at: track.last_checked_at.unwrap_or(now),
+                    stopped,
+                }
+            })
+            .collect();
 
         Ok(results)
     }

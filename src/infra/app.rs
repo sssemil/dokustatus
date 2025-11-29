@@ -1,10 +1,13 @@
-use axum::{Router, http};
+use axum::{Router, http, middleware};
 use http::header::{AUTHORIZATION, CONTENT_TYPE};
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use uuid::Uuid;
 
 use crate::{
-    adapters::{self, http::app_state::AppState},
+    adapters::{
+        self,
+        http::{app_state::AppState, middleware::rate_limit_middleware},
+    },
     infra::setup::init_tracing,
 };
 
@@ -19,7 +22,11 @@ pub fn create_app(app_state: AppState) -> Router {
 
     Router::new()
         .nest("/api", adapters::http::routes::router())
-        .with_state(app_state)
+        .with_state(app_state.clone())
+        .layer(middleware::from_fn_with_state(
+            app_state,
+            rate_limit_middleware,
+        ))
         .layer(cors)
         .layer(
             TraceLayer::new_for_http().make_span_with(|request: &http::Request<_>| {

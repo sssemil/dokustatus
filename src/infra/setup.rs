@@ -3,7 +3,7 @@ use crate::{
         email::resend::ResendEmailSender, http::app_state::AppState,
         pass_status::MunichPassStatusClient,
     },
-    infra::{config::AppConfig, postgres_persistence},
+    infra::{config::AppConfig, postgres_persistence, rate_limit::RateLimiter},
     use_cases::{
         pass_status::{PassStatusRepo, PassStatusUseCases},
         user::{AuthUseCases, UserRepo},
@@ -17,6 +17,16 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let config = AppConfig::from_env();
 
     let postgres_arc = Arc::new(postgres_persistence().await?);
+
+    let rate_limiter = Arc::new(
+        RateLimiter::new(
+            &config.redis_url,
+            config.rate_limit_window_secs,
+            config.rate_limit_per_ip,
+            config.rate_limit_per_email,
+        )
+        .await?,
+    );
 
     let email = Arc::new(ResendEmailSender::new(
         config.resend_api_key.clone(),
@@ -52,6 +62,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         auth_use_cases: Arc::new(auth_use_cases),
         pass_status_use_cases: Arc::new(pass_status_use_cases),
         user_repo: user_repo_arc,
+        rate_limiter,
     })
 }
 

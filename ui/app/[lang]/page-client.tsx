@@ -56,6 +56,10 @@ type Dictionary = {
   imprintLinkText: string;
   disclaimerTitle: string;
   disclaimerBody: string;
+  disclaimerLinkNote: string;
+  rateLimitTitle: string;
+  rateLimitBody: string;
+  trackRateLimitBody: string;
   logout: string;
   delete: string;
   updated: string;
@@ -145,6 +149,42 @@ const getCallout = (status: string | null | undefined, dict: Dictionary): Callou
 const CACHE_KEY = "cachedDocNumber";
 const CACHE_MS = 15 * 60 * 1000;
 
+const formatRelativeTime = (lang: Lang, date: Date): string => {
+  const diffMs = date.getTime() - Date.now();
+  const diffSec = Math.round(diffMs / 1000);
+  const absSec = Math.abs(diffSec);
+
+  const rtf = new Intl.RelativeTimeFormat(lang, { numeric: "auto" });
+  if (absSec < 60) {
+    return rtf.format(Math.round(diffSec), "second");
+  }
+  const diffMin = Math.round(diffSec / 60);
+  if (Math.abs(diffMin) < 60) {
+    return rtf.format(diffMin, "minute");
+  }
+  const diffHour = Math.round(diffMin / 60);
+  if (Math.abs(diffHour) < 24) {
+    return rtf.format(diffHour, "hour");
+  }
+  const diffDay = Math.round(diffHour / 24);
+  return rtf.format(diffDay, "day");
+};
+
+const normalizeTrack = (track: any): Track => ({
+  ...track,
+  status: track.status ?? track.lastStatus ?? null,
+  pickup: track.pickup ?? track.lastPickup ?? null,
+  checkedAt: track.checkedAt ?? track.lastCheckedAt ?? null,
+});
+
+const parseUtcTimestamp = (value: string): Date | null => {
+  if (!value) return null;
+  // If the timestamp has no timezone, treat it as UTC by appending Z.
+  const normalized = /[zZ]|[+-]\d{2}:?\d{2}$/.test(value) ? value : `${value}Z`;
+  const d = new Date(normalized);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
 const loadCachedNumber = (): string | null => {
   try {
     const raw = localStorage.getItem(CACHE_KEY);
@@ -200,6 +240,15 @@ export default function PageClient({
   const [docTypes, setDocTypes] = useState<DocTypeInfo[]>([]);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [rateLimited, setRateLimited] = useState(false);
+
+  const flagRateLimit = (res: Response, context?: string) => {
+    if (res.status === 429) {
+      setRateLimited(true);
+      return true;
+    }
+    return false;
+  };
 
   const fetchMetadata = async () => {
     try {
@@ -207,6 +256,7 @@ export default function PageClient({
         method: "GET",
         credentials: "include",
       });
+      if (flagRateLimit(res, "GET /api/pass/documents/info")) return;
       if (!res.ok) return;
       const data = await res.json();
       setDocTypes(data.docTypes || []);
@@ -236,6 +286,9 @@ export default function PageClient({
           method: "GET",
           credentials: "include",
         });
+        if (flagRateLimit(res, "GET /api/auth/verify")) {
+          return;
+        }
         if (res.ok) {
           setAuthenticated(true);
         }
@@ -260,6 +313,9 @@ export default function PageClient({
         credentials: "include",
       });
 
+      if (flagRateLimit(res, "POST /api/auth/request")) {
+        return;
+      }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.message || "Failed to send magic link");
@@ -278,17 +334,21 @@ export default function PageClient({
     setTracksError(null);
     setTracksSuccess(null);
     try {
-      const res = await fetch("/api/pass/documents/check", {
-        method: "POST",
+      const res = await fetch("/api/pass/documents", {
+        method: "GET",
         credentials: "include",
       });
+      if (flagRateLimit(res, "GET /api/pass/documents")) {
+        return;
+      }
       if (!res.ok) {
-        throw new Error("Failed to refresh status");
+        throw new Error("Failed to load tracked documents");
       }
       const data = await res.json();
-      setTracks(data.items || []);
+      const items = Array.isArray(data.items) ? data.items : [];
+      setTracks(items.map(normalizeTrack));
     } catch (err: any) {
-      setTracksError(err.message || "Could not refresh status");
+      setTracksError(err.message || "Could not load tracked documents");
     } finally {
       setTracksLoading(false);
     }
@@ -319,6 +379,9 @@ export default function PageClient({
           number: trimmed,
         }),
       });
+      if (flagRateLimit(res, "POST /api/pass/documents")) {
+        return;
+      }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.message || "Failed to save document");
@@ -342,6 +405,9 @@ export default function PageClient({
         method: "DELETE",
         credentials: "include",
       });
+      if (flagRateLimit(res, "DELETE /api/pass/documents/{id}")) {
+        return;
+      }
       if (!res.ok) {
         throw new Error("Failed to delete");
       }
@@ -702,21 +768,6 @@ export default function PageClient({
               }}
             >
               <h3 style={{ margin: 0 }}>{dict.trackedDocuments}</h3>
-              <button
-                onClick={fetchTracks}
-                disabled={tracksLoading || !authenticated}
-                style={{
-                  padding: "8px 12px",
-                  borderRadius: "8px",
-                  border: "1px solid var(--border-primary)",
-                  background: "var(--bg-secondary)",
-                  cursor: authenticated ? "pointer" : "not-allowed",
-                  color: "var(--text-primary)",
-                  opacity: authenticated ? 1 : 0.6,
-                }}
-              >
-                {tracksLoading ? dict.refreshing : dict.refreshNow}
-              </button>
             </div>
 
             {tracksLoading && tracks.length === 0 ? (
@@ -731,6 +782,10 @@ export default function PageClient({
                 {tracks.map((track) => {
                   const callout = getCallout(track.status, dict);
                   const tone = toneStyle(callout.tone);
+                  const checkedDate = track.checkedAt ? parseUtcTimestamp(track.checkedAt) : null;
+                  const relativeChecked = checkedDate
+                    ? formatRelativeTime(lang, checkedDate)
+                    : null;
                   return (
                     <div
                       key={track.id}
@@ -762,9 +817,12 @@ export default function PageClient({
                             </div>
                             <div>{track.typ || dict.autoDetected}</div>
                           </div>
-                          {track.checkedAt && (
+                          {checkedDate && relativeChecked && (
                             <div style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-                              {dict.checkedAt} {new Date(track.checkedAt).toLocaleString()}
+                              {dict.checkedAt}:{" "}
+                              <span title={checkedDate.toLocaleString()}>
+                                {relativeChecked}
+                              </span>
                             </div>
                           )}
                         </div>
@@ -899,6 +957,13 @@ export default function PageClient({
           </a>
         </div>
       </footer>
+
+      {rateLimited && (
+        <RateLimitModal
+          dict={dict}
+          onClose={() => setRateLimited(false)}
+        />
+      )}
     </div>
   );
 }
@@ -1020,6 +1085,67 @@ function LoginModal({
             <p style={{ marginTop: "8px", marginBottom: 0 }}>{error}</p>
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function RateLimitModal({ dict, onClose }: { dict: Dictionary; onClose: () => void }) {
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 3000,
+      }}
+    >
+      <div
+        style={{
+          background: "var(--bg-primary)",
+          padding: "24px",
+          borderRadius: "12px",
+          boxShadow: "var(--shadow-md)",
+          width: "min(440px, 92vw)",
+          border: "1px solid var(--border-primary)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "12px",
+          }}
+        >
+          <h3 style={{ margin: 0 }}>⏳ {dict.rateLimitTitle}</h3>
+          <button
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              cursor: "pointer",
+              fontSize: "18px",
+              color: "var(--text-muted)",
+            }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+        <p className="text-muted" style={{ marginTop: 0 }}>
+          {dict.rateLimitBody}
+        </p>
+        <button
+          onClick={onClose}
+          className="primary"
+          style={{ width: "100%", marginTop: "12px" }}
+        >
+          OK
+        </button>
       </div>
     </div>
   );

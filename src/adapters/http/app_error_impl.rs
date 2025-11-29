@@ -17,6 +17,11 @@ impl IntoResponse for AppError {
             AppError::InvalidCredentials => {
                 (StatusCode::UNAUTHORIZED, "Invalid credentials").into_response()
             }
+            AppError::RateLimited => (
+                StatusCode::TOO_MANY_REQUESTS,
+                Json(serde_json::json!({"message": "Too many requests. Please try again later."})),
+            )
+                .into_response(),
             AppError::InvalidInput(msg) => (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({ "message": msg })),

@@ -2,6 +2,7 @@ use dotenvy::dotenv;
 use tracing::info;
 
 use dokustatus::infra::{app::create_app, setup::init_app_state};
+use std::net::SocketAddr;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -20,7 +21,11 @@ async fn main() -> anyhow::Result<()> {
 
     info!("Backend listening at {}", &listener.local_addr()?);
 
-    axum::serve(listener, app).await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .await?;
 
     Ok(())
 }

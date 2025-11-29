@@ -5,6 +5,9 @@ pub enum AppError {
     #[error("Database error: {0}")]
     Database(String),
 
+    #[error("Too many requests. Please slow down.")]
+    RateLimited,
+
     #[error("Invalid credentials")]
     InvalidCredentials,
 

@@ -20,6 +20,10 @@ pub struct AppConfig {
     pub pass_status_poll_seconds: i64,
     pub pass_status_info_url: Url,
     pub pass_status_counter_url: Option<Url>,
+    pub redis_url: String,
+    pub rate_limit_window_secs: u64,
+    pub rate_limit_per_ip: u64,
+    pub rate_limit_per_email: u64,
 }
 
 impl AppConfig {
@@ -62,6 +66,10 @@ impl AppConfig {
 
         let bind_addr: SocketAddr = get_env_default("BIND_ADDR", "127.0.0.1:3001".parse().unwrap());
         let pass_status_poll_seconds: i64 = get_env_default("PASS_STATUS_POLL_SECONDS", 3600);
+        let redis_url: String = get_env_default("REDIS_URL", "redis://127.0.0.1:6379".to_string());
+        let rate_limit_window_secs: u64 = get_env_default("RATE_LIMIT_WINDOW_SECS", 60);
+        let rate_limit_per_ip: u64 = get_env_default("RATE_LIMIT_PER_IP", 60);
+        let rate_limit_per_email: u64 = get_env_default("RATE_LIMIT_PER_EMAIL", 30);
 
         Self {
             jwt_secret,
@@ -77,6 +85,10 @@ impl AppConfig {
             pass_status_poll_seconds,
             pass_status_info_url,
             pass_status_counter_url,
+            redis_url,
+            rate_limit_window_secs,
+            rate_limit_per_ip,
+            rate_limit_per_email,
         }
     }
 }
