@@ -18,6 +18,15 @@
   "sendMagic": "→ Send Magic Link",
   "sending": "Sending...",
   "errorTitle": "✗ Error",
+  "errorMessages": {
+    "INVALID_INPUT": "Invalid input. Please check your entry.",
+    "INVALID_CREDENTIALS": "Please sign in again.",
+    "RATE_LIMITED": "Too many requests. Please wait and try again.",
+    "DATABASE_ERROR": "Server error. Please try again later.",
+    "INTERNAL_ERROR": "Unexpected error. Please try again.",
+    "TOO_MANY_DOCUMENTS": "You reached the tracking limit.",
+    "UNKNOWN_ERROR": "Something went wrong. Please try again."
+  },
   "checkingStatus": "Checking status…",
   "statusLoading": "Loading status",
   "cachedNotice": "Your input is saved locally for 15 minutes.",

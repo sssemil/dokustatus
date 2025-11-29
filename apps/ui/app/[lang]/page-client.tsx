@@ -46,6 +46,7 @@ type Dictionary = {
   sendMagic: string;
   sending: string;
   errorTitle: string;
+  errorMessages: Record<string, string>;
   checkingStatus: string;
   statusLoading: string;
   cachedNotice: string;
@@ -115,6 +116,19 @@ const toneStyle = (tone: Callout["tone"]) => {
     default:
       return { bg: "rgba(59,130,246,0.12)", border: "1px solid rgba(59,130,246,0.35)", color: "#1d4ed8" };
   }
+};
+
+const errorMessageFromResponse = async (res: Response, dict: Dictionary, fallback: string) => {
+  try {
+    const data = await res.json();
+    const code = (data as any)?.code as string | undefined;
+    if (code && dict.errorMessages[code]) {
+      return dict.errorMessages[code];
+    }
+  } catch {
+    // ignore parse errors
+  }
+  return fallback;
 };
 
 const getCallout = (status: string | null | undefined, dict: Dictionary): Callout => {
@@ -320,13 +334,13 @@ export default function PageClient({
         return;
       }
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || "Failed to send magic link");
+        const msg = await errorMessageFromResponse(res, dict, dict.errorMessages.UNKNOWN_ERROR);
+        throw new Error(msg);
       }
 
       setSent(true);
     } catch (err: any) {
-      setError(err.message || "An error occurred");
+      setError(err.message || dict.errorMessages.UNKNOWN_ERROR);
     } finally {
       setLoading(false);
     }
@@ -345,13 +359,14 @@ export default function PageClient({
         return;
       }
       if (!res.ok) {
-        throw new Error("Failed to load tracked documents");
+        const msg = await errorMessageFromResponse(res, dict, dict.errorMessages.UNKNOWN_ERROR);
+        throw new Error(msg);
       }
       const data = await res.json();
       const items = Array.isArray(data.items) ? data.items : [];
       setTracks(items.map(normalizeTrack));
     } catch (err: any) {
-      setTracksError(err.message || "Could not load tracked documents");
+      setTracksError(err.message || dict.errorMessages.UNKNOWN_ERROR);
     } finally {
       setTracksLoading(false);
     }
@@ -386,15 +401,15 @@ export default function PageClient({
         return;
       }
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.message || "Failed to save document");
+        const msg = await errorMessageFromResponse(res, dict, dict.errorMessages.UNKNOWN_ERROR);
+        throw new Error(msg);
       }
       setDocNumber("");
       setTracksSuccess(dict.trackingAdded);
       clearCachedNumber();
       await fetchTracks();
     } catch (err: any) {
-      setTracksError(err.message || "Could not save document");
+      setTracksError(err.message || dict.errorMessages.UNKNOWN_ERROR);
       setTracksLoading(false);
     }
   };
@@ -412,11 +427,12 @@ export default function PageClient({
         return;
       }
       if (!res.ok) {
-        throw new Error("Failed to delete");
+        const msg = await errorMessageFromResponse(res, dict, dict.errorMessages.UNKNOWN_ERROR);
+        throw new Error(msg);
       }
       await fetchTracks();
     } catch (err: any) {
-      setTracksError(err.message || "Could not delete document");
+      setTracksError(err.message || dict.errorMessages.UNKNOWN_ERROR);
       setTracksLoading(false);
     }
   };

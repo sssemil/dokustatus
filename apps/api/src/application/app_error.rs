@@ -14,6 +14,9 @@ pub enum AppError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("Too many documents")]
+    TooManyDocuments,
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

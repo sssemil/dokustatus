@@ -120,10 +120,7 @@ impl PassStatusUseCases {
 
         let existing = self.repo.list_tracks_for_user(user_id).await?;
         if existing.len() >= self.max_documents_per_user {
-            return Err(AppError::InvalidInput(format!(
-                "You can track up to {} documents.",
-                self.max_documents_per_user
-            )));
+            return Err(AppError::TooManyDocuments);
         }
 
         let normalized_number = normalize_number(number)?;

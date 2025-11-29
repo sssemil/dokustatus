@@ -18,6 +18,15 @@
   "sendMagic": "→ Magic-Link senden",
   "sending": "Wird gesendet...",
   "errorTitle": "✗ Fehler",
+  "errorMessages": {
+    "INVALID_INPUT": "Ungültige Eingabe. Bitte prüfe deine Angaben.",
+    "INVALID_CREDENTIALS": "Bitte melde dich erneut an.",
+    "RATE_LIMITED": "Zu viele Anfragen. Bitte warte kurz und versuche es erneut.",
+    "DATABASE_ERROR": "Serverfehler. Bitte später erneut versuchen.",
+    "INTERNAL_ERROR": "Unerwarteter Fehler. Bitte versuche es erneut.",
+    "TOO_MANY_DOCUMENTS": "Du hast das Limit für Tracking erreicht.",
+    "UNKNOWN_ERROR": "Etwas ist schiefgelaufen. Bitte erneut versuchen."
+  },
   "checkingStatus": "Status wird geprüft…",
   "statusLoading": "Status wird geladen",
   "cachedNotice": "Ihre Eingabe wird 15 Minuten lokal gespeichert.",
