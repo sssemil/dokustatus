@@ -60,6 +60,11 @@
     "docType": "Document type",
     "status": "Status"
   },
+  "accountDelete": "Delete account",
+  "confirmDeleteTitle": "Delete your account?",
+  "confirmDeleteBody": "This will remove your account and all tracked documents. This action cannot be undone.",
+  "confirmDeleteAction": "Yes, delete my account",
+  "cancel": "Cancel",
   "emails": {
     "tracking": {
       "subjectStart": "Dokustatus: Tracking started",
@@ -74,6 +79,14 @@
       "reasonUpdate": "you are tracking this document on {app}",
       "footerUpdate": "If you didn't expect this, remove the document or ignore this email.",
       "ctaView": "View status in Dokustatus"
+    },
+    "accountDeletion": {
+      "subject": "Your Dokustatus account has been deleted",
+      "headline": "Account deleted",
+      "lead": "Your Dokustatus account and all document tracking data have been removed.",
+      "body": "Your account, login links, and tracked documents are now erased from Dokustatus.",
+      "reason": "you requested account deletion on {app}",
+      "footer": "If you didn't request this, contact support immediately."
     }
   },
   "statusCallouts": {

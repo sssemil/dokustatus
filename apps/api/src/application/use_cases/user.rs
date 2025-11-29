@@ -8,6 +8,7 @@ use uuid::Uuid;
 
 use crate::app_error::AppResult;
 use crate::application::{
+    dictionaries::t,
     email_templates::{primary_button, wrap_email},
     language::UserLanguage,
 };
@@ -17,6 +18,7 @@ pub trait UserRepo: Send + Sync {
     async fn upsert_by_email(&self, email: &str, language: Option<&str>) -> AppResult<UserProfile>;
     async fn get_profile_by_id(&self, user_id: Uuid) -> AppResult<Option<UserProfile>>;
     async fn update_language(&self, user_id: Uuid, language: &str) -> AppResult<()>;
+    async fn delete_user(&self, user_id: Uuid) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -138,6 +140,40 @@ impl AuthUseCases {
             return Ok(Some(user_id));
         }
         Ok(None)
+    }
+
+    #[instrument(skip(self))]
+    pub async fn delete_account(&self, user_id: Uuid, lang_header: Option<&str>) -> AppResult<()> {
+        let profile = self
+            .repo
+            .get_profile_by_id(user_id)
+            .await?
+            .ok_or(crate::app_error::AppError::InvalidCredentials)?;
+        let lang = UserLanguage::from_raw(lang_header.or(Some(&profile.language)));
+
+        let subject = t(lang, "emails.accountDeletion.subject");
+        let headline = t(lang, "emails.accountDeletion.headline");
+        let lead = t(lang, "emails.accountDeletion.lead");
+        let body_text = t(lang, "emails.accountDeletion.body");
+        let reason = t(lang, "emails.accountDeletion.reason")
+            .replace("{app}", self.app_origin.trim_end_matches('/'));
+        let footer = t(lang, "emails.accountDeletion.footer");
+        let body = wrap_email(
+            lang,
+            &self.app_origin,
+            &headline,
+            &lead,
+            &format!(
+                "<p style=\"margin:12px 0 0;color:#374151;\">{}</p>",
+                body_text
+            ),
+            &reason,
+            Some(&footer),
+        );
+
+        self.repo.delete_user(user_id).await?;
+        let _ = self.email.send(&profile.email, &subject, &body).await;
+        Ok(())
     }
 }
 

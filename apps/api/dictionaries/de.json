@@ -60,6 +60,11 @@
     "docType": "Dokumenttyp",
     "status": "Status"
   },
+  "accountDelete": "Konto löschen",
+  "confirmDeleteTitle": "Konto wirklich löschen?",
+  "confirmDeleteBody": "Dadurch werden dein Konto und alle verfolgten Dokumente entfernt. Dies kann nicht rückgängig gemacht werden.",
+  "confirmDeleteAction": "Ja, Konto löschen",
+  "cancel": "Abbrechen",
   "emails": {
     "tracking": {
       "subjectStart": "Dokustatus: Tracking gestartet",
@@ -74,6 +79,14 @@
       "reasonUpdate": "du verfolgst dieses Dokument auf {app}",
       "footerUpdate": "Falls du diese Benachrichtigung nicht erwartest, entferne das Dokument oder ignoriere diese E-Mail.",
       "ctaView": "Status in Dokustatus ansehen"
+    },
+    "accountDeletion": {
+      "subject": "Dein Dokustatus-Konto wurde gelöscht",
+      "headline": "Konto gelöscht",
+      "lead": "Dein Dokustatus-Konto und alle Tracking-Daten wurden entfernt.",
+      "body": "Dein Konto, Anmeldelinks und verfolgte Dokumente wurden aus Dokustatus gelöscht.",
+      "reason": "du hast die Kontolöschung auf {app} angefragt",
+      "footer": "Falls du das nicht warst, kontaktiere bitte umgehend den Support."
     }
   },
   "statusCallouts": {

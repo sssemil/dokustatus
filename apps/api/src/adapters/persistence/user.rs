@@ -78,4 +78,12 @@ impl UserRepo for PostgresPersistence {
         .map_err(AppError::from)?;
         Ok(())
     }
+
+    async fn delete_user(&self, user_id: Uuid) -> AppResult<()> {
+        sqlx::query!("DELETE FROM users WHERE id = $1", user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(AppError::from)?;
+        Ok(())
+    }
 }

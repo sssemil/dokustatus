@@ -61,11 +61,16 @@ type Dictionary = {
   disclaimerBody: string;
   disclaimerLinkNote: string;
   emailNotEncrypted: string;
+  accountDelete: string;
+  confirmDeleteTitle: string;
+  confirmDeleteBody: string;
+  confirmDeleteAction: string;
   rateLimitTitle: string;
   rateLimitBody: string;
   trackRateLimitBody: string;
   logout: string;
   delete: string;
+  cancel: string;
   updated: string;
   number: string;
   type: string;
@@ -257,6 +262,8 @@ export default function PageClient({
   const [docTypes, setDocTypes] = useState<DocTypeInfo[]>([]);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [showLoginModal, setShowLoginModal] = useState(false);
+  const [showDeleteAccountModal, setShowDeleteAccountModal] = useState(false);
+  const [deletingAccount, setDeletingAccount] = useState(false);
   const [rateLimited, setRateLimited] = useState(false);
 
   const flagRateLimit = (res: Response, context?: string) => {
@@ -462,6 +469,31 @@ export default function PageClient({
     }
   };
 
+  const deleteAccount = async () => {
+    setDeletingAccount(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/user/delete", {
+        method: "DELETE",
+        credentials: "include",
+        headers: { "Accept-Language": lang },
+      });
+      if (flagRateLimit(res, "DELETE /api/user/delete")) {
+        return;
+      }
+      if (!res.ok) {
+        const msg = await errorMessageFromResponse(res, dict, dict.errorMessages.UNKNOWN_ERROR);
+        throw new Error(msg);
+      }
+      window.location.href = `/${lang}`;
+    } catch (err: any) {
+      setError(err.message || dict.errorMessages.UNKNOWN_ERROR);
+    } finally {
+      setDeletingAccount(false);
+      setShowDeleteAccountModal(false);
+    }
+  };
+
   const switchLanguage = () => {
     const newLang = lang === "de" ? "en" : "de";
     router.push(`/${newLang}`);
@@ -583,6 +615,29 @@ export default function PageClient({
                         zIndex: 1001,
                       }}
                     >
+                      <button
+                        onClick={() => {
+                          setDropdownOpen(false);
+                          setShowDeleteAccountModal(true);
+                        }}
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "var(--spacing-md)",
+                          backgroundColor: "transparent",
+                          border: "none",
+                          color: "var(--text-primary)",
+                          cursor: "pointer",
+                          fontSize: "14px",
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "var(--spacing-sm)",
+                          borderBottom: "1px solid var(--border-primary)",
+                        }}
+                      >
+                        <span>🗑️</span>
+                        <span>{dict.accountDelete}</span>
+                      </button>
                       <button
                         onClick={() => {
                           setDropdownOpen(false);
@@ -1008,6 +1063,66 @@ export default function PageClient({
           </a>
         </div>
       </footer>
+
+      {showDeleteAccountModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.5)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 2000,
+          }}
+        >
+          <div
+            style={{
+              background: "var(--bg-primary)",
+              padding: "24px",
+              borderRadius: "12px",
+              width: "min(420px, 90vw)",
+              boxShadow: "var(--shadow-lg)",
+              display: "flex",
+              flexDirection: "column",
+              gap: "12px",
+            }}
+          >
+            <h3 style={{ margin: 0 }}>{dict.confirmDeleteTitle}</h3>
+            <p style={{ margin: 0, color: "var(--text-muted)" }}>{dict.confirmDeleteBody}</p>
+            <div style={{ display: "flex", gap: "12px", justifyContent: "flex-end" }}>
+              <button
+                onClick={() => setShowDeleteAccountModal(false)}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-primary)",
+                  background: "var(--bg-secondary)",
+                  cursor: "pointer",
+                  color: "var(--text-primary)",
+                }}
+              >
+                {dict.cancel || "Cancel"}
+              </button>
+              <button
+                onClick={deleteAccount}
+                disabled={deletingAccount}
+                style={{
+                  padding: "10px 14px",
+                  borderRadius: "8px",
+                  border: "1px solid var(--border-primary)",
+                  background: "var(--text-error)",
+                  color: "#fff",
+                  cursor: "pointer",
+                  opacity: deletingAccount ? 0.7 : 1,
+                }}
+              >
+                {deletingAccount ? dict.sending : dict.confirmDeleteAction}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {rateLimited && (
         <RateLimitModal

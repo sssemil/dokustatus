@@ -12,4 +12,5 @@ pub fn router() -> Router<AppState> {
         .nest("/auth", auth::router())
         .nest("/dictionaries", dictionary::router())
         .nest("/pass", pass::router())
+        .nest("/user", user::router())
 }
