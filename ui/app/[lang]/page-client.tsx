@@ -50,7 +50,6 @@ type Dictionary = {
   statusLoading: string;
   cachedNotice: string;
   checkingSession: string;
-  signedInAs: string;
   logout: string;
   delete: string;
   updated: string;
@@ -488,32 +487,6 @@ export default function PageClient({
                         zIndex: 1001,
                       }}
                     >
-                      <div
-                        style={{
-                          padding: "var(--spacing-md)",
-                          borderBottom: "1px solid var(--border-primary)",
-                          backgroundColor: "var(--bg-tertiary)",
-                        }}
-                      >
-                        <div
-                          style={{
-                            fontSize: "12px",
-                            color: "var(--text-muted)",
-                            marginBottom: "4px",
-                          }}
-                        >
-                          {dict.signedInAs}
-                        </div>
-                        <div
-                          style={{
-                            fontSize: "14px",
-                            color: "var(--text-primary)",
-                            fontWeight: 500,
-                          }}
-                        >
-                          {userEmail || "User"}
-                        </div>
-                      </div>
                       <button
                         onClick={() => {
                           setDropdownOpen(false);
