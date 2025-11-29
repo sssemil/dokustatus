@@ -25,6 +25,7 @@ pub struct AppConfig {
     pub rate_limit_per_email: u64,
     pub process_number_key: String,
     pub database_url: String,
+    pub max_documents_per_user: usize,
 }
 
 impl AppConfig {
@@ -66,6 +67,7 @@ impl AppConfig {
         let rate_limit_window_secs: u64 = get_env_default("RATE_LIMIT_WINDOW_SECS", 60);
         let rate_limit_per_ip: u64 = get_env_default("RATE_LIMIT_PER_IP", 60);
         let rate_limit_per_email: u64 = get_env_default("RATE_LIMIT_PER_EMAIL", 30);
+        let max_documents_per_user: usize = get_env_default("MAX_DOCUMENTS_PER_USER", 5);
         let process_number_key: String = get_env("PROCESS_NUMBER_KEY");
         let database_url: String = get_env("DATABASE_URL");
 
@@ -88,6 +90,7 @@ impl AppConfig {
             rate_limit_per_email,
             process_number_key,
             database_url,
+            max_documents_per_user,
         }
     }
 }

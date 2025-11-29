@@ -59,6 +59,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         status_client,
         user_repo_arc.clone(),
         config.pass_status_poll_seconds,
+        config.max_documents_per_user,
     );
 
     Ok(AppState {

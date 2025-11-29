@@ -88,6 +88,7 @@ pub struct PassStatusUseCases {
     status_client: Arc<dyn PassStatusClient>,
     user_repo: Arc<dyn UserRepo>,
     refresh_interval_secs: i64,
+    max_documents_per_user: usize,
 }
 
 impl PassStatusUseCases {
@@ -97,6 +98,7 @@ impl PassStatusUseCases {
         status_client: Arc<dyn PassStatusClient>,
         user_repo: Arc<dyn UserRepo>,
         refresh_interval_secs: i64,
+        max_documents_per_user: usize,
     ) -> Self {
         Self {
             repo,
@@ -104,6 +106,7 @@ impl PassStatusUseCases {
             status_client,
             user_repo,
             refresh_interval_secs,
+            max_documents_per_user,
         }
     }
 
@@ -116,10 +119,11 @@ impl PassStatusUseCases {
             .ok_or(AppError::InvalidCredentials)?;
 
         let existing = self.repo.list_tracks_for_user(user_id).await?;
-        if existing.len() >= 5 {
-            return Err(AppError::InvalidInput(
-                "You can track up to 5 documents.".into(),
-            ));
+        if existing.len() >= self.max_documents_per_user {
+            return Err(AppError::InvalidInput(format!(
+                "You can track up to {} documents.",
+                self.max_documents_per_user
+            )));
         }
 
         let normalized_number = normalize_number(number)?;
