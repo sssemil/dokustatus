@@ -55,6 +55,27 @@
   "trackingAdded": "Tracking hinzugefügt und bestätigt. Wir senden Ihnen eine E-Mail bei Statusänderungen.",
   "enterProcessNumber": "Bitte geben Sie eine Vorgangsnummer ein",
   "prefixes": "Präfixe",
+  "labels": {
+    "pickup": "Abholort",
+    "docType": "Dokumenttyp",
+    "status": "Status"
+  },
+  "emails": {
+    "tracking": {
+      "subjectStart": "Dokustatus: Tracking gestartet",
+      "headlineStart": "Tracking gestartet",
+      "leadStart": "Wir überwachen die Nummer {number} für dich und melden neue Statusänderungen.",
+      "reasonStart": "du hast eine Dokumentverfolgung auf {app} aktiviert",
+      "footerStart": "Du kannst das Tracking jederzeit in der App entfernen.",
+      "ctaOpen": "Dokustatus öffnen",
+      "subjectUpdate": "Dokustatus: Neuer Status",
+      "headlineUpdate": "Status aktualisiert",
+      "leadUpdate": "Für Dokument {number} gibt es einen neuen Stand.",
+      "reasonUpdate": "du verfolgst dieses Dokument auf {app}",
+      "footerUpdate": "Falls du diese Benachrichtigung nicht erwartest, entferne das Dokument oder ignoriere diese E-Mail.",
+      "ctaView": "Status in Dokustatus ansehen"
+    }
+  },
   "statusCallouts": {
     "IN_BEARBEITUNG": {
       "title": "Ihr Ausweisdokument ist noch in Arbeit",

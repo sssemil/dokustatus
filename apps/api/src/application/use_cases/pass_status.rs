@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     app_error::{AppError, AppResult},
     application::{
-        dictionaries::status_copy,
+        dictionaries::{doc_type_label, pickup_label, status_copy, t},
         email_templates::{primary_button, wrap_email},
         language::UserLanguage,
     },
@@ -159,18 +159,19 @@ impl PassStatusUseCases {
 
         track.typ = Some(normalized_typ.clone());
         let subject = match lang {
-            UserLanguage::En => format!("Dokustatus: Tracking started for {}", normalized_number),
-            UserLanguage::De => format!("Dokustatus: Tracking gestartet für {}", normalized_number),
+            UserLanguage::En => {
+                t(lang, "emails.tracking.subjectStart") + &format!(" {}", normalized_number)
+            }
+            UserLanguage::De => {
+                t(lang, "emails.tracking.subjectStart") + &format!(" {}", normalized_number)
+            }
         };
         let status_copy = status_copy(lang, status_info.status.as_deref());
         let pickup_line = status_info
             .pickup
             .as_deref()
             .map(|p| {
-                let label = match lang {
-                    UserLanguage::En => "Pickup location",
-                    UserLanguage::De => "Abholort",
-                };
+                let label = pickup_label(lang);
                 format!(
                     "<p style=\"margin:0 0 8px;color:#374151;\">{}: {}</p>",
                     label, p
@@ -187,55 +188,30 @@ impl PassStatusUseCases {
             .map(|m| format!("<p style=\"margin:0 0 8px;color:#374151;\">{}</p>", m))
             .unwrap_or_default();
         let details = format!(
-            "{status_line}{status_msg}<p style=\"margin:0 0 8px;color:#374151;\">{}</p>{pickup_line}",
+            "{status_line}{status_msg}<p style=\"margin:0 0 8px;color:#374151;\">{}: {}</p>{pickup_line}",
+            doc_type_label(lang),
             status_info
                 .type_label
                 .as_deref()
                 .unwrap_or(normalized_typ.as_str())
         );
-        let cta = primary_button(
-            self.app_origin.trim_end_matches('/'),
-            match lang {
-                UserLanguage::En => "Open Dokustatus",
-                UserLanguage::De => "Dokustatus öffnen",
-            },
-        );
-        let (headline, lead, reason, footer) = match lang {
-            UserLanguage::En => (
-                "Tracking started",
-                format!(
-                    "We are watching number {} for you and will notify you of changes.",
-                    normalized_number
-                ),
-                format!(
-                    "you started tracking a document on {}",
-                    self.app_origin.trim_end_matches('/')
-                ),
-                "You can remove tracking anytime in the app.",
-            ),
-            UserLanguage::De => (
-                "Tracking gestartet",
-                format!(
-                    "Wir überwachen die Nummer {} für dich und melden neue Statusänderungen.",
-                    normalized_number
-                ),
-                format!(
-                    "du hast eine Dokumentverfolgung auf {} aktiviert",
-                    self.app_origin.trim_end_matches('/')
-                ),
-                "Du kannst das Tracking jederzeit in der App entfernen.",
-            ),
-        };
+        let cta_label = t(lang, "emails.tracking.ctaOpen");
+        let cta = primary_button(self.app_origin.trim_end_matches('/'), &cta_label);
+        let headline = t(lang, "emails.tracking.headlineStart");
+        let lead = t(lang, "emails.tracking.leadStart").replace("{number}", &normalized_number);
+        let reason = t(lang, "emails.tracking.reasonStart")
+            .replace("{app}", self.app_origin.trim_end_matches('/'));
+        let footer = t(lang, "emails.tracking.footerStart");
         let body = wrap_email(
             lang,
             &self.app_origin,
-            headline,
+            &headline,
             &lead,
             &format!(
                 "<div style=\"margin:12px 0 0;\">{details}<div style=\"margin-top:16px;\">{cta}</div></div>"
             ),
             &reason,
-            Some(footer),
+            Some(&footer),
         );
         self.email.send(&user.email, &subject, &body).await?;
 
@@ -412,26 +388,17 @@ impl PassStatusUseCases {
                 };
                 let lang = UserLanguage::from_raw(Some(&user.language));
                 let status_copy = status_copy(lang, status_info.status.as_deref());
-                let subject = match lang {
-                    UserLanguage::En => format!(
-                        "Dokustatus: New status for {} ({})",
-                        track.number,
-                        status_info.status.as_deref().unwrap_or("Unknown")
-                    ),
-                    UserLanguage::De => format!(
-                        "Dokustatus: Neuer Status für {} ({})",
+                let subject = t(lang, "emails.tracking.subjectUpdate")
+                    + &format!(
+                        " {} ({})",
                         track.number,
                         status_info.status.as_deref().unwrap_or("Unbekannt")
-                    ),
-                };
+                    );
                 let pickup_line = status_info
                     .pickup
                     .as_deref()
                     .map(|p| {
-                        let label = match lang {
-                            UserLanguage::En => "Pickup location",
-                            UserLanguage::De => "Abholort",
-                        };
+                        let label = pickup_label(lang);
                         format!(
                             "<p style=\"margin:0 0 8px;color:#374151;\">{}: {}</p>",
                             label, p
@@ -448,43 +415,29 @@ impl PassStatusUseCases {
                     .map(|m| format!("<p style=\"margin:0 0 8px;color:#374151;\">{}</p>", m))
                     .unwrap_or_default();
                 let details = format!(
-                    "{status_line}{status_msg}<p style=\"margin:0 0 8px;color:#374151;\">{}</p>{pickup_line}",
+                    "{status_line}{status_msg}<p style=\"margin:0 0 8px;color:#374151;\">{}: {}</p>{pickup_line}",
+                    doc_type_label(lang),
                     status_info
                         .type_label
                         .as_deref()
                         .unwrap_or(normalized_typ.as_str())
                 );
-                let cta = primary_button(
-                    app_home,
-                    match lang {
-                        UserLanguage::En => "View status in Dokustatus",
-                        UserLanguage::De => "Status in Dokustatus ansehen",
-                    },
-                );
-                let (headline, lead, reason, footer) = match lang {
-                    UserLanguage::En => (
-                        "Status updated",
-                        format!("Document {} has a new update.", track.number),
-                        format!("you are tracking this document on {}", app_home),
-                        "If you didn't expect this notification, remove the document or ignore this email.",
-                    ),
-                    UserLanguage::De => (
-                        "Status aktualisiert",
-                        format!("Für Dokument {} gibt es einen neuen Stand.", track.number),
-                        format!("du verfolgst dieses Dokument auf {}", app_home),
-                        "Falls du diese Benachrichtigung nicht erwartest, entferne das Dokument oder ignoriere diese E-Mail.",
-                    ),
-                };
+                let cta_label = t(lang, "emails.tracking.ctaView");
+                let cta = primary_button(app_home, &cta_label);
+                let headline = t(lang, "emails.tracking.headlineUpdate");
+                let lead = t(lang, "emails.tracking.leadUpdate").replace("{number}", &track.number);
+                let reason = t(lang, "emails.tracking.reasonUpdate").replace("{app}", app_home);
+                let footer = t(lang, "emails.tracking.footerUpdate");
                 let body = wrap_email(
                     lang,
                     &self.app_origin,
-                    headline,
+                    &headline,
                     &lead,
                     &format!(
                         "<div style=\"margin:12px 0 0;\">{details}<div style=\"margin-top:16px;\">{cta}</div></div>"
                     ),
                     &reason,
-                    Some(footer),
+                    Some(&footer),
                 );
                 if let Err(err) = self.email.send(&user.email, &subject, &body).await {
                     warn!(error = ?err, track_id = %track.id, "sending email failed");

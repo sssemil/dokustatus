@@ -55,6 +55,27 @@
   "trackingAdded": "Tracking added and confirmed. We'll email you when the status changes.",
   "enterProcessNumber": "Please enter a process number",
   "prefixes": "Prefixes",
+  "labels": {
+    "pickup": "Pickup location",
+    "docType": "Document type",
+    "status": "Status"
+  },
+  "emails": {
+    "tracking": {
+      "subjectStart": "Dokustatus: Tracking started",
+      "headlineStart": "Tracking started",
+      "leadStart": "We are watching number {number} for you and will notify you of changes.",
+      "reasonStart": "you started tracking a document on {app}",
+      "footerStart": "You can remove tracking anytime in the app.",
+      "ctaOpen": "Open Dokustatus",
+      "subjectUpdate": "Dokustatus: New status",
+      "headlineUpdate": "Status updated",
+      "leadUpdate": "There is a new update for document {number}.",
+      "reasonUpdate": "you are tracking this document on {app}",
+      "footerUpdate": "If you didn't expect this, remove the document or ignore this email.",
+      "ctaView": "View status in Dokustatus"
+    }
+  },
   "statusCallouts": {
     "IN_BEARBEITUNG": {
       "title": "Your ID document is still being processed",

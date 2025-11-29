@@ -66,3 +66,31 @@ pub fn dictionary_json(lang: UserLanguage) -> Value {
         UserLanguage::De => DICT_DE_VALUE.clone(),
     }
 }
+
+pub fn t(lang: UserLanguage, path: &str) -> String {
+    let dict = match lang {
+        UserLanguage::En => &*DICT_EN_VALUE,
+        UserLanguage::De => &*DICT_DE_VALUE,
+    };
+    let mut cursor = dict;
+    for segment in path.split('.') {
+        if let Some(v) = cursor.get(segment) {
+            cursor = v;
+        } else {
+            return path.to_string();
+        }
+    }
+    cursor.as_str().unwrap_or(path).to_string()
+}
+
+pub fn status_label(lang: UserLanguage) -> String {
+    t(lang, "labels.status")
+}
+
+pub fn pickup_label(lang: UserLanguage) -> String {
+    t(lang, "labels.pickup")
+}
+
+pub fn doc_type_label(lang: UserLanguage) -> String {
+    t(lang, "labels.docType")
+}
