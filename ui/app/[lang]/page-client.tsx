@@ -57,6 +57,7 @@ type Dictionary = {
   disclaimerTitle: string;
   disclaimerBody: string;
   disclaimerLinkNote: string;
+  emailNotEncrypted: string;
   rateLimitTitle: string;
   rateLimitBody: string;
   trackRateLimitBody: string;
@@ -654,6 +655,9 @@ export default function PageClient({
             <p style={{ marginTop: 0, color: "var(--text-muted)" }}>
               {dict.trackerSubtitle}
             </p>
+            <div className="message warning" style={{ marginTop: "8px" }}>
+              {dict.emailNotEncrypted}
+            </div>
 
             <form
               onSubmit={addDocument}
