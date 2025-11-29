@@ -115,6 +115,13 @@ impl PassStatusUseCases {
             .await?
             .ok_or(AppError::InvalidCredentials)?;
 
+        let existing = self.repo.list_tracks_for_user(user_id).await?;
+        if existing.len() >= 5 {
+            return Err(AppError::InvalidInput(
+                "You can track up to 5 documents.".into(),
+            ));
+        }
+
         let normalized_number = normalize_number(number)?;
         let normalized_typ = self.status_client.detect_type(&normalized_number).await?;
         let status_info = self
