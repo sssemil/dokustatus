@@ -1,0 +1,5 @@
+# Local deploy artifacts and secrets
+.env
+secrets/*
+!secrets/.gitkeep
+images/

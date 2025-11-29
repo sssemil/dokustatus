@@ -1,0 +1,190 @@
+version: "3.9"
+
+x-default-env: &default-env
+  env_file:
+    - .env
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    <<: *default-env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - dokustatus-net
+
+  redis:
+    image: redis:7-alpine
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        REDIS_PASSWORD="$(cat /run/secrets/redis_password)"
+        exec redis-server --save "" --appendonly no --requirepass "$REDIS_PASSWORD" --protected-mode yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    secrets:
+      - redis_password
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - dokustatus-net
+
+  api:
+    image: dokustatus-api:latest
+    <<: *default-env
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      PORT: ${API_PORT:-3001}
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${POSTGRES_DB:?}
+      DB_USER: ${POSTGRES_USER:?}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      EMAIL_FROM: ${EMAIL_FROM:?}
+      APP_ORIGIN: ${APP_ORIGIN:?}
+      PASS_STATUS_URL: ${PASS_STATUS_URL:-https://mpdz-passverfolgung.muenchen.de/api/passstatusabfrage-backend-service/rest/ausweisstatus/search}
+      PASS_STATUS_INFO_URL: ${PASS_STATUS_INFO_URL:-https://mpdz-passverfolgung.muenchen.de/actuator/info}
+      PASS_STATUS_COUNTER_URL: ${PASS_STATUS_COUNTER_URL:-}
+      BIND_ADDR: 0.0.0.0:${API_PORT:-3001}
+      RATE_LIMIT_WINDOW_SECS: ${RATE_LIMIT_WINDOW_SECS:-60}
+      RATE_LIMIT_PER_IP: ${RATE_LIMIT_PER_IP:-60}
+      RATE_LIMIT_PER_EMAIL: ${RATE_LIMIT_PER_EMAIL:-30}
+    depends_on:
+      - postgres
+      - redis
+    secrets:
+      - jwt_secret
+      - process_number_key
+      - resend_api_key
+      - postgres_password
+      - redis_password
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        export POSTGRES_PASSWORD="$(cat /run/secrets/postgres_password)"
+        export DATABASE_URL="postgres://${DB_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+        export REDIS_PASSWORD="$(cat /run/secrets/redis_password)"
+        export REDIS_URL="redis://default:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
+        export JWT_SECRET="$(cat /run/secrets/jwt_secret)"
+        export PROCESS_NUMBER_KEY="$(cat /run/secrets/process_number_key)"
+        export RESEND_API_KEY="$(cat /run/secrets/resend_api_key)"
+        exec dokustatus
+    restart: unless-stopped
+    networks:
+      - dokustatus-net
+
+  ui:
+    image: dokustatus-ui:latest
+    <<: *default-env
+    environment:
+      NODE_ENV: production
+      PORT: ${UI_PORT:-3000}
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?}
+    depends_on:
+      - api
+    restart: unless-stopped
+    networks:
+      - dokustatus-net
+
+  nginx-http:
+    image: nginx:latest
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        envsubst '$$PRIMARY_DOMAIN' < /etc/nginx/templates/http.conf.template > /etc/nginx/nginx.conf
+        exec nginx -g 'daemon off;'
+    environment:
+      PRIMARY_DOMAIN: ${LETSENCRYPT_PRIMARY_DOMAIN:?}
+    volumes:
+      - ./nginx/http.conf.template:/etc/nginx/templates/http.conf.template:ro
+      - certbot-www-data:/var/www/certbot
+    ports:
+      - "80:80"
+    restart: unless-stopped
+    networks:
+      - dokustatus-net
+
+  nginx-https:
+    image: nginx:latest
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        envsubst '$$PRIMARY_DOMAIN' < /etc/nginx/templates/https.conf.template > /etc/nginx/nginx.conf
+        exec nginx -g 'daemon off;'
+    environment:
+      PRIMARY_DOMAIN: ${LETSENCRYPT_PRIMARY_DOMAIN:?}
+    volumes:
+      - ./nginx/https.conf.template:/etc/nginx/templates/https.conf.template:ro
+      - letsencrypt-data:/etc/letsencrypt
+      - nginx-logs-data:/var/log/nginx
+    ports:
+      - "443:443"
+    depends_on:
+      - ui
+      - certbot
+    restart: unless-stopped
+    networks:
+      - dokustatus-net
+
+  certbot:
+    image: certbot/certbot:latest
+    entrypoint: [ "sh", "/certbot-check.sh" ]
+    environment:
+      CERTBOT_EMAIL: ${LETSENCRYPT_EMAIL:?}
+      CERTBOT_DOMAINS: ${LETSENCRYPT_DOMAINS:?}
+      CERTBOT_STAGING: ${LETSENCRYPT_STAGING:-false}
+    volumes:
+      - letsencrypt-data:/etc/letsencrypt
+      - certbot-www-data:/var/www/certbot
+      - ./certbot-check.sh:/certbot-check.sh:ro
+    restart: unless-stopped
+    networks:
+      - dokustatus-net
+
+volumes:
+  postgres_data:
+  redis_data:
+  letsencrypt-data:
+  nginx-logs-data:
+  certbot-www-data:
+
+secrets:
+  jwt_secret:
+    file: ./secrets/jwt_secret
+  process_number_key:
+    file: ./secrets/process_number_key
+  resend_api_key:
+    file: ./secrets/resend_api_key
+  postgres_password:
+    file: ./secrets/postgres_password
+  redis_password:
+    file: ./secrets/redis_password
+
+networks:
+  dokustatus-net:
+    driver: bridge
