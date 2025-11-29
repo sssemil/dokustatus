@@ -18,6 +18,11 @@ Create text files containing only the secret value:
 
 These get mounted as Docker secrets and exported to env vars for the API container.
 
+To generate fresh random secrets (skips files that already exist):
+```bash
+./infra/generate-secrets.sh
+```
+
 ## Environment (.env)
 Copy `.env.example` to `.env` and adjust:
 - Domain: set `LETSENCRYPT_PRIMARY_DOMAIN` and `LETSENCRYPT_DOMAINS` (e.g. `dokustatus.de,dokustatus.de`).
