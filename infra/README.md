@@ -7,6 +7,7 @@ Scripts and compose files for building images, shipping them to a remote host ov
 - `.env.example` — copy to `.env` and fill values (domain, email, API URLs, DB/Redis, rate limits).
 - `secrets/` — place sensitive values as files (see below). Directory is gitignored.
 - `deploy.sh` — builds images, syncs infra assets to the target server, loads images, and runs `docker compose up -d`.
+- `setup_firewall.sh` — configures UFW + Docker firewall rules on a remote host (installs ufw/iptables if missing).
 
 ## Secrets directory
 Create text files containing only the secret value:
@@ -26,6 +27,12 @@ To generate fresh random secrets (skips files that already exist):
 If Docker builds need host DNS/proxy, you can pass build args to both images:
 ```bash
 BUILD_ARGS="--network=host" ./infra/deploy.sh
+```
+
+To harden a host firewall with UFW + Docker integration:
+```bash
+HOST=root@your-host ./infra/setup_firewall.sh
+# optional toggles: SSH_OPTS="-p 2222" TAILSCALE_ALLOW=0 ALLOW_HTTP=0 ALLOW_HTTPS=0
 ```
 
 ## Environment (.env)
