@@ -19,8 +19,8 @@ struct Dictionary {
     status_callouts: HashMap<String, StatusCallout>,
 }
 
-static RAW_EN: &str = include_str!("../../../dictionaries/en.json");
-static RAW_DE: &str = include_str!("../../../dictionaries/de.json");
+static RAW_EN: &str = include_str!("../../dictionaries/en.json");
+static RAW_DE: &str = include_str!("../../dictionaries/de.json");
 
 static DICT_EN: Lazy<Dictionary> =
     Lazy::new(|| serde_json::from_str(RAW_EN).expect("failed to parse en dictionary"));
