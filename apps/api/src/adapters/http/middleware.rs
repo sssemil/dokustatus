@@ -16,7 +16,7 @@ pub async fn rate_limit_middleware(
     mut request: Request,
     next: Next,
 ) -> Result<Response, AppError> {
-    let ip = addr.ip().to_string();
+    let ip = forwarded_ip(&request).unwrap_or_else(|| addr.ip().to_string());
     let email = cookies.get("user_email").map(|c| c.value().to_owned());
 
     app_state.rate_limiter.check(&ip, email.as_deref()).await?;
@@ -25,4 +25,26 @@ pub async fn rate_limit_middleware(
     request.extensions_mut().insert(cookies);
 
     Ok(next.run(request).await)
+}
+
+fn forwarded_ip(req: &Request) -> Option<String> {
+    // Trust X-Forwarded-For / X-Real-IP set by the reverse proxy (nginx).
+    if let Some(forwarded) = req.headers().get("x-forwarded-for") {
+        if let Ok(val) = forwarded.to_str() {
+            if let Some(first) = val.split(',').next() {
+                let trimmed = first.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+    }
+    if let Some(real) = req.headers().get("x-real-ip") {
+        if let Ok(val) = real.to_str() {
+            if !val.trim().is_empty() {
+                return Some(val.trim().to_string());
+            }
+        }
+    }
+    None
 }
