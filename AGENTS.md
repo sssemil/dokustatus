@@ -1,15 +1,15 @@
 # Repository Guidelines
 
-This project pairs a Rust backend (Axum + SQLx) with a Next.js UI. Follow the conventions below to stay consistent and productive.
+This project pairs a Rust backend (Axum + SQLx, Redis for rate limits) with a Next.js UI. Follow the conventions below to stay consistent and productive.
 
 ## Project Structure & Module Organization
 - `src/`: backend code split by clean architecture layers (`domain`, `application`, `adapters`, `infra`); entrypoints in `main.rs` and `lib.rs`.
 - `migrations/`: SQLx migrations; keep new migrations ordered and idempotent.
 - `ui/`: Next.js App Router frontend (`app/` pages, `globals.css`, config).
-- `docker-compose.yml`: local Postgres. `.env.example` documents required settings.
+- `docker-compose.yml`: local Postgres + Redis. `.env.example` documents required settings.
 
 ## Build, Test, and Development Commands
-- `docker compose up -d postgres`: start local DB.
+- `docker compose up -d postgres redis`: start local DB and Redis.
 - `sqlx migrate run`: apply migrations (uses `DATABASE_URL`).
 - `cargo sqlx prepare -- --bin dokustatus`: refresh offline SQLx data when queries change.
 - `cargo run`: start the API (bind addr from config).
