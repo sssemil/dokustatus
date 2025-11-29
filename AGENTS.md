@@ -3,9 +3,9 @@
 This project pairs a Rust backend (Axum + SQLx, Redis for rate limits) with a Next.js UI. Follow the conventions below to stay consistent and productive.
 
 ## Project Structure & Module Organization
-- `src/`: backend code split by clean architecture layers (`domain`, `application`, `adapters`, `infra`); entrypoints in `main.rs` and `lib.rs`.
-- `migrations/`: SQLx migrations; keep new migrations ordered and idempotent.
-- `ui/`: Next.js App Router frontend (`app/` pages, `globals.css`, config).
+- `apps/api`: backend code split by clean architecture layers (`domain`, `application`, `adapters`, `infra`); entrypoints in `main.rs` and `lib.rs`.
+- `apps/api/migrations`: SQLx migrations; keep new migrations ordered and idempotent.
+- `apps/ui`: Next.js App Router frontend (`app/` pages, `globals.css`, config).
 - `docker-compose.yml`: local Postgres + Redis. `.env.example` documents required settings.
 
 ## Build, Test, and Development Commands
@@ -34,4 +34,4 @@ This project pairs a Rust backend (Axum + SQLx, Redis for rate limits) with a Ne
 
 ## Security & Configuration Tips
 - Never commit secrets; load them via `.env`. Keep `JWT_SECRET`, DB credentials, and email keys private.
-- When changing request/response shapes, update both backend routes (`src/adapters/http/routes/`) and the UI consumers under `ui/app/` to stay in sync.
+- When changing request/response shapes, update both backend routes (`apps/api/src/adapters/http/routes/`) and the UI consumers under `apps/ui/app/` to stay in sync.
