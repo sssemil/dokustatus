@@ -29,22 +29,20 @@ pub async fn rate_limit_middleware(
 
 fn forwarded_ip(req: &Request) -> Option<String> {
     // Trust X-Forwarded-For / X-Real-IP set by the reverse proxy (nginx).
-    if let Some(forwarded) = req.headers().get("x-forwarded-for") {
-        if let Ok(val) = forwarded.to_str() {
-            if let Some(first) = val.split(',').next() {
-                let trimmed = first.trim();
-                if !trimmed.is_empty() {
-                    return Some(trimmed.to_string());
-                }
-            }
+    if let Some(forwarded) = req.headers().get("x-forwarded-for")
+        && let Ok(val) = forwarded.to_str()
+        && let Some(first) = val.split(',').next()
+    {
+        let trimmed = first.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
         }
     }
-    if let Some(real) = req.headers().get("x-real-ip") {
-        if let Ok(val) = real.to_str() {
-            if !val.trim().is_empty() {
-                return Some(val.trim().to_string());
-            }
-        }
+    if let Some(real) = req.headers().get("x-real-ip")
+        && let Ok(val) = real.to_str()
+        && !val.trim().is_empty()
+    {
+        return Some(val.trim().to_string());
     }
     None
 }

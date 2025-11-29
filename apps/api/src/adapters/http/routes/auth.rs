@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -37,15 +37,20 @@ pub fn router() -> Router<AppState> {
 
 async fn request(
     State(app_state): State<AppState>,
+    headers: HeaderMap,
     jar: CookieJar,
     Json(payload): Json<RequestPayload>,
 ) -> AppResult<impl IntoResponse> {
     let (jar, session_id) = ensure_login_session(jar, app_state.config.magic_link_ttl_minutes);
     let auth: Arc<AuthUseCases> = app_state.auth_use_cases.clone();
+    let language = headers
+        .get(header::ACCEPT_LANGUAGE)
+        .and_then(|v| v.to_str().ok());
     auth.request_magic_link(
         &payload.email,
         &session_id,
         app_state.config.magic_link_ttl_minutes,
+        language,
     )
     .await?;
     Ok((StatusCode::ACCEPTED, jar))
@@ -64,11 +69,10 @@ async fn consume(
     let auth = app_state.auth_use_cases.clone();
     if let Some(user_id) = auth.consume_magic_link(&payload.token, &session_id).await? {
         // Get user email
-        let email = app_state
-            .user_repo
-            .get_email_by_id(user_id)
-            .await?
-            .unwrap_or_default();
+        let Some(profile) = app_state.user_repo.get_profile_by_id(user_id).await? else {
+            return Ok((StatusCode::UNAUTHORIZED, HeaderMap::new()));
+        };
+        let email = profile.email;
 
         let access = jwt::issue(
             user_id,

@@ -7,11 +7,16 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::app_error::AppResult;
+use crate::application::{
+    email_templates::{primary_button, wrap_email},
+    language::UserLanguage,
+};
 
 #[async_trait]
 pub trait UserRepo: Send + Sync {
-    async fn find_or_create_by_email(&self, email: &str) -> AppResult<Uuid>;
-    async fn get_email_by_id(&self, user_id: Uuid) -> AppResult<Option<String>>;
+    async fn upsert_by_email(&self, email: &str, language: Option<&str>) -> AppResult<UserProfile>;
+    async fn get_profile_by_id(&self, user_id: Uuid) -> AppResult<Option<UserProfile>>;
+    async fn update_language(&self, user_id: Uuid, language: &str) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -54,21 +59,72 @@ impl AuthUseCases {
         email: &str,
         session_id: &str,
         ttl_minutes: i64,
+        language: Option<&str>,
     ) -> AppResult<()> {
-        let user_id = self.repo.find_or_create_by_email(email).await?;
+        let requested_lang = UserLanguage::from_raw(language);
+        let profile = self
+            .repo
+            .upsert_by_email(email, Some(requested_lang.as_str()))
+            .await?;
+        let user_id = profile.id;
+        let lang = UserLanguage::from_raw(Some(&profile.language));
         let raw = generate_token();
         let token_hash = hash_token(&raw, session_id);
         self.magic_links
             .save(&token_hash, user_id, ttl_minutes)
             .await?;
         let link = format!("{}/magic?token={}", self.app_origin, raw);
-        self.email
-            .send(
-                email,
-                "Your login link",
-                &format!("<a href=\"{}\">Sign in</a>", link),
-            )
-            .await
+        let (subject, headline, lead, button_label, reason, footer_note) = match lang {
+            UserLanguage::En => (
+                "Sign in to Dokustatus",
+                "Your sign-in link is ready",
+                format!(
+                    "Use this secure link to finish signing in. It expires in {} minutes.",
+                    ttl_minutes
+                ),
+                "Continue to Dokustatus",
+                format!(
+                    "you asked to sign in to {}",
+                    self.app_origin.trim_end_matches('/')
+                ),
+                "This one-time link keeps your account protected; delete this email if you did not request it.",
+            ),
+            UserLanguage::De => (
+                "Bei Dokustatus anmelden",
+                "Dein Anmeldelink ist startklar",
+                format!(
+                    "Nutze diesen sicheren Link, um dich anzumelden. Er läuft in {} Minuten ab.",
+                    ttl_minutes
+                ),
+                "Weiter zu Dokustatus",
+                format!(
+                    "du hast dich auf {} angemeldet",
+                    self.app_origin.trim_end_matches('/')
+                ),
+                "Dieser einmalige Link schützt deinen Zugang; lösche die E-Mail, falls du sie nicht angefordert hast.",
+            ),
+        };
+        let button = primary_button(&link, button_label);
+        let html = wrap_email(
+            lang,
+            &self.app_origin,
+            headline,
+            &lead,
+            &format!(
+                "{button}<p style=\"margin:12px 0 0;font-size:14px;color:#4b5563;\">{fallback}</p>",
+                fallback = match lang {
+                    UserLanguage::En => format!(
+                        "If the button does not work, copy and paste this URL:<br><span style=\"word-break:break-all;color:#111827;\">{link}</span>"
+                    ),
+                    UserLanguage::De => format!(
+                        "Falls der Button nicht funktioniert, kopiere diesen Link:<br><span style=\"word-break:break-all;color:#111827;\">{link}</span>"
+                    ),
+                }
+            ),
+            &reason,
+            Some(footer_note),
+        );
+        self.email.send(&profile.email, subject, &html).await
     }
 
     #[instrument(skip(self))]
@@ -83,6 +139,14 @@ impl AuthUseCases {
         }
         Ok(None)
     }
+}
+
+#[derive(Debug, Clone)]
+pub struct UserProfile {
+    pub id: Uuid,
+    pub email: String,
+    pub language: String,
+    pub updated_at: Option<chrono::NaiveDateTime>,
 }
 
 fn generate_token() -> String {

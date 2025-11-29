@@ -35,6 +35,7 @@ impl PostgresPersistence {
             last_checked_at: db.last_checked_at,
             status_changed_at: db.status_changed_at,
             created_at: db.created_at,
+            typ: None,
         })
     }
 }

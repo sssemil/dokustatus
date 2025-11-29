@@ -6,41 +6,76 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    use_cases::user::UserRepo,
+    application::language::UserLanguage,
+    use_cases::user::{UserProfile, UserRepo},
 };
 
 // User struct as stored in the db.
 #[derive(sqlx::FromRow, Debug, Serialize)]
 pub struct UserDb {
     pub id: Uuid,
-    pub created_at: NaiveDateTime,
+    pub created_at: Option<NaiveDateTime>,
+    pub updated_at: Option<NaiveDateTime>,
     pub email: String,
+    pub language: String,
 }
 
 #[async_trait]
 impl UserRepo for PostgresPersistence {
-    async fn find_or_create_by_email(&self, email: &str) -> AppResult<Uuid> {
-        // Try find
-        if let Some(rec) = sqlx::query!("SELECT id FROM users WHERE email = $1", email)
-            .fetch_optional(&self.pool)
-            .await?
-        {
-            return Ok(rec.id);
-        }
-        // Insert
+    async fn upsert_by_email(&self, email: &str, language: Option<&str>) -> AppResult<UserProfile> {
+        let lang = UserLanguage::from_raw(language.map(|l| l.trim()));
         let id = Uuid::new_v4();
-        sqlx::query!("INSERT INTO users (id, email) VALUES ($1, $2)", id, email)
-            .execute(&self.pool)
-            .await
-            .map_err(AppError::from)?;
-        Ok(id)
+        let rec = sqlx::query_as!(
+            UserDb,
+            r#"
+                INSERT INTO users (id, email, language)
+                VALUES ($1, $2, $3)
+                ON CONFLICT (email) DO UPDATE
+                SET language = COALESCE($3, users.language)
+                RETURNING id, email, created_at, updated_at, language
+            "#,
+            id,
+            email,
+            lang.as_str(),
+        )
+        .fetch_one(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+        Ok(UserProfile {
+            id: rec.id,
+            email: rec.email,
+            language: rec.language,
+            updated_at: rec.updated_at,
+        })
     }
 
-    async fn get_email_by_id(&self, user_id: Uuid) -> AppResult<Option<String>> {
-        let rec = sqlx::query!("SELECT email FROM users WHERE id = $1", user_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(AppError::from)?;
-        Ok(rec.map(|r| r.email))
+    async fn get_profile_by_id(&self, user_id: Uuid) -> AppResult<Option<UserProfile>> {
+        let rec = sqlx::query_as!(
+            UserDb,
+            "SELECT id, email, created_at, updated_at, language FROM users WHERE id = $1",
+            user_id
+        )
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+        Ok(rec.map(|r| UserProfile {
+            id: r.id,
+            email: r.email,
+            language: r.language,
+            updated_at: r.updated_at,
+        }))
+    }
+
+    async fn update_language(&self, user_id: Uuid, language: &str) -> AppResult<()> {
+        let lang = UserLanguage::from_raw(Some(language.trim()));
+        sqlx::query!(
+            "UPDATE users SET language = $2 WHERE id = $1",
+            user_id,
+            lang.as_str()
+        )
+        .execute(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+        Ok(())
     }
 }

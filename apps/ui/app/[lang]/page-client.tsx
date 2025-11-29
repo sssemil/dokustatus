@@ -272,6 +272,7 @@ export default function PageClient({
       const res = await fetch("/api/pass/documents/info", {
         method: "GET",
         credentials: "include",
+        headers: { "Accept-Language": lang },
       });
       if (flagRateLimit(res, "GET /api/pass/documents/info")) return;
       if (!res.ok) return;
@@ -302,6 +303,7 @@ export default function PageClient({
         const res = await fetch("/api/auth/verify", {
           method: "GET",
           credentials: "include",
+          headers: { "Accept-Language": lang },
         });
         if (flagRateLimit(res, "GET /api/auth/verify")) {
           return;
@@ -325,7 +327,7 @@ export default function PageClient({
     try {
       const res = await fetch("/api/auth/request", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Accept-Language": lang },
         body: JSON.stringify({ email }),
         credentials: "include",
       });
@@ -354,6 +356,7 @@ export default function PageClient({
       const res = await fetch("/api/pass/documents", {
         method: "GET",
         credentials: "include",
+        headers: { "Accept-Language": lang },
       });
       if (flagRateLimit(res, "GET /api/pass/documents")) {
         return;
@@ -391,7 +394,7 @@ export default function PageClient({
     try {
       const res = await fetch("/api/pass/documents", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Accept-Language": lang },
         credentials: "include",
         body: JSON.stringify({
           number: trimmed,
@@ -422,6 +425,7 @@ export default function PageClient({
       const res = await fetch(`/api/pass/documents/${id}`, {
         method: "DELETE",
         credentials: "include",
+        headers: { "Accept-Language": lang },
       });
       if (flagRateLimit(res, "DELETE /api/pass/documents/{id}")) {
         return;
@@ -449,6 +453,7 @@ export default function PageClient({
       await fetch("/api/auth/logout", {
         method: "POST",
         credentials: "include",
+        headers: { "Accept-Language": lang },
       });
     } catch {
       // Ignore errors

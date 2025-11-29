@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_trait::async_trait;
 use chrono::{NaiveDateTime, Utc};
@@ -9,7 +9,12 @@ use uuid::Uuid;
 
 use crate::{
     app_error::{AppError, AppResult},
-    use_cases::user::{EmailSender, UserRepo},
+    application::{
+        dictionaries::status_copy,
+        email_templates::{primary_button, wrap_email},
+        language::UserLanguage,
+    },
+    use_cases::user::{EmailSender, UserProfile, UserRepo},
 };
 
 #[derive(Debug, Clone, Serialize, FromRow)]
@@ -23,6 +28,9 @@ pub struct DocumentTrack {
     pub last_checked_at: Option<NaiveDateTime>,
     pub status_changed_at: Option<NaiveDateTime>,
     pub created_at: NaiveDateTime,
+    #[sqlx(skip)]
+    #[serde(default)]
+    pub typ: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -89,6 +97,7 @@ pub struct PassStatusUseCases {
     user_repo: Arc<dyn UserRepo>,
     refresh_interval_secs: i64,
     max_documents_per_user: usize,
+    app_origin: String,
 }
 
 impl PassStatusUseCases {
@@ -99,6 +108,7 @@ impl PassStatusUseCases {
         user_repo: Arc<dyn UserRepo>,
         refresh_interval_secs: i64,
         max_documents_per_user: usize,
+        app_origin: String,
     ) -> Self {
         Self {
             repo,
@@ -107,16 +117,18 @@ impl PassStatusUseCases {
             user_repo,
             refresh_interval_secs,
             max_documents_per_user,
+            app_origin,
         }
     }
 
     #[instrument(skip(self))]
     pub async fn add_track(&self, user_id: Uuid, number: &str) -> AppResult<DocumentTrack> {
-        let user_email = self
+        let user = self
             .user_repo
-            .get_email_by_id(user_id)
+            .get_profile_by_id(user_id)
             .await?
             .ok_or(AppError::InvalidCredentials)?;
+        let lang = UserLanguage::from_raw(Some(&user.language));
 
         let existing = self.repo.list_tracks_for_user(user_id).await?;
         if existing.len() >= self.max_documents_per_user {
@@ -134,7 +146,7 @@ impl PassStatusUseCases {
             return Err(AppError::InvalidInput("Invalid tracking number".into()));
         }
 
-        let track = self.repo.upsert_track(user_id, &normalized_number).await?;
+        let mut track = self.repo.upsert_track(user_id, &normalized_number).await?;
         let now = Utc::now().naive_utc();
         self.repo
             .save_status(
@@ -145,26 +157,87 @@ impl PassStatusUseCases {
             )
             .await?;
 
-        let subject = format!(
-            "Dokument {}: Tracking gestartet ({})",
-            normalized_number,
-            status_info.status.as_deref().unwrap_or("Unbekannt")
-        );
+        track.typ = Some(normalized_typ.clone());
+        let subject = match lang {
+            UserLanguage::En => format!("Dokustatus: Tracking started for {}", normalized_number),
+            UserLanguage::De => format!("Dokustatus: Tracking gestartet für {}", normalized_number),
+        };
+        let status_copy = status_copy(lang, status_info.status.as_deref());
         let pickup_line = status_info
             .pickup
             .as_deref()
-            .map(|p| format!("<p>Abholort: {}</p>", p))
+            .map(|p| {
+                let label = match lang {
+                    UserLanguage::En => "Pickup location",
+                    UserLanguage::De => "Abholort",
+                };
+                format!(
+                    "<p style=\"margin:0 0 8px;color:#374151;\">{}: {}</p>",
+                    label, p
+                )
+            })
             .unwrap_or_default();
-        let body = format!(
-            "<p>Status: {}</p><p>Typ: {}</p>{}",
-            status_info.status.as_deref().unwrap_or("Unbekannt"),
+        let status_line = format!(
+            "<p style=\"margin:0 0 8px;font-weight:600;color:#111827;\">{}</p>",
+            status_copy.title
+        );
+        let status_msg = status_copy
+            .message
+            .as_ref()
+            .map(|m| format!("<p style=\"margin:0 0 8px;color:#374151;\">{}</p>", m))
+            .unwrap_or_default();
+        let details = format!(
+            "{status_line}{status_msg}<p style=\"margin:0 0 8px;color:#374151;\">{}</p>{pickup_line}",
             status_info
                 .type_label
                 .as_deref()
-                .unwrap_or(normalized_typ.as_str()),
-            pickup_line
+                .unwrap_or(normalized_typ.as_str())
         );
-        self.email.send(&user_email, &subject, &body).await?;
+        let cta = primary_button(
+            self.app_origin.trim_end_matches('/'),
+            match lang {
+                UserLanguage::En => "Open Dokustatus",
+                UserLanguage::De => "Dokustatus öffnen",
+            },
+        );
+        let (headline, lead, reason, footer) = match lang {
+            UserLanguage::En => (
+                "Tracking started",
+                format!(
+                    "We are watching number {} for you and will notify you of changes.",
+                    normalized_number
+                ),
+                format!(
+                    "you started tracking a document on {}",
+                    self.app_origin.trim_end_matches('/')
+                ),
+                "You can remove tracking anytime in the app.",
+            ),
+            UserLanguage::De => (
+                "Tracking gestartet",
+                format!(
+                    "Wir überwachen die Nummer {} für dich und melden neue Statusänderungen.",
+                    normalized_number
+                ),
+                format!(
+                    "du hast eine Dokumentverfolgung auf {} aktiviert",
+                    self.app_origin.trim_end_matches('/')
+                ),
+                "Du kannst das Tracking jederzeit in der App entfernen.",
+            ),
+        };
+        let body = wrap_email(
+            lang,
+            &self.app_origin,
+            headline,
+            &lead,
+            &format!(
+                "<div style=\"margin:12px 0 0;\">{details}<div style=\"margin-top:16px;\">{cta}</div></div>"
+            ),
+            &reason,
+            Some(footer),
+        );
+        self.email.send(&user.email, &subject, &body).await?;
 
         Ok(DocumentTrack {
             last_status: status_info.status,
@@ -175,7 +248,15 @@ impl PassStatusUseCases {
     }
 
     pub async fn list_tracks(&self, user_id: Uuid) -> AppResult<Vec<DocumentTrack>> {
-        self.repo.list_tracks_for_user(user_id).await
+        let mut tracks = self.repo.list_tracks_for_user(user_id).await?;
+        for track in tracks.iter_mut() {
+            if track.typ.is_none() {
+                if let Ok(typ) = self.status_client.detect_type(&track.number).await {
+                    track.typ = Some(typ);
+                }
+            }
+        }
+        Ok(tracks)
     }
 
     pub async fn delete_track(&self, user_id: Uuid, track_id: Uuid) -> AppResult<()> {
@@ -184,25 +265,27 @@ impl PassStatusUseCases {
 
     #[instrument(skip(self))]
     pub async fn check_and_notify(&self, user_id: Uuid) -> AppResult<Vec<StatusCheckResult>> {
-        let tracks = self.repo.list_tracks_for_user(user_id).await?;
+        let mut tracks = self.repo.list_tracks_for_user(user_id).await?;
         let now = Utc::now().naive_utc();
-        let results = tracks
-            .into_iter()
-            .map(|track| {
-                let status = track.last_status.clone();
-                let stopped = is_final(status.as_deref());
-                StatusCheckResult {
-                    id: track.id,
-                    number: track.number,
-                    typ: None,
-                    status,
-                    pickup: track.last_pickup.clone(),
-                    changed: false,
-                    checked_at: track.last_checked_at.unwrap_or(now),
-                    stopped,
-                }
-            })
-            .collect();
+        let mut results = Vec::new();
+
+        for track in tracks.iter_mut() {
+            if track.typ.is_none() {
+                track.typ = self.status_client.detect_type(&track.number).await.ok();
+            }
+            let status = track.last_status.clone();
+            let stopped = is_final(status.as_deref());
+            results.push(StatusCheckResult {
+                id: track.id,
+                number: track.number.clone(),
+                typ: track.typ.clone(),
+                status,
+                pickup: track.last_pickup.clone(),
+                changed: false,
+                checked_at: track.last_checked_at.unwrap_or(now),
+                stopped,
+            });
+        }
 
         Ok(results)
     }
@@ -213,9 +296,11 @@ impl PassStatusUseCases {
 
     #[instrument(skip(self))]
     pub async fn check_all_and_notify(&self) -> AppResult<Vec<StatusCheckResult>> {
+        let app_home = self.app_origin.trim_end_matches('/');
         let tracks = self.repo.list_all_tracks().await?;
         let now = Utc::now().naive_utc();
         let mut results = Vec::new();
+        let mut user_cache: HashMap<Uuid, UserProfile> = HashMap::new();
 
         for track in tracks {
             if let Some(last_checked) = track.last_checked_at
@@ -313,27 +398,95 @@ impl PassStatusUseCases {
                 continue;
             }
 
-            if changed && let Some(email) = self.user_repo.get_email_by_id(track.user_id).await? {
-                let subject = format!(
-                    "Dokument {}: Status {}",
-                    track.number,
-                    status_info.status.as_deref().unwrap_or("Unbekannt")
-                );
+            if changed {
+                let user = match user_cache.get(&track.user_id) {
+                    Some(u) => u.clone(),
+                    None => {
+                        let Some(profile) = self.user_repo.get_profile_by_id(track.user_id).await?
+                        else {
+                            continue;
+                        };
+                        user_cache.insert(track.user_id, profile.clone());
+                        profile
+                    }
+                };
+                let lang = UserLanguage::from_raw(Some(&user.language));
+                let status_copy = status_copy(lang, status_info.status.as_deref());
+                let subject = match lang {
+                    UserLanguage::En => format!(
+                        "Dokustatus: New status for {} ({})",
+                        track.number,
+                        status_info.status.as_deref().unwrap_or("Unknown")
+                    ),
+                    UserLanguage::De => format!(
+                        "Dokustatus: Neuer Status für {} ({})",
+                        track.number,
+                        status_info.status.as_deref().unwrap_or("Unbekannt")
+                    ),
+                };
                 let pickup_line = status_info
                     .pickup
                     .as_deref()
-                    .map(|p| format!("<p>Abholort: {}</p>", p))
+                    .map(|p| {
+                        let label = match lang {
+                            UserLanguage::En => "Pickup location",
+                            UserLanguage::De => "Abholort",
+                        };
+                        format!(
+                            "<p style=\"margin:0 0 8px;color:#374151;\">{}: {}</p>",
+                            label, p
+                        )
+                    })
                     .unwrap_or_default();
-                let body = format!(
-                    "<p>Status: {}</p><p>Typ: {}</p>{}",
-                    status_info.status.as_deref().unwrap_or("Unbekannt"),
+                let status_line = format!(
+                    "<p style=\"margin:0 0 8px;font-weight:600;color:#111827;\">{}</p>",
+                    status_copy.title
+                );
+                let status_msg = status_copy
+                    .message
+                    .as_ref()
+                    .map(|m| format!("<p style=\"margin:0 0 8px;color:#374151;\">{}</p>", m))
+                    .unwrap_or_default();
+                let details = format!(
+                    "{status_line}{status_msg}<p style=\"margin:0 0 8px;color:#374151;\">{}</p>{pickup_line}",
                     status_info
                         .type_label
                         .as_deref()
-                        .unwrap_or(normalized_typ.as_str()),
-                    pickup_line
+                        .unwrap_or(normalized_typ.as_str())
                 );
-                if let Err(err) = self.email.send(&email, &subject, &body).await {
+                let cta = primary_button(
+                    app_home,
+                    match lang {
+                        UserLanguage::En => "View status in Dokustatus",
+                        UserLanguage::De => "Status in Dokustatus ansehen",
+                    },
+                );
+                let (headline, lead, reason, footer) = match lang {
+                    UserLanguage::En => (
+                        "Status updated",
+                        format!("Document {} has a new update.", track.number),
+                        format!("you are tracking this document on {}", app_home),
+                        "If you didn't expect this notification, remove the document or ignore this email.",
+                    ),
+                    UserLanguage::De => (
+                        "Status aktualisiert",
+                        format!("Für Dokument {} gibt es einen neuen Stand.", track.number),
+                        format!("du verfolgst dieses Dokument auf {}", app_home),
+                        "Falls du diese Benachrichtigung nicht erwartest, entferne das Dokument oder ignoriere diese E-Mail.",
+                    ),
+                };
+                let body = wrap_email(
+                    lang,
+                    &self.app_origin,
+                    headline,
+                    &lead,
+                    &format!(
+                        "<div style=\"margin:12px 0 0;\">{details}<div style=\"margin-top:16px;\">{cta}</div></div>"
+                    ),
+                    &reason,
+                    Some(footer),
+                );
+                if let Err(err) = self.email.send(&user.email, &subject, &body).await {
                     warn!(error = ?err, track_id = %track.id, "sending email failed");
                 }
             }
