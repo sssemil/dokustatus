@@ -50,6 +50,10 @@ type Dictionary = {
   statusLoading: string;
   cachedNotice: string;
   checkingSession: string;
+  termsLinkText: string;
+  footerNote: string;
+  privacyLinkText: string;
+  imprintLinkText: string;
   logout: string;
   delete: string;
   updated: string;
@@ -535,7 +539,15 @@ export default function PageClient({
         </div>
       </header>
 
-      <main style={{ flex: 1, padding: "var(--spacing-xl)" }}>
+      <main
+        style={{
+          flex: 1,
+          padding: "var(--spacing-xl)",
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
         <div style={{ maxWidth: "1200px", margin: "0 auto" }}>
           <div className="card" style={{ marginBottom: "var(--spacing-lg)" }}>
             <h2
@@ -814,6 +826,54 @@ export default function PageClient({
           )}
         </div>
       </main>
+
+      <footer
+        style={{
+          borderTop: "1px solid var(--border-primary)",
+          background: "var(--bg-secondary)",
+          padding: "var(--spacing-md) var(--spacing-xl)",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          color: "var(--text-muted)",
+          fontSize: "12px",
+          marginTop: "auto",
+        }}
+      >
+        <span>{dict.footerNote}</span>
+        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+          <a
+            href={`/${lang}/terms`}
+            style={{
+              color: "var(--text-link)",
+              textDecoration: "none",
+              fontSize: "13px",
+            }}
+          >
+            {dict.termsLinkText}
+          </a>
+          <a
+            href={`/${lang}/privacy`}
+            style={{
+              color: "var(--text-link)",
+              textDecoration: "none",
+              fontSize: "13px",
+            }}
+          >
+            {dict.privacyLinkText}
+          </a>
+          <a
+            href={`/${lang}/impressum`}
+            style={{
+              color: "var(--text-link)",
+              textDecoration: "none",
+              fontSize: "13px",
+            }}
+          >
+            {dict.imprintLinkText}
+          </a>
+        </div>
+      </footer>
     </div>
   );
 }
