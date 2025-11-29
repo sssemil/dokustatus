@@ -54,6 +54,8 @@ type Dictionary = {
   footerNote: string;
   privacyLinkText: string;
   imprintLinkText: string;
+  githubLinkText: string;
+  aboutUsLinkText: string;
   disclaimerTitle: string;
   disclaimerBody: string;
   disclaimerLinkNote: string;
@@ -958,6 +960,30 @@ export default function PageClient({
             }}
           >
             {dict.imprintLinkText}
+          </a>
+          <a
+            href="https://github.com/sssemil/dokustatus"
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              color: "var(--text-link)",
+              textDecoration: "none",
+              fontSize: "13px",
+            }}
+          >
+            {dict.githubLinkText}
+          </a>
+          <a
+            href="https://tqdm.org"
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              color: "var(--text-link)",
+              textDecoration: "none",
+              fontSize: "13px",
+            }}
+          >
+            {dict.aboutUsLinkText}
           </a>
         </div>
       </footer>
