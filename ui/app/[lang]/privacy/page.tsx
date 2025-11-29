@@ -1,5 +1,12 @@
 import type { Metadata } from "next";
 
+type FooterLabels = {
+  note: string;
+  terms: string;
+  privacy: string;
+  imprint: string;
+};
+
 type Section = {
   id: string;
   titleDe: string;
@@ -165,60 +172,104 @@ export const metadata: Metadata = {
     "Datenschutzhinweise für den dokustatus-Dienst von TQDM Inc. (Minimalfassung ohne Tracking oder Werbung)."
 };
 
+const footerLabels: Record<"en" | "de", FooterLabels> = {
+  en: {
+    note: "This service is provided without guarantee; see terms for details.",
+    terms: "Terms & Conditions",
+    privacy: "Privacy Policy",
+    imprint: "Imprint"
+  },
+  de: {
+    note: "Dienst ohne Gewähr; Details in den Nutzungsbedingungen.",
+    terms: "Nutzungsbedingungen",
+    privacy: "Datenschutzerklärung",
+    imprint: "Impressum"
+  }
+};
+
 export default async function PrivacyPage({
   params
 }: {
   params: Promise<{ lang: "en" | "de" }>;
 }) {
-  await params;
+  const { lang } = await params;
+  const labels = footerLabels[lang];
 
   return (
-    <main>
-      <h1>Datenschutzerklärung / Privacy Policy</h1>
-      <p className="text-muted">
-        Minimalfassung ohne Tracking und Werbung. Der Dienst wird von TQDM Inc. in den USA betrieben;
-        maßgeblich ist die deutschsprachige Fassung. / Minimal version without tracking or ads. The
-        service is operated by TQDM Inc. in the USA; the German text prevails.
-      </p>
-      <div style={{ overflowX: "auto" }}>
-        <table>
-          <thead>
-            <tr>
-              <th style={{ width: "50%" }}>Deutsch</th>
-              <th style={{ width: "50%" }}>English</th>
-            </tr>
-          </thead>
-          <tbody>
-            {sections.map((section) => (
-              <tr key={section.id}>
-                <td>
-                  <h3 style={{ marginBottom: "8px" }}>{section.titleDe}</h3>
-                  <ul style={{ paddingLeft: "18px", marginBottom: 0 }}>
-                    {section.pointsDe.map((point, idx) => (
-                      <li key={idx} style={{ marginBottom: "8px" }}>
-                        {point}
-                      </li>
-                    ))}
-                  </ul>
-                </td>
-                <td>
-                  <h3 style={{ marginBottom: "8px" }}>{section.titleEn}</h3>
-                  <ul style={{ paddingLeft: "18px", marginBottom: 0 }}>
-                    {section.pointsEn.map((point, idx) => (
-                      <li key={idx} style={{ marginBottom: "8px" }}>
-                        {point}
-                      </li>
-                    ))}
-                  </ul>
-                </td>
+    <div style={{ display: "flex", minHeight: "100vh", flexDirection: "column" }}>
+      <main style={{ flex: 1 }}>
+        <h1>Datenschutzerklärung / Privacy Policy</h1>
+        <p className="text-muted">
+          Minimalfassung ohne Tracking und Werbung. Der Dienst wird von TQDM Inc. in den USA betrieben;
+          maßgeblich ist die deutschsprachige Fassung. / Minimal version without tracking or ads. The
+          service is operated by TQDM Inc. in the USA; the German text prevails.
+        </p>
+        <div style={{ overflowX: "auto" }}>
+          <table>
+            <thead>
+              <tr>
+                <th style={{ width: "50%" }}>Deutsch</th>
+                <th style={{ width: "50%" }}>English</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-      <p className="text-muted" style={{ marginTop: "var(--spacing-md)" }}>
-        Stand / Last updated: November 2025
-      </p>
-    </main>
+            </thead>
+            <tbody>
+              {sections.map((section) => (
+                <tr key={section.id}>
+                  <td>
+                    <h3 style={{ marginBottom: "8px" }}>{section.titleDe}</h3>
+                    <ul style={{ paddingLeft: "18px", marginBottom: 0 }}>
+                      {section.pointsDe.map((point, idx) => (
+                        <li key={idx} style={{ marginBottom: "8px" }}>
+                          {point}
+                        </li>
+                      ))}
+                    </ul>
+                  </td>
+                  <td>
+                    <h3 style={{ marginBottom: "8px" }}>{section.titleEn}</h3>
+                    <ul style={{ paddingLeft: "18px", marginBottom: 0 }}>
+                      {section.pointsEn.map((point, idx) => (
+                        <li key={idx} style={{ marginBottom: "8px" }}>
+                          {point}
+                        </li>
+                      ))}
+                    </ul>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-muted" style={{ marginTop: "var(--spacing-md)" }}>
+          Stand / Last updated: November 2025
+        </p>
+      </main>
+
+      <footer
+        style={{
+          borderTop: "1px solid var(--border-primary)",
+          background: "var(--bg-secondary)",
+          padding: "var(--spacing-md) var(--spacing-xl)",
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          color: "var(--text-muted)",
+          fontSize: "12px"
+        }}
+      >
+        <span>{labels.note}</span>
+        <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+          <a href={`/${lang}/terms`} style={{ color: "var(--text-link)", textDecoration: "none", fontSize: "13px" }}>
+            {labels.terms}
+          </a>
+          <a href={`/${lang}/privacy`} style={{ color: "var(--text-link)", textDecoration: "none", fontSize: "13px" }}>
+            {labels.privacy}
+          </a>
+          <a href={`/${lang}/impressum`} style={{ color: "var(--text-link)", textDecoration: "none", fontSize: "13px" }}>
+            {labels.imprint}
+          </a>
+        </div>
+      </footer>
+    </div>
   );
 }

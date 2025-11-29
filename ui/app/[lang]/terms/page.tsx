@@ -1,5 +1,12 @@
 import type { Metadata } from "next";
 
+type FooterLabels = {
+    note: string;
+    terms: string;
+    privacy: string;
+    imprint: string;
+};
+
 type Section = {
     id: string;
     titleDe: string;
@@ -20,6 +27,19 @@ const sections: Section[] = [
         pointsEn: [
             "dokustatus is a voluntary and free online service that regularly checks the status of passport, national ID, or eID applications of the City of Munich using the process number you provide and notifies you by email about updates.",
             "All status data is retrieved from services of the City of Munich (e.g. muenchen.de/pass). dokustatus is not an authority and does not replace binding or official information."
+        ]
+    },
+    {
+        id: "independence",
+        titleDe: "Keine behördliche Zugehörigkeit",
+        titleEn: "No affiliation with authorities",
+        pointsDe: [
+            "dokustatus steht in keiner organisatorischen, wirtschaftlichen oder rechtlichen Verbindung zur Landeshauptstadt München, ihren Behörden oder sonstigen öffentlichen Stellen.",
+            "Es besteht keine Beauftragung, Kooperation oder offizielle Partnerschaft; alle Statusinformationen werden ausschließlich aus den öffentlich bereitgestellten Angeboten der Landeshauptstadt München abgerufen."
+        ],
+        pointsEn: [
+            "dokustatus has no organizational, economic, or legal affiliation with the City of Munich, its authorities, or other public bodies.",
+            "There is no mandate, cooperation, or official partnership; all status information is solely retrieved from publicly provided City of Munich services."
         ]
     },
     {
@@ -148,62 +168,105 @@ export const metadata: Metadata = {
         "Bilingual terms and conditions for using the dokustatus document tracking service in Germany."
 };
 
+const footerLabels: Record<"en" | "de", FooterLabels> = {
+    en: {
+        note: "This service is provided without guarantee; see terms for details.",
+        terms: "Terms & Conditions",
+        privacy: "Privacy Policy",
+        imprint: "Imprint"
+    },
+    de: {
+        note: "Dienst ohne Gewähr; Details in den Nutzungsbedingungen.",
+        terms: "Nutzungsbedingungen",
+        privacy: "Datenschutzerklärung",
+        imprint: "Impressum"
+    }
+};
+
 export default async function TermsPage({
                                             params
                                         }: {
     params: Promise<{ lang: "en" | "de" }>;
 }) {
-    // Consume params to keep parity with other routes; page content is bilingual by design.
-    await params;
+    const { lang } = await params;
+    const labels = footerLabels[lang];
 
     return (
-        <main>
-            <h1>Allgemeine Nutzungsbedingungen / Terms of Service</h1>
-            <p className="text-muted">
-                Deutsch und Englisch stehen nebeneinander zu Ihrer Orientierung. Für die
-                Nutzung in Deutschland ist die deutschsprachige Fassung maßgeblich. / German
-                and English are shown side by side for convenience. For use in Germany, the
-                German text prevails.
-            </p>
-            <div style={{ overflowX: "auto" }}>
-                <table>
-                    <thead>
-                    <tr>
-                        <th style={{ width: "50%" }}>Deutsch</th>
-                        <th style={{ width: "50%" }}>English</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    {sections.map((section) => (
-                        <tr key={section.id}>
-                            <td>
-                                <h3 style={{ marginBottom: "8px" }}>{section.titleDe}</h3>
-                                <ul style={{ paddingLeft: "18px", marginBottom: 0 }}>
-                                    {section.pointsDe.map((point, idx) => (
-                                        <li key={idx} style={{ marginBottom: "8px" }}>
-                                            {point}
-                                        </li>
-                                    ))}
-                                </ul>
-                            </td>
-                            <td>
-                                <h3 style={{ marginBottom: "8px" }}>{section.titleEn}</h3>
-                                <ul style={{ paddingLeft: "18px", marginBottom: 0 }}>
-                                    {section.pointsEn.map((point, idx) => (
-                                        <li key={idx} style={{ marginBottom: "8px" }}>
-                                            {point}
-                                        </li>
-                                    ))}
-                                </ul>
-                            </td>
+        <div style={{ display: "flex", minHeight: "100vh", flexDirection: "column" }}>
+            <main style={{ flex: 1 }}>
+                <h1>Allgemeine Nutzungsbedingungen / Terms of Service</h1>
+                <p className="text-muted">
+                    Deutsch und Englisch stehen nebeneinander zu Ihrer Orientierung. Für die
+                    Nutzung in Deutschland ist die deutschsprachige Fassung maßgeblich. / German
+                    and English are shown side by side for convenience. For use in Germany, the
+                    German text prevails.
+                </p>
+                <div style={{ overflowX: "auto" }}>
+                    <table>
+                        <thead>
+                        <tr>
+                            <th style={{ width: "50%" }}>Deutsch</th>
+                            <th style={{ width: "50%" }}>English</th>
                         </tr>
-                    ))}
-                    </tbody>
-                </table>
-            </div>
-            <p className="text-muted" style={{ marginTop: "var(--spacing-md)" }}>
-                Stand / Last updated: November 2025
-            </p>
-        </main>
+                        </thead>
+                        <tbody>
+                        {sections.map((section) => (
+                            <tr key={section.id}>
+                                <td>
+                                    <h3 style={{ marginBottom: "8px" }}>{section.titleDe}</h3>
+                                    <ul style={{ paddingLeft: "18px", marginBottom: 0 }}>
+                                        {section.pointsDe.map((point, idx) => (
+                                            <li key={idx} style={{ marginBottom: "8px" }}>
+                                                {point}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </td>
+                                <td>
+                                    <h3 style={{ marginBottom: "8px" }}>{section.titleEn}</h3>
+                                    <ul style={{ paddingLeft: "18px", marginBottom: 0 }}>
+                                        {section.pointsEn.map((point, idx) => (
+                                            <li key={idx} style={{ marginBottom: "8px" }}>
+                                                {point}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </td>
+                            </tr>
+                        ))}
+                        </tbody>
+                    </table>
+                </div>
+                <p className="text-muted" style={{ marginTop: "var(--spacing-md)" }}>
+                    Stand / Last updated: November 2025
+                </p>
+            </main>
+
+            <footer
+                style={{
+                    borderTop: "1px solid var(--border-primary)",
+                    background: "var(--bg-secondary)",
+                    padding: "var(--spacing-md) var(--spacing-xl)",
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    color: "var(--text-muted)",
+                    fontSize: "12px"
+                }}
+            >
+                <span>{labels.note}</span>
+                <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                    <a href={`/${lang}/terms`} style={{ color: "var(--text-link)", textDecoration: "none", fontSize: "13px" }}>
+                        {labels.terms}
+                    </a>
+                    <a href={`/${lang}/privacy`} style={{ color: "var(--text-link)", textDecoration: "none", fontSize: "13px" }}>
+                        {labels.privacy}
+                    </a>
+                    <a href={`/${lang}/impressum`} style={{ color: "var(--text-link)", textDecoration: "none", fontSize: "13px" }}>
+                        {labels.imprint}
+                    </a>
+                </div>
+            </footer>
+        </div>
     );
 }

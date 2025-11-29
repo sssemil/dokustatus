@@ -54,6 +54,8 @@ type Dictionary = {
   footerNote: string;
   privacyLinkText: string;
   imprintLinkText: string;
+  disclaimerTitle: string;
+  disclaimerBody: string;
   logout: string;
   delete: string;
   updated: string;
@@ -549,6 +551,29 @@ export default function PageClient({
         }}
       >
         <div style={{ maxWidth: "1200px", margin: "0 auto" }}>
+          <div
+            className="card"
+            style={{
+              marginBottom: "var(--spacing-lg)",
+              borderLeft: "3px solid var(--accent-orange)",
+              background: "var(--bg-secondary)",
+            }}
+          >
+            <h3 style={{ marginTop: 0, marginBottom: "8px" }}>{dict.disclaimerTitle}</h3>
+            <p style={{ margin: 0, color: "var(--text-muted)" }}>{dict.disclaimerBody}</p>
+            <p style={{ marginTop: "8px", marginBottom: 0, color: "var(--text-muted)" }}>
+              <a
+                href="https://www.muenchen.de/pass"
+                target="_blank"
+                rel="noreferrer"
+                style={{ color: "var(--text-link)" }}
+              >
+                https://www.muenchen.de/pass
+              </a>{" "}
+              {dict.disclaimerLinkNote}
+            </p>
+          </div>
+
           <div className="card" style={{ marginBottom: "var(--spacing-lg)" }}>
             <h2
               style={{
