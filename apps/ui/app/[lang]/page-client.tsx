@@ -478,7 +478,7 @@ export default function PageClient({
         }}
       >
         <h1 style={{ margin: 0, fontSize: "18px", borderBottom: "none", padding: 0 }}>
-          📊 dokustatus
+          📊 Dokustatus
         </h1>
         <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
           <button
