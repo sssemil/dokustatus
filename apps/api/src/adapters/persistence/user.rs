@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use serde::Serialize;
 use uuid::Uuid;
 
@@ -42,52 +42,5 @@ impl UserRepo for PostgresPersistence {
             .await
             .map_err(AppError::from)?;
         Ok(rec.map(|r| r.email))
-    }
-
-    async fn create_magic_link(
-        &self,
-        user_id: Uuid,
-        token_hash: &str,
-        expires_at: NaiveDateTime,
-    ) -> AppResult<()> {
-        sqlx::query!(
-            "INSERT INTO magic_links (token_hash, user_id, expires_at) VALUES ($1, $2, $3)",
-            token_hash,
-            user_id,
-            expires_at
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(AppError::from)?;
-        Ok(())
-    }
-
-    async fn get_valid_magic_link(
-        &self,
-        token_hash: &str,
-        now: NaiveDateTime,
-    ) -> AppResult<Option<Uuid>> {
-        let rec = sqlx::query!(
-            r#"SELECT user_id FROM magic_links
-               WHERE token_hash = $1 AND consumed_at IS NULL AND expires_at > $2"#,
-            token_hash,
-            now
-        )
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(AppError::from)?;
-        Ok(rec.map(|r| r.user_id))
-    }
-
-    async fn consume_magic_link(&self, token_hash: &str) -> AppResult<()> {
-        sqlx::query!(
-            "UPDATE magic_links SET consumed_at = $2 WHERE token_hash = $1 AND consumed_at IS NULL",
-            token_hash,
-            Utc::now().naive_utc()
-        )
-        .execute(&self.pool)
-        .await
-        .map_err(AppError::from)?;
-        Ok(())
     }
 }

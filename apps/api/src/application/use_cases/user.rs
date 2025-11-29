@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use base64::Engine;
-use chrono::{NaiveDateTime, Utc};
 use sha2::{Digest, Sha256};
 use tracing::instrument;
 use uuid::Uuid;
@@ -13,18 +12,6 @@ use crate::app_error::AppResult;
 pub trait UserRepo: Send + Sync {
     async fn find_or_create_by_email(&self, email: &str) -> AppResult<Uuid>;
     async fn get_email_by_id(&self, user_id: Uuid) -> AppResult<Option<String>>;
-    async fn create_magic_link(
-        &self,
-        user_id: Uuid,
-        token_hash: &str,
-        expires_at: NaiveDateTime,
-    ) -> AppResult<()>;
-    async fn get_valid_magic_link(
-        &self,
-        token_hash: &str,
-        now: NaiveDateTime,
-    ) -> AppResult<Option<Uuid>>;
-    async fn consume_magic_link(&self, token_hash: &str) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -32,17 +19,30 @@ pub trait EmailSender: Send + Sync {
     async fn send(&self, to: &str, subject: &str, html: &str) -> AppResult<()>;
 }
 
+#[async_trait]
+pub trait MagicLinkStore: Send + Sync {
+    async fn save(&self, token_hash: &str, user_id: Uuid, ttl_minutes: i64) -> AppResult<()>;
+    async fn consume(&self, token_hash: &str) -> AppResult<Option<Uuid>>;
+}
+
 #[derive(Clone)]
 pub struct AuthUseCases {
     repo: Arc<dyn UserRepo>,
+    magic_links: Arc<dyn MagicLinkStore>,
     email: Arc<dyn EmailSender>,
     app_origin: String,
 }
 
 impl AuthUseCases {
-    pub fn new(repo: Arc<dyn UserRepo>, email: Arc<dyn EmailSender>, app_origin: String) -> Self {
+    pub fn new(
+        repo: Arc<dyn UserRepo>,
+        magic_links: Arc<dyn MagicLinkStore>,
+        email: Arc<dyn EmailSender>,
+        app_origin: String,
+    ) -> Self {
         Self {
             repo,
+            magic_links,
             email,
             app_origin,
         }
@@ -58,9 +58,8 @@ impl AuthUseCases {
         let user_id = self.repo.find_or_create_by_email(email).await?;
         let raw = generate_token();
         let token_hash = hash_token(&raw, session_id);
-        let expires_at = (Utc::now() + chrono::Duration::minutes(ttl_minutes)).naive_utc();
-        self.repo
-            .create_magic_link(user_id, &token_hash, expires_at)
+        self.magic_links
+            .save(&token_hash, user_id, ttl_minutes)
             .await?;
         let link = format!("{}/magic?token={}", self.app_origin, raw);
         self.email
@@ -79,9 +78,7 @@ impl AuthUseCases {
         session_id: &str,
     ) -> AppResult<Option<Uuid>> {
         let token_hash = hash_token(raw_token, session_id);
-        let now = Utc::now().naive_utc();
-        if let Some(user_id) = self.repo.get_valid_magic_link(&token_hash, now).await? {
-            self.repo.consume_magic_link(&token_hash).await?;
+        if let Some(user_id) = self.magic_links.consume(&token_hash).await? {
             return Ok(Some(user_id));
         }
         Ok(None)

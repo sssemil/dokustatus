@@ -4,7 +4,8 @@ use crate::{
         pass_status::MunichPassStatusClient,
     },
     infra::{
-        config::AppConfig, crypto::ProcessCipher, postgres_persistence, rate_limit::RateLimiter,
+        config::AppConfig, crypto::ProcessCipher, magic_links::MagicLinkStore,
+        postgres_persistence, rate_limit::RateLimiter,
     },
     use_cases::{
         pass_status::{PassStatusRepo, PassStatusUseCases},
@@ -31,6 +32,8 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         .await?,
     );
 
+    let magic_links = Arc::new(MagicLinkStore::new(&config.redis_url).await?);
+
     let email = Arc::new(ResendEmailSender::new(
         config.resend_api_key.clone(),
         config.email_from.clone(),
@@ -49,6 +52,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
 
     let auth_use_cases = AuthUseCases::new(
         user_repo_arc.clone(),
+        magic_links,
         email.clone(),
         config.app_origin.to_string(),
     );

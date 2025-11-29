@@ -4,6 +4,7 @@ pub mod app;
 pub mod config;
 pub mod crypto;
 pub mod db;
+pub mod magic_links;
 pub mod rate_limit;
 pub mod setup;
 
