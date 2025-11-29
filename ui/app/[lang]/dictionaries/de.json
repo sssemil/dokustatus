@@ -1,0 +1,73 @@
+{
+  "trackerTitle": "Dokument-Status-Tracker",
+  "trackerSubtitle": "Fügen Sie Ihre Pass- oder Ausweis-Vorgangsnummer hinzu; wir prüfen den Status und informieren Sie per E-Mail bei Änderungen.",
+  "processLabel": "Vorgangsnummer",
+  "placeholder": "z. B. CH1H123456",
+  "loginPrompt": "Bitte melden Sie sich an, um eine Vorgangsnummer hinzuzufügen. Ihre Eingabe wird 15 Minuten lokal gespeichert.",
+  "trackedDocuments": "Beobachtete Dokumente",
+  "refreshNow": "Jetzt aktualisieren",
+  "refreshing": "Wird aktualisiert…",
+  "noDocs": "Noch keine Dokumente. Fügen Sie oben eine Nummer hinzu, um zu starten.",
+  "signIn": "Anmelden",
+  "signInTitle": "Anmelden",
+  "signInSubtitle": "E-Mail-Adresse eingeben, um einen sicheren Login-Link zu erhalten.",
+  "emailSentTitle": "✓ E-Mail gesendet!",
+  "emailSentDesc": "Prüfen Sie Ihren Posteingang für den Magic-Link.",
+  "emailLabel": "E-Mail-Adresse",
+  "emailPlaceholder": "sie@example.com",
+  "sendMagic": "→ Magic-Link senden",
+  "sending": "Wird gesendet...",
+  "errorTitle": "✗ Fehler",
+  "checkingStatus": "Status wird geprüft…",
+  "statusLoading": "Status wird geladen",
+  "cachedNotice": "Ihre Eingabe wird 15 Minuten lokal gespeichert.",
+  "checkingSession": "Sitzung wird geprüft...",
+  "signedInAs": "Angemeldet als",
+  "logout": "Abmelden",
+  "delete": "Löschen",
+  "updated": "Aktualisiert",
+  "number": "Nummer",
+  "type": "Typ",
+  "autoDetected": "Automatisch erkannt",
+  "checkedAt": "Geprüft am",
+  "pickupLocation": "Abholort",
+  "trackingAdded": "Tracking hinzugefügt und bestätigt. Wir senden Ihnen eine E-Mail bei Statusänderungen.",
+  "enterProcessNumber": "Bitte geben Sie eine Vorgangsnummer ein",
+  "prefixes": "Präfixe",
+  "statusCallouts": {
+    "IN_BEARBEITUNG": {
+      "title": "Ihr Ausweisdokument ist noch in Arbeit",
+      "message": "Bearbeitungszeiten:<br>• Express-Reisepass: 3–6 Werktage<br>• Reisepass/Personalausweis: 4–5 Wochen<br>• eID-Karte: 5–6 Wochen"
+    },
+    "BEREIT_ZUR_ABHOLUNG": {
+      "title": "Ihr Ausweisdokument ist fertig"
+    },
+    "AUSGEHAENDIGT": {
+      "title": "Ihr Ausweisdokument ist bereits ausgehändigt",
+      "message": "Das Dokument wurde schon ausgegeben."
+    },
+    "IN_DIREKTVERSAND": {
+      "title": "Ihr Ausweisdokument wurde versandt",
+      "message": "Versand durch die Bundesdruckerei GmbH, unterwegs."
+    },
+    "DIREKTVERSAND_ZUGESTELLT": {
+      "title": "Ihr Ausweisdokument wurde zugestellt"
+    },
+    "DIREKTVERSAND_FEHLGESCHLAGEN": {
+      "title": "Ihr Ausweisdokument konnte Ihnen leider nicht zugestellt werden",
+      "message": "Wird 7 Tage bei der Deutschen Post bereitgehalten, danach Rücksendung an Bürgerbüro Ruppertstr. 19."
+    },
+    "UNBEKANNT": {
+      "title": "Der Status Ihres Ausweisdokuments ist unbekannt",
+      "message": "Keine Statusinformationen verfügbar."
+    },
+    "DOKUMENT_UNBEKANNT": {
+      "title": "Die eingegebene Ausweisnummer ist uns nicht bekannt",
+      "message": "Bitte Eingabe prüfen und erneut versuchen."
+    },
+    "default": {
+      "title": "Status: {status}",
+      "message": "Noch keine Detailinformationen."
+    }
+  }
+}

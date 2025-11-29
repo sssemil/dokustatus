@@ -1,0 +1,73 @@
+{
+  "trackerTitle": "Document status tracker",
+  "trackerSubtitle": "Add your passport or ID process number and we will pull the latest status and email you when it changes.",
+  "processLabel": "Process number",
+  "placeholder": "e.g., CH1H123456",
+  "loginPrompt": "Please sign in to add a tracking number. Your input is saved locally for 15 minutes.",
+  "trackedDocuments": "Tracked documents",
+  "refreshNow": "Refresh now",
+  "refreshing": "Refreshing…",
+  "noDocs": "No documents added yet. Add your first number above to start tracking.",
+  "signIn": "Sign in",
+  "signInTitle": "Sign In",
+  "signInSubtitle": "Enter your email address to receive a secure login link.",
+  "emailSentTitle": "✓ Email sent!",
+  "emailSentDesc": "Check your inbox for the magic link to complete sign-in.",
+  "emailLabel": "Email Address",
+  "emailPlaceholder": "you@example.com",
+  "sendMagic": "→ Send Magic Link",
+  "sending": "Sending...",
+  "errorTitle": "✗ Error",
+  "checkingStatus": "Checking status…",
+  "statusLoading": "Loading status",
+  "cachedNotice": "Your input is saved locally for 15 minutes.",
+  "checkingSession": "Checking session...",
+  "signedInAs": "Signed in as",
+  "logout": "Logout",
+  "delete": "Delete",
+  "updated": "Updated",
+  "number": "Number",
+  "type": "Type",
+  "autoDetected": "Auto-detected",
+  "checkedAt": "Checked at",
+  "pickupLocation": "Pickup location",
+  "trackingAdded": "Tracking added and confirmed. We'll email you on status changes.",
+  "enterProcessNumber": "Please enter a process number",
+  "prefixes": "prefixes",
+  "statusCallouts": {
+    "IN_BEARBEITUNG": {
+      "title": "Your document is still being processed",
+      "message": "Processing times:<br>• Express passport: 3–6 business days<br>• Passport/ID: 4–5 weeks<br>• eID card: 5–6 weeks"
+    },
+    "BEREIT_ZUR_ABHOLUNG": {
+      "title": "Your document is ready for pickup"
+    },
+    "AUSGEHAENDIGT": {
+      "title": "Your document has already been handed out",
+      "message": "Document was already handed out."
+    },
+    "IN_DIREKTVERSAND": {
+      "title": "Your document was shipped",
+      "message": "Shipped by Bundesdruckerei GmbH, on its way."
+    },
+    "DIREKTVERSAND_ZUGESTELLT": {
+      "title": "Your document was delivered"
+    },
+    "DIREKTVERSAND_FEHLGESCHLAGEN": {
+      "title": "Delivery failed",
+      "message": "Held at Deutsche Post for 7 days, then returned to Bürgerbüro Ruppertstr. 19."
+    },
+    "UNBEKANNT": {
+      "title": "Document status is unknown",
+      "message": "No status information available."
+    },
+    "DOKUMENT_UNBEKANNT": {
+      "title": "The entered document number is unknown",
+      "message": "Check your input and try again."
+    },
+    "default": {
+      "title": "Status: {status}",
+      "message": "No additional details yet."
+    }
+  }
+}
