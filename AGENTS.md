@@ -21,6 +21,7 @@ This project pairs a Rust backend (Axum + SQLx, Redis for rate limits) with a Ne
 - Rust 2024 edition; always run `cargo fmt` before committing. Prefer small modules aligned to `domain/application/adapters/infra`.
 - Naming: Rust modules `snake_case`; types and traits `PascalCase`; functions `snake_case`; constants `SCREAMING_SNAKE_CASE`.
 - Error handling uses `anyhow` for main and typed errors in `application`; propagate via `?` and map to HTTP errors in adapters.
+- Prefer enums for error codes and variant propagation; avoid free-form strings for error types.
 - Frontend: functional React components in `ui/app`, `PascalCase` component names, co-locate styles in `globals.css` or module styles.
 
 ## Testing Guidelines

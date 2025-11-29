@@ -21,4 +21,27 @@ pub enum AppError {
     Internal(String),
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ErrorCode {
+    DatabaseError,
+    InvalidCredentials,
+    RateLimited,
+    InvalidInput,
+    TooManyDocuments,
+    InternalError,
+}
+
+impl ErrorCode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ErrorCode::DatabaseError => "DATABASE_ERROR",
+            ErrorCode::InvalidCredentials => "INVALID_CREDENTIALS",
+            ErrorCode::RateLimited => "RATE_LIMITED",
+            ErrorCode::InvalidInput => "INVALID_INPUT",
+            ErrorCode::TooManyDocuments => "TOO_MANY_DOCUMENTS",
+            ErrorCode::InternalError => "INTERNAL_ERROR",
+        }
+    }
+}
+
 pub type AppResult<T> = Result<T, AppError>;

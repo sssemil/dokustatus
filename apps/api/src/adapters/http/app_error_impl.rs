@@ -1,4 +1,4 @@
-use crate::app_error::AppError;
+use crate::app_error::{AppError, ErrorCode};
 use axum::Json;
 use axum::{
     http::StatusCode,
@@ -11,36 +11,28 @@ impl IntoResponse for AppError {
         tracing::error!(error = ?self, "Request failed");
 
         match self {
-            AppError::Database(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "code": "DATABASE_ERROR" })),
-            )
-                .into_response(),
-            AppError::InvalidCredentials => (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({ "code": "INVALID_CREDENTIALS" })),
-            )
-                .into_response(),
-            AppError::RateLimited => (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(serde_json::json!({"code": "RATE_LIMITED"})),
-            )
-                .into_response(),
-            AppError::InvalidInput(_) => (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "code": "INVALID_INPUT" })),
-            )
-                .into_response(),
-            AppError::TooManyDocuments => (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "code": "TOO_MANY_DOCUMENTS" })),
-            )
-                .into_response(),
-            AppError::Internal(_) => (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "code": "INTERNAL_ERROR" })),
-            )
-                .into_response(),
+            AppError::Database(_) => {
+                error_resp(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::DatabaseError)
+            }
+            AppError::InvalidCredentials => {
+                error_resp(StatusCode::UNAUTHORIZED, ErrorCode::InvalidCredentials)
+            }
+            AppError::RateLimited => {
+                error_resp(StatusCode::TOO_MANY_REQUESTS, ErrorCode::RateLimited)
+            }
+            AppError::InvalidInput(_) => {
+                error_resp(StatusCode::BAD_REQUEST, ErrorCode::InvalidInput)
+            }
+            AppError::TooManyDocuments => {
+                error_resp(StatusCode::BAD_REQUEST, ErrorCode::TooManyDocuments)
+            }
+            AppError::Internal(_) => {
+                error_resp(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::InternalError)
+            }
         }
     }
+}
+
+fn error_resp(status: StatusCode, code: ErrorCode) -> Response {
+    (status, Json(serde_json::json!({ "code": code.as_str() }))).into_response()
 }
