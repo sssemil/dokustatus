@@ -31,3 +31,5 @@ hex = "0.4"
 env_helpers = "0.1.0"
 url = "2"
 redis = { version = "0.25", features = ["tokio-comp", "connection-manager"] }
+aes-gcm = "0.10"
+hmac = "0.12"

@@ -3,7 +3,9 @@ use crate::{
         email::resend::ResendEmailSender, http::app_state::AppState,
         pass_status::MunichPassStatusClient,
     },
-    infra::{config::AppConfig, postgres_persistence, rate_limit::RateLimiter},
+    infra::{
+        config::AppConfig, crypto::ProcessCipher, postgres_persistence, rate_limit::RateLimiter,
+    },
     use_cases::{
         pass_status::{PassStatusRepo, PassStatusUseCases},
         user::{AuthUseCases, UserRepo},
@@ -16,7 +18,8 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 pub async fn init_app_state() -> anyhow::Result<AppState> {
     let config = AppConfig::from_env();
 
-    let postgres_arc = Arc::new(postgres_persistence().await?);
+    let cipher = Arc::new(ProcessCipher::new_from_base64(&config.process_number_key)?);
+    let postgres_arc = Arc::new(postgres_persistence(cipher.clone()).await?);
 
     let rate_limiter = Arc::new(
         RateLimiter::new(

@@ -210,23 +210,23 @@ impl PassStatusUseCases {
         let mut results = Vec::new();
 
         for track in tracks {
-            if let Some(last_checked) = track.last_checked_at {
-                if (now - last_checked).num_seconds() < self.refresh_interval_secs {
-                    // Not due yet; return cached state.
-                    let status = track.last_status.clone();
-                    let stopped = is_final(status.as_deref());
-                    results.push(StatusCheckResult {
-                        id: track.id,
-                        number: track.number,
-                        typ: None,
-                        status,
-                        pickup: track.last_pickup.clone(),
-                        changed: false,
-                        checked_at: last_checked,
-                        stopped,
-                    });
-                    continue;
-                }
+            if let Some(last_checked) = track.last_checked_at
+                && (now - last_checked).num_seconds() < self.refresh_interval_secs
+            {
+                // Not due yet; return cached state.
+                let status = track.last_status.clone();
+                let stopped = is_final(status.as_deref());
+                results.push(StatusCheckResult {
+                    id: track.id,
+                    number: track.number,
+                    typ: None,
+                    status,
+                    pickup: track.last_pickup.clone(),
+                    changed: false,
+                    checked_at: last_checked,
+                    stopped,
+                });
+                continue;
             }
 
             tokio::time::sleep(std::time::Duration::from_secs(1)).await;

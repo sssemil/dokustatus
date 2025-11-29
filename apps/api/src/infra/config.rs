@@ -24,6 +24,7 @@ pub struct AppConfig {
     pub rate_limit_window_secs: u64,
     pub rate_limit_per_ip: u64,
     pub rate_limit_per_email: u64,
+    pub process_number_key: String,
 }
 
 impl AppConfig {
@@ -70,6 +71,7 @@ impl AppConfig {
         let rate_limit_window_secs: u64 = get_env_default("RATE_LIMIT_WINDOW_SECS", 60);
         let rate_limit_per_ip: u64 = get_env_default("RATE_LIMIT_PER_IP", 60);
         let rate_limit_per_email: u64 = get_env_default("RATE_LIMIT_PER_EMAIL", 30);
+        let process_number_key: String = get_env("PROCESS_NUMBER_KEY");
 
         Self {
             jwt_secret,
@@ -89,6 +91,7 @@ impl AppConfig {
             rate_limit_window_secs,
             rate_limit_per_ip,
             rate_limit_per_email,
+            process_number_key,
         }
     }
 }

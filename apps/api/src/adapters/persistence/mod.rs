@@ -1,6 +1,8 @@
 use sqlx::PgPool;
 
 use crate::app_error::AppError;
+use crate::infra::crypto::ProcessCipher;
+use std::sync::Arc;
 
 pub mod pass_status;
 pub mod user;
@@ -8,11 +10,12 @@ pub mod user;
 #[derive(Clone)]
 pub struct PostgresPersistence {
     pool: PgPool,
+    cipher: Arc<ProcessCipher>,
 }
 
 impl PostgresPersistence {
-    pub fn new(pool: PgPool) -> Self {
-        PostgresPersistence { pool }
+    pub fn new(pool: PgPool, cipher: Arc<ProcessCipher>) -> Self {
+        PostgresPersistence { pool, cipher }
     }
 }
 
