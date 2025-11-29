@@ -33,8 +33,8 @@ services:
       - /bin/sh
       - -c
       - |
-        REDIS_PASSWORD="$(cat /run/secrets/redis_password)"
-        exec redis-server --save "" --appendonly no --requirepass "$REDIS_PASSWORD" --protected-mode yes
+        REDIS_PASSWORD="$$(cat /run/secrets/redis_password)"
+        exec redis-server --save "" --appendonly no --requirepass "$$REDIS_PASSWORD" --protected-mode yes
     ports:
       - "6379:6379"
     volumes:
@@ -42,7 +42,7 @@ services:
     secrets:
       - redis_password
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-a", "$$(cat /run/secrets/redis_password)", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -66,7 +66,6 @@ services:
       APP_ORIGIN: ${APP_ORIGIN:?}
       PASS_STATUS_URL: ${PASS_STATUS_URL:-https://mpdz-passverfolgung.muenchen.de/api/passstatusabfrage-backend-service/rest/ausweisstatus/search}
       PASS_STATUS_INFO_URL: ${PASS_STATUS_INFO_URL:-https://mpdz-passverfolgung.muenchen.de/actuator/info}
-      PASS_STATUS_COUNTER_URL: ${PASS_STATUS_COUNTER_URL:-}
       BIND_ADDR: 0.0.0.0:${API_PORT:-3001}
       RATE_LIMIT_WINDOW_SECS: ${RATE_LIMIT_WINDOW_SECS:-60}
       RATE_LIMIT_PER_IP: ${RATE_LIMIT_PER_IP:-60}
@@ -84,15 +83,45 @@ services:
       - /bin/sh
       - -c
       - |
-        export POSTGRES_PASSWORD="$(cat /run/secrets/postgres_password)"
-        export DATABASE_URL="postgres://${DB_USER}:${POSTGRES_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
-        export REDIS_PASSWORD="$(cat /run/secrets/redis_password)"
-        export REDIS_URL="redis://default:${REDIS_PASSWORD}@${REDIS_HOST}:${REDIS_PORT}"
-        export JWT_SECRET="$(cat /run/secrets/jwt_secret)"
-        export PROCESS_NUMBER_KEY="$(cat /run/secrets/process_number_key)"
-        export RESEND_API_KEY="$(cat /run/secrets/resend_api_key)"
+        # Read passwords and URL-encode special characters for Postgres
+        POSTGRES_PASSWORD_RAW="$$(cat /run/secrets/postgres_password)"
+        POSTGRES_PASSWORD_ENC="$$(echo -n "$$POSTGRES_PASSWORD_RAW" | sed 's/+/%2B/g; s/\//%2F/g; s/=/%3D/g')"
+        export DATABASE_URL="postgres://${DB_USER}:$$POSTGRES_PASSWORD_ENC@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+        
+        # Redis password should NOT be URL-encoded - Redis client handles it differently
+        REDIS_PASSWORD_RAW="$$(cat /run/secrets/redis_password)"
+        export REDIS_URL="redis://default:$$REDIS_PASSWORD_RAW@${REDIS_HOST}:${REDIS_PORT}"
+        
+        export JWT_SECRET="$$(cat /run/secrets/jwt_secret)"
+        export PROCESS_NUMBER_KEY="$$(cat /run/secrets/process_number_key)"
+        export RESEND_API_KEY="$$(cat /run/secrets/resend_api_key)"
         exec dokustatus
     restart: unless-stopped
+    networks:
+      - dokustatus-net
+
+  migrate:
+    image: dokustatus-api:latest
+    <<: *default-env
+    environment:
+      DB_HOST: ${DB_HOST:-postgres}
+      DB_PORT: ${DB_PORT:-5432}
+      DB_NAME: ${POSTGRES_DB:?}
+      DB_USER: ${POSTGRES_USER:?}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    secrets:
+      - postgres_password
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        POSTGRES_PASSWORD_RAW="$$(cat /run/secrets/postgres_password)"
+        POSTGRES_PASSWORD_ENC="$$(echo -n "$$POSTGRES_PASSWORD_RAW" | sed 's/+/%2B/g; s/\//%2F/g; s/=/%3D/g')"
+        export DATABASE_URL="postgres://${DB_USER}:$$POSTGRES_PASSWORD_ENC@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+        exec sqlx migrate run
+    restart: "no"
     networks:
       - dokustatus-net
 

@@ -20,7 +20,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let config = AppConfig::from_env();
 
     let cipher = Arc::new(ProcessCipher::new_from_base64(&config.process_number_key)?);
-    let postgres_arc = Arc::new(postgres_persistence(cipher.clone()).await?);
+    let postgres_arc = Arc::new(postgres_persistence(cipher.clone(), &config.database_url).await?);
 
     let rate_limiter = Arc::new(
         RateLimiter::new(
@@ -44,10 +44,6 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let status_client = Arc::new(MunichPassStatusClient::new(
         config.pass_status_url.to_string(),
         config.pass_status_info_url.to_string(),
-        config
-            .pass_status_counter_url
-            .as_ref()
-            .map(|u| u.to_string()),
     ));
 
     let auth_use_cases = AuthUseCases::new(

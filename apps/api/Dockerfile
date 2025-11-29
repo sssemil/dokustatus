@@ -1,8 +1,11 @@
-FROM rust:1.82-slim AS builder
+FROM archlinux:base AS builder
 
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates build-essential \
-  && rm -rf /var/lib/apt/lists/*
+RUN pacman -Sy --noconfirm
+RUN pacman -S --noconfirm --needed curl ca-certificates base-devel pkgconf openssl git
+
+RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+RUN cargo install sqlx-cli --no-default-features --features postgres
 
 WORKDIR /app
 
@@ -14,15 +17,17 @@ RUN cargo fetch
 # Build application
 RUN rm -rf src
 COPY apps/api/ .
+ENV SQLX_OFFLINE=true
 RUN cargo build --release
 
-FROM debian:bookworm-slim AS runtime
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+FROM archlinux:base AS runtime
+RUN pacman -Sy --noconfirm
+RUN pacman -S --noconfirm --needed ca-certificates openssl
+RUN pacman -Scc --noconfirm
 
 WORKDIR /app
 COPY --from=builder /app/target/release/dokustatus /usr/local/bin/dokustatus
+COPY --from=builder /root/.cargo/bin/sqlx /usr/local/bin/sqlx
 COPY apps/api/migrations ./migrations
 
 ENV RUST_LOG=info

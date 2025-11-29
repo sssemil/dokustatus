@@ -15,12 +15,11 @@ pub struct MunichPassStatusClient {
     client: Client,
     search_url: String,
     info_url: String,
-    counter_url: Option<String>,
     prefixes: OnceCell<PrefixConfig>,
 }
 
 impl MunichPassStatusClient {
-    pub fn new(search_url: String, info_url: String, counter_url: Option<String>) -> Self {
+    pub fn new(search_url: String, info_url: String) -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(10))
             .build()
@@ -29,7 +28,6 @@ impl MunichPassStatusClient {
             client,
             search_url,
             info_url,
-            counter_url,
             prefixes: OnceCell::new(),
         }
     }
@@ -163,18 +161,6 @@ impl PassStatusClient for MunichPassStatusClient {
                 status: Some("UNBEKANNT".to_string()),
                 type_label: Some(typ.to_string()),
                 pickup: None,
-            });
-        }
-
-        if let Some(counter_url) = &self.counter_url {
-            let client = self.client.clone();
-            let counter_url = counter_url.clone();
-            tokio::spawn(async move {
-                let _ = client
-                    .post(counter_url)
-                    .header("User-Agent", "dokustatus/1.0")
-                    .send()
-                    .await;
             });
         }
 

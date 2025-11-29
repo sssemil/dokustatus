@@ -63,7 +63,13 @@ cd "${REMOTE_DIR}"
 chmod +x certbot-check.sh
 docker load -i images/dokustatus-api.tar
 docker load -i images/dokustatus-ui.tar
-docker compose -f compose.yml --env-file .env up -d
+
+# Try docker compose (v2) first, fall back to docker-compose (v1)
+if docker compose version >/dev/null 2>&1; then
+  docker compose -f compose.yml --env-file .env up -d
+else
+  docker-compose -f compose.yml --env-file .env up -d
+fi
 EOF
 
 echo "Deployment finished."

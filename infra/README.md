@@ -23,6 +23,11 @@ To generate fresh random secrets (skips files that already exist):
 ./infra/generate-secrets.sh
 ```
 
+If Docker builds need host DNS/proxy, you can pass build args to both images:
+```bash
+BUILD_ARGS="--network=host" ./infra/deploy.sh
+```
+
 ## Environment (.env)
 Copy `.env.example` to `.env` and adjust:
 - Domain: set `LETSENCRYPT_PRIMARY_DOMAIN` and `LETSENCRYPT_DOMAINS` (e.g. `dokustatus.de,dokustatus.de`).

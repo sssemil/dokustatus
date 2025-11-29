@@ -17,11 +17,16 @@ impl RateLimiter {
         max_per_ip: u64,
         max_per_email: u64,
     ) -> AppResult<Self> {
-        let client =
-            redis::Client::open(redis_url).map_err(|e| AppError::Internal(e.to_string()))?;
-        let manager = ConnectionManager::new(client)
-            .await
-            .map_err(|e| AppError::Internal(e.to_string()))?;
+        let client = redis::Client::open(redis_url).map_err(|e| {
+            AppError::Internal(format!(
+                "Redis connection failed (check redis password/URL): {e}"
+            ))
+        })?;
+        let manager = ConnectionManager::new(client).await.map_err(|e| {
+            AppError::Internal(format!(
+                "Redis auth/connection failed (check redis password/URL): {e}"
+            ))
+        })?;
         Ok(Self {
             manager,
             window_secs,
