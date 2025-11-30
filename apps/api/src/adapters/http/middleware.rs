@@ -19,6 +19,15 @@ pub async fn rate_limit_middleware(
     let ip = forwarded_ip(&request).unwrap_or_else(|| addr.ip().to_string());
     let email = cookies.get("user_email").map(|c| c.value().to_owned());
 
+    // Log the IP being used for rate limiting to help debug
+    tracing::debug!(
+        "Rate limiting - ConnectInfo IP: {}, Forwarded IP: {:?}, Using: {}, Email: {:?}",
+        addr.ip(),
+        forwarded_ip(&request),
+        ip,
+        email
+    );
+
     app_state.rate_limiter.check(&ip, email.as_deref()).await?;
 
     // Preserve cookie jar for downstream extractors.

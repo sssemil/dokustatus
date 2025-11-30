@@ -70,6 +70,8 @@ services:
       RATE_LIMIT_WINDOW_SECS: ${RATE_LIMIT_WINDOW_SECS:-60}
       RATE_LIMIT_PER_IP: ${RATE_LIMIT_PER_IP:-60}
       RATE_LIMIT_PER_EMAIL: ${RATE_LIMIT_PER_EMAIL:-30}
+    ports:
+      - "127.0.0.1:${API_PORT:-3001}:${API_PORT:-3001}"
     depends_on:
       - postgres
       - redis
@@ -134,6 +136,8 @@ services:
       NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:?}
       # Internal API URL for server-side requests (SSR)
       API_BASE: http://api:${API_PORT:-3001}
+    ports:
+      - "127.0.0.1:${UI_PORT:-3000}:${UI_PORT:-3000}"
     depends_on:
       - api
     restart: unless-stopped
@@ -142,6 +146,7 @@ services:
 
   nginx-http:
     image: nginx:latest
+    network_mode: host
     entrypoint:
       - /bin/sh
       - -c
@@ -153,14 +158,11 @@ services:
     volumes:
       - ./nginx/http.conf.template:/etc/nginx/templates/http.conf.template:ro
       - certbot-www-data:/var/www/certbot
-    ports:
-      - "80:80"
     restart: unless-stopped
-    networks:
-      - dokustatus-net
 
   nginx-https:
     image: nginx:latest
+    network_mode: host
     entrypoint:
       - /bin/sh
       - -c
@@ -173,14 +175,10 @@ services:
       - ./nginx/https.conf.template:/etc/nginx/templates/https.conf.template:ro
       - letsencrypt-data:/etc/letsencrypt
       - nginx-logs-data:/var/log/nginx
-    ports:
-      - "443:443"
     depends_on:
       - ui
       - certbot
     restart: unless-stopped
-    networks:
-      - dokustatus-net
 
   certbot:
     image: certbot/certbot:latest
