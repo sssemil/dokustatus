@@ -10,17 +10,20 @@ export async function generateStaticParams() {
   return [{ lang: 'en' }, { lang: 'de' }]
 }
 
-export default async function LangLayout({
-  children,
-  params,
-}: {
-  children: React.ReactNode
-  params: Promise<{ lang: 'en' | 'de' }>
-}) {
+type SupportedLang = 'en' | 'de'
+
+function isSupportedLang(lang: string): lang is SupportedLang {
+  return lang === 'en' || lang === 'de'
+}
+
+export default async function LangLayout(props: LayoutProps<'/[lang]'>) {
+  const { children, params } = props
   const { lang } = await params
-  
+
+  const safeLang: SupportedLang = isSupportedLang(lang) ? lang : 'de'
+
   return (
-    <html lang={lang}>
+    <html lang={safeLang}>
       <body>{children}</body>
     </html>
   )
