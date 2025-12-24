@@ -26,6 +26,7 @@ pub trait DomainAuthConfigRepo: Send + Sync {
         magic_link_enabled: bool,
         google_oauth_enabled: bool,
         redirect_url: Option<&str>,
+        whitelist_enabled: bool,
     ) -> AppResult<DomainAuthConfigProfile>;
     async fn delete(&self, domain_id: Uuid) -> AppResult<()>;
 }
@@ -53,6 +54,7 @@ pub trait DomainEndUserRepo: Send + Sync {
     async fn delete(&self, id: Uuid) -> AppResult<()>;
     async fn set_frozen(&self, id: Uuid, frozen: bool) -> AppResult<()>;
     async fn set_whitelisted(&self, id: Uuid, whitelisted: bool) -> AppResult<()>;
+    async fn whitelist_all_in_domain(&self, domain_id: Uuid) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -77,6 +79,7 @@ pub struct DomainAuthConfigProfile {
     pub magic_link_enabled: bool,
     pub google_oauth_enabled: bool,
     pub redirect_url: Option<String>,
+    pub whitelist_enabled: bool,
     pub access_token_ttl_secs: i32,
     pub refresh_token_ttl_days: i32,
     pub created_at: Option<NaiveDateTime>,
@@ -326,6 +329,7 @@ impl DomainAuthUseCases {
                 magic_link_enabled: false,
                 google_oauth_enabled: false,
                 redirect_url: None,
+                whitelist_enabled: false,
                 access_token_ttl_secs: 86400,
                 refresh_token_ttl_days: 30,
                 created_at: None,
@@ -346,6 +350,8 @@ impl DomainAuthUseCases {
         magic_link_enabled: bool,
         google_oauth_enabled: bool,
         redirect_url: Option<&str>,
+        whitelist_enabled: bool,
+        whitelist_all_existing: bool,
         resend_api_key: Option<&str>,
         from_email: Option<&str>,
     ) -> AppResult<()> {
@@ -373,9 +379,14 @@ impl DomainAuthUseCases {
             }
         }
 
+        // If enabling whitelist and requested, whitelist all existing users
+        if whitelist_enabled && whitelist_all_existing {
+            self.end_user_repo.whitelist_all_in_domain(domain_id).await?;
+        }
+
         // Update general auth config
         self.auth_config_repo
-            .upsert(domain_id, magic_link_enabled, google_oauth_enabled, redirect_url)
+            .upsert(domain_id, magic_link_enabled, google_oauth_enabled, redirect_url, whitelist_enabled)
             .await?;
 
         // Update magic link config if provided

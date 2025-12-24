@@ -136,4 +136,13 @@ impl DomainEndUserRepo for PostgresPersistence {
             .map_err(AppError::from)?;
         Ok(())
     }
+
+    async fn whitelist_all_in_domain(&self, domain_id: Uuid) -> AppResult<()> {
+        sqlx::query("UPDATE domain_end_users SET is_whitelisted = true, updated_at = CURRENT_TIMESTAMP WHERE domain_id = $1")
+            .bind(domain_id)
+            .execute(&self.pool)
+            .await
+            .map_err(AppError::from)?;
+        Ok(())
+    }
 }

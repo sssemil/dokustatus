@@ -263,6 +263,7 @@ struct AuthConfigResponse {
     magic_link_enabled: bool,
     google_oauth_enabled: bool,
     redirect_url: Option<String>,
+    whitelist_enabled: bool,
     magic_link_config: Option<MagicLinkConfigResponse>,
 }
 
@@ -293,6 +294,7 @@ async fn get_auth_config(
         magic_link_enabled: auth_config.magic_link_enabled,
         google_oauth_enabled: auth_config.google_oauth_enabled,
         redirect_url: auth_config.redirect_url,
+        whitelist_enabled: auth_config.whitelist_enabled,
         magic_link_config: magic_link_response,
     }))
 }
@@ -302,6 +304,8 @@ struct UpdateAuthConfigPayload {
     magic_link_enabled: Option<bool>,
     google_oauth_enabled: Option<bool>,
     redirect_url: Option<String>,
+    whitelist_enabled: Option<bool>,
+    whitelist_all_existing: Option<bool>,
     resend_api_key: Option<String>,
     from_email: Option<String>,
 }
@@ -322,6 +326,8 @@ async fn update_auth_config(
             payload.magic_link_enabled.unwrap_or(false),
             payload.google_oauth_enabled.unwrap_or(false),
             payload.redirect_url.as_deref(),
+            payload.whitelist_enabled.unwrap_or(false),
+            payload.whitelist_all_existing.unwrap_or(false),
             payload.resend_api_key.as_deref(),
             payload.from_email.as_deref(),
         )

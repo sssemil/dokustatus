@@ -21,6 +21,7 @@ type AuthConfig = {
   magic_link_enabled: boolean;
   google_oauth_enabled: boolean;
   redirect_url: string | null;
+  whitelist_enabled: boolean;
   magic_link_config: {
     from_email: string;
     has_api_key: boolean;
@@ -62,6 +63,7 @@ export default function DomainDetailPage() {
   const [resendApiKey, setResendApiKey] = useState('');
   const [fromEmail, setFromEmail] = useState('');
   const [redirectUrl, setRedirectUrl] = useState('');
+  const [whitelistEnabled, setWhitelistEnabled] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -79,6 +81,7 @@ export default function DomainDetailPage() {
             setAuthConfig(configData);
             setMagicLinkEnabled(configData.magic_link_enabled);
             setRedirectUrl(configData.redirect_url || '');
+            setWhitelistEnabled(configData.whitelist_enabled);
             if (configData.magic_link_config) {
               setFromEmail(configData.magic_link_config.from_email);
             }
@@ -167,7 +170,7 @@ export default function DomainDetailPage() {
     }
   };
 
-  const handleSaveConfig = async (e: React.FormEvent) => {
+  const handleSaveConfig = async (e: React.FormEvent, whitelistAllExisting = false) => {
     e.preventDefault();
     setError('');
     setSuccess('');
@@ -178,6 +181,8 @@ export default function DomainDetailPage() {
         magic_link_enabled: magicLinkEnabled,
         google_oauth_enabled: false,
         redirect_url: redirectUrl || null,
+        whitelist_enabled: whitelistEnabled,
+        whitelist_all_existing: whitelistAllExisting,
       };
 
       if (magicLinkEnabled) {
@@ -208,6 +213,46 @@ export default function DomainDetailPage() {
       setError('Network error. Please try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleWhitelistToggle = (enabled: boolean) => {
+    if (enabled && !authConfig?.whitelist_enabled) {
+      // Enabling whitelist - ask about existing users
+      const whitelistAll = confirm(
+        'Enable whitelist mode?\n\nWould you like to add all current users to the whitelist?\n\n' +
+        'Click OK to whitelist all existing users, or Cancel to enable whitelist mode without adding existing users.'
+      );
+      setWhitelistEnabled(true);
+      // If user clicked OK, we'll pass this flag when saving
+      if (whitelistAll) {
+        // Trigger save immediately with whitelist_all_existing = true
+        setSaving(true);
+        fetch(`/api/domains/${domainId}/auth-config`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            magic_link_enabled: magicLinkEnabled,
+            google_oauth_enabled: false,
+            redirect_url: redirectUrl || null,
+            whitelist_enabled: true,
+            whitelist_all_existing: true,
+          }),
+          credentials: 'include',
+        })
+          .then((res) => {
+            if (res.ok) {
+              setSuccess('Whitelist enabled and all existing users have been whitelisted');
+              fetchData();
+            } else {
+              setError('Failed to enable whitelist');
+            }
+          })
+          .catch(() => setError('Network error'))
+          .finally(() => setSaving(false));
+      }
+    } else {
+      setWhitelistEnabled(enabled);
     }
   };
 
@@ -681,6 +726,32 @@ export default function DomainDetailPage() {
                   Must be on <strong>{domain.domain}</strong> or a subdomain (e.g., app.{domain.domain}). If not set, users will see a &quot;Login successful&quot; message.
                 </p>
               </div>
+            </div>
+
+            {/* Whitelist Mode */}
+            <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Whitelist Mode</h2>
+                  <p className="text-muted" style={{ margin: 0 }}>
+                    When enabled, only whitelisted users can sign in.
+                  </p>
+                </div>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={whitelistEnabled}
+                    onChange={(e) => handleWhitelistToggle(e.target.checked)}
+                    style={{ width: 18, height: 18 }}
+                  />
+                  <span>{whitelistEnabled ? 'Enabled' : 'Disabled'}</span>
+                </label>
+              </div>
+              {whitelistEnabled && (
+                <p className="text-muted" style={{ marginTop: 'var(--spacing-md)', fontSize: '13px' }}>
+                  Go to the Users tab to manage which users are whitelisted.
+                </p>
+              )}
             </div>
 
             {/* Save Button */}
