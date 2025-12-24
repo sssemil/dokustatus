@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import ConfirmModal from '@/components/ConfirmModal';
 
 type Domain = {
   id: string;
@@ -56,6 +57,9 @@ export default function DomainDetailPage() {
   const [endUsers, setEndUsers] = useState<EndUser[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [showDeleteDomainConfirm, setShowDeleteDomainConfirm] = useState(false);
+  const [deleteUserConfirmId, setDeleteUserConfirmId] = useState<string | null>(null);
+  const [showWhitelistModal, setShowWhitelistModal] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Auth config form state
@@ -218,17 +222,21 @@ export default function DomainDetailPage() {
 
   const handleWhitelistToggle = (enabled: boolean) => {
     if (enabled && !authConfig?.whitelist_enabled) {
-      // Enabling whitelist - ask about existing users
-      const whitelistAll = confirm(
-        'Enable whitelist mode?\n\nWould you like to add all current users to the whitelist?\n\n' +
-        'Click OK to whitelist all existing users, or Cancel to enable whitelist mode without adding existing users.'
-      );
-      setWhitelistEnabled(true);
-      // If user clicked OK, we'll pass this flag when saving
-      if (whitelistAll) {
-        // Trigger save immediately with whitelist_all_existing = true
-        setSaving(true);
-        fetch(`/api/domains/${domainId}/auth-config`, {
+      // Show whitelist modal to ask about existing users
+      setShowWhitelistModal(true);
+    } else {
+      setWhitelistEnabled(enabled);
+    }
+  };
+
+  const handleWhitelistConfirm = async (whitelistAllExisting: boolean) => {
+    setShowWhitelistModal(false);
+    setWhitelistEnabled(true);
+
+    if (whitelistAllExisting) {
+      setSaving(true);
+      try {
+        const res = await fetch(`/api/domains/${domainId}/auth-config`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -239,26 +247,23 @@ export default function DomainDetailPage() {
             whitelist_all_existing: true,
           }),
           credentials: 'include',
-        })
-          .then((res) => {
-            if (res.ok) {
-              setSuccess('Whitelist enabled and all existing users have been whitelisted');
-              fetchData();
-            } else {
-              setError('Failed to enable whitelist');
-            }
-          })
-          .catch(() => setError('Network error'))
-          .finally(() => setSaving(false));
+        });
+        if (res.ok) {
+          setSuccess('Whitelist enabled and all existing users have been whitelisted');
+          fetchData();
+        } else {
+          setError('Failed to enable whitelist');
+        }
+      } catch {
+        setError('Network error');
+      } finally {
+        setSaving(false);
       }
-    } else {
-      setWhitelistEnabled(enabled);
     }
   };
 
   const handleDeleteDomain = async () => {
-    if (!confirm('Are you sure you want to delete this domain? This cannot be undone.')) return;
-
+    setShowDeleteDomainConfirm(false);
     try {
       const res = await fetch(`/api/domains/${domainId}`, {
         method: 'DELETE',
@@ -276,7 +281,9 @@ export default function DomainDetailPage() {
   };
 
   const handleUserAction = async (userId: string, action: 'freeze' | 'unfreeze' | 'whitelist' | 'unwhitelist' | 'delete') => {
-    if (action === 'delete' && !confirm('Are you sure you want to delete this user? This cannot be undone.')) return;
+    if (action === 'delete') {
+      setDeleteUserConfirmId(null);
+    }
 
     const methodMap = {
       freeze: 'POST',
@@ -412,7 +419,7 @@ export default function DomainDetailPage() {
             {getStatusBadge(domain.status)}
           </div>
         </div>
-        <button className="danger" onClick={handleDeleteDomain}>
+        <button className="danger" onClick={() => setShowDeleteDomainConfirm(true)}>
           Delete
         </button>
       </div>
@@ -918,7 +925,8 @@ export default function DomainDetailPage() {
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleUserAction(user.id, 'delete');
+                                setOpenMenuId(null);
+                                setDeleteUserConfirmId(user.id);
                               }}
                               style={{
                                 width: '100%',
@@ -943,6 +951,120 @@ export default function DomainDetailPage() {
               )}
             </>
           )}
+
+      {/* Delete Domain Confirmation Modal */}
+      <ConfirmModal
+        isOpen={showDeleteDomainConfirm}
+        title="Delete Domain"
+        message="Are you sure you want to delete this domain? This cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={handleDeleteDomain}
+        onCancel={() => setShowDeleteDomainConfirm(false)}
+      />
+
+      {/* Delete User Confirmation Modal */}
+      <ConfirmModal
+        isOpen={deleteUserConfirmId !== null}
+        title="Delete User"
+        message="Are you sure you want to delete this user? This cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={() => deleteUserConfirmId && handleUserAction(deleteUserConfirmId, 'delete')}
+        onCancel={() => setDeleteUserConfirmId(null)}
+      />
+
+      {/* Whitelist Enable Modal - Custom 3-button modal */}
+      {showWhitelistModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={() => setShowWhitelistModal(false)}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--bg-secondary)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-primary)',
+              boxShadow: 'var(--shadow-lg)',
+              maxWidth: '450px',
+              width: '90%',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: 'var(--spacing-md)',
+                borderBottom: '1px solid var(--border-primary)',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Enable Whitelist Mode</h3>
+              <button
+                onClick={() => setShowWhitelistModal(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  color: 'var(--text-secondary)',
+                  fontSize: '18px',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <div
+              style={{
+                padding: 'var(--spacing-lg) var(--spacing-md)',
+                color: 'var(--text-secondary)',
+                fontSize: '14px',
+                lineHeight: 1.5,
+              }}
+            >
+              When whitelist mode is enabled, only whitelisted users can sign in.
+              <br /><br />
+              Would you like to add all current users to the whitelist?
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 'var(--spacing-sm)',
+                padding: 'var(--spacing-md)',
+                borderTop: '1px solid var(--border-primary)',
+              }}
+            >
+              <button onClick={() => setShowWhitelistModal(false)}>
+                Cancel
+              </button>
+              <button onClick={() => handleWhitelistConfirm(false)}>
+                Enable Only
+              </button>
+              <button className="primary" onClick={() => handleWhitelistConfirm(true)}>
+                Whitelist All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

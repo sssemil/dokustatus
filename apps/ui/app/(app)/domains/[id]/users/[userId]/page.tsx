@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import ConfirmModal from '@/components/ConfirmModal';
 
 type EndUser = {
   id: string;
@@ -23,6 +24,7 @@ export default function UserDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const fetchUser = useCallback(async () => {
     try {
@@ -45,9 +47,10 @@ export default function UserDetailPage() {
   }, [fetchUser]);
 
   const handleAction = async (action: 'freeze' | 'unfreeze' | 'whitelist' | 'unwhitelist' | 'delete') => {
-    if (action === 'delete' && !confirm('Are you sure you want to delete this user? This cannot be undone.')) return;
-
     setActionLoading(true);
+    if (action === 'delete') {
+      setShowDeleteConfirm(false);
+    }
     const methodMap = {
       freeze: 'POST',
       unfreeze: 'DELETE',
@@ -174,7 +177,7 @@ export default function UserDetailPage() {
             )}
           </div>
         </div>
-        <button className="danger" onClick={() => handleAction('delete')} disabled={actionLoading}>
+        <button className="danger" onClick={() => setShowDeleteConfirm(true)} disabled={actionLoading}>
           Delete
         </button>
       </div>
@@ -255,6 +258,17 @@ export default function UserDetailPage() {
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={showDeleteConfirm}
+        title="Delete User"
+        message="Are you sure you want to delete this user? This cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={() => handleAction('delete')}
+        onCancel={() => setShowDeleteConfirm(false)}
+      />
     </>
   );
 }

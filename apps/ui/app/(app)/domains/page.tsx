@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import ConfirmModal from '@/components/ConfirmModal';
 
 type Domain = {
   id: string;
@@ -29,6 +30,7 @@ export default function DomainsPage() {
   const [error, setError] = useState('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close menu when clicking outside
@@ -164,8 +166,6 @@ export default function DomainsPage() {
   };
 
   const handleDeleteDomain = async (domainId: string) => {
-    if (!confirm('Are you sure you want to delete this domain?')) return;
-
     try {
       const res = await fetch(`/api/domains/${domainId}`, {
         method: 'DELETE',
@@ -177,6 +177,8 @@ export default function DomainsPage() {
       }
     } catch {
       // Ignore
+    } finally {
+      setDeleteConfirmId(null);
     }
   };
 
@@ -496,7 +498,7 @@ export default function DomainsPage() {
                       onClick={(e) => {
                         e.stopPropagation();
                         setOpenMenuId(null);
-                        handleDeleteDomain(domain.id);
+                        setDeleteConfirmId(domain.id);
                       }}
                       style={{
                         width: '100%',
@@ -519,6 +521,17 @@ export default function DomainsPage() {
           </div>
         ))
       )}
+
+      <ConfirmModal
+        isOpen={deleteConfirmId !== null}
+        title="Delete Domain"
+        message="Are you sure you want to delete this domain? This cannot be undone."
+        confirmLabel="Delete"
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={() => deleteConfirmId && handleDeleteDomain(deleteConfirmId)}
+        onCancel={() => setDeleteConfirmId(null)}
+      />
     </>
   );
 }
