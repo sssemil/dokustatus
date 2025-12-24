@@ -4,6 +4,8 @@ pub mod app;
 pub mod config;
 pub mod crypto;
 pub mod db;
+pub mod domain_email;
+pub mod domain_magic_links;
 pub mod domain_verifier;
 pub mod magic_links;
 pub mod rate_limit;

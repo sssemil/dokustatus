@@ -17,6 +17,13 @@ This project pairs a Rust backend (Axum + SQLx, Redis for rate limits) with a Ne
 - `cargo test`: run backend tests (add `DATABASE_URL` pointing to a test DB if hitting the database).
 - `npm install && npm run dev --prefix ui`: start the UI on port 3000; `npm run build --prefix ui` for production build.
 
+### Pre-Deploy Verification
+Before deploying, always verify the API builds successfully:
+```bash
+cd apps/api && SQLX_OFFLINE=true cargo build --release
+```
+The `SQLX_OFFLINE=true` flag is required because the local database may not be running. The Docker build uses this flag automatically.
+
 ## Coding Style & Naming Conventions
 - Rust 2024 edition; always run `cargo fmt` before committing. Prefer small modules aligned to `domain/application/adapters/infra`.
 - Naming: Rust modules `snake_case`; types and traits `PascalCase`; functions `snake_case`; constants `SCREAMING_SNAKE_CASE`.

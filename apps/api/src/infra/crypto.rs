@@ -17,6 +17,13 @@ pub struct ProcessCipher {
 }
 
 impl ProcessCipher {
+    pub fn from_env() -> anyhow::Result<Self> {
+        let key_b64 = std::env::var("PROCESS_NUMBER_KEY")
+            .map_err(|_| anyhow::anyhow!("PROCESS_NUMBER_KEY environment variable not set"))?;
+        Self::new_from_base64(&key_b64)
+            .map_err(|e| anyhow::anyhow!("Failed to initialize cipher: {}", e))
+    }
+
     pub fn new_from_base64(key_b64: &str) -> AppResult<Self> {
         let raw = general_purpose::STANDARD
             .decode(key_b64.as_bytes())

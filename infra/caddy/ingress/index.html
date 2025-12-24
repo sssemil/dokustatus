@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>reauth.dev</title>
+  <title>Sign In</title>
   <style>
     * {
       box-sizing: border-box;
@@ -15,69 +15,404 @@
       align-items: center;
       min-height: 100vh;
       margin: 0;
-      background: #f5f5f5;
+      background: #0a0a0a;
+      color: #fff;
+    }
+    .container {
+      width: 100%;
+      max-width: 400px;
+      padding: 1rem;
     }
     .card {
-      background: white;
-      padding: 2.5rem 3rem;
-      border-radius: 12px;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
-      text-align: center;
-      max-width: 400px;
-    }
-    .check {
-      width: 64px;
-      height: 64px;
-      background: #dcfce7;
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      margin: 0 auto 1.5rem;
-    }
-    .check svg {
-      width: 32px;
-      height: 32px;
-      color: #22c55e;
+      background: #1a1a1a;
+      padding: 2rem;
+      border-radius: 8px;
+      border: 1px solid #333;
     }
     h1 {
-      color: #111;
       font-size: 1.5rem;
       font-weight: 600;
       margin: 0 0 0.5rem;
+      text-align: center;
     }
-    p {
+    .subtitle {
+      color: #888;
+      text-align: center;
+      margin-bottom: 1.5rem;
+      font-size: 0.9rem;
+    }
+    .form-group {
+      margin-bottom: 1rem;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      margin-bottom: 0.5rem;
+      color: #ccc;
+    }
+    input[type="email"] {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: 1px solid #333;
+      border-radius: 4px;
+      background: #0a0a0a;
+      color: #fff;
+      font-size: 1rem;
+    }
+    input[type="email"]:focus {
+      outline: none;
+      border-color: #4a9eff;
+    }
+    input[type="email"]::placeholder {
       color: #666;
-      margin: 0;
-      font-size: 0.95rem;
+    }
+    button {
+      width: 100%;
+      padding: 0.75rem 1rem;
+      border: none;
+      border-radius: 4px;
+      font-size: 1rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+    .btn-primary {
+      background: #4a9eff;
+      color: #000;
+    }
+    .btn-primary:hover:not(:disabled) {
+      background: #3d8ae6;
+    }
+    .btn-google {
+      background: #fff;
+      color: #000;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+    .btn-google:disabled {
+      background: #666;
+      color: #999;
+    }
+    .divider {
+      display: flex;
+      align-items: center;
+      margin: 1.25rem 0;
+      color: #666;
+      font-size: 0.85rem;
+    }
+    .divider::before,
+    .divider::after {
+      content: '';
+      flex: 1;
+      height: 1px;
+      background: #333;
+    }
+    .divider span {
+      padding: 0 1rem;
+    }
+    .message {
+      padding: 0.75rem 1rem;
+      border-radius: 4px;
+      margin-bottom: 1rem;
+      font-size: 0.9rem;
+    }
+    .message.error {
+      background: #3d1f1f;
+      border: 1px solid #ff6b68;
+      color: #ff6b68;
+    }
+    .message.success {
+      background: #1f3d1f;
+      border: 1px solid #6a8759;
+      color: #6a8759;
     }
     .footer {
+      text-align: center;
       margin-top: 1.5rem;
       padding-top: 1.5rem;
-      border-top: 1px solid #eee;
+      border-top: 1px solid #333;
     }
     .footer a {
       color: #666;
       text-decoration: none;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
     }
     .footer a:hover {
-      color: #111;
+      color: #888;
     }
+    .loading {
+      text-align: center;
+      padding: 2rem;
+      color: #888;
+    }
+    .spinner {
+      width: 24px;
+      height: 24px;
+      border: 2px solid #333;
+      border-top-color: #4a9eff;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+      margin: 0 auto 1rem;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    .not-configured {
+      text-align: center;
+      color: #888;
+    }
+    .not-configured h2 {
+      font-size: 1.25rem;
+      margin-bottom: 0.5rem;
+      color: #fff;
+    }
+    .check-icon {
+      width: 48px;
+      height: 48px;
+      background: #1f3d1f;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1rem;
+    }
+    .check-icon svg {
+      width: 24px;
+      height: 24px;
+      color: #6a8759;
+    }
+    #magic-link-section { display: none; }
+    #success-section { display: none; }
   </style>
 </head>
 <body>
-  <div class="card">
-    <div class="check">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-      </svg>
-    </div>
-    <h1>Domain Configured</h1>
-    <p>This domain is properly configured and routing through reauth.dev</p>
-    <div class="footer">
-      <a href="https://reauth.dev">Powered by reauth.dev</a>
+  <div class="container">
+    <div class="card">
+      <!-- Loading State -->
+      <div id="loading-section" class="loading">
+        <div class="spinner"></div>
+        <p>Loading...</p>
+      </div>
+
+      <!-- Login Form -->
+      <div id="login-section" style="display: none;">
+        <h1>Sign In</h1>
+        <p class="subtitle" id="domain-display"></p>
+
+        <div id="error-message" class="message error" style="display: none;"></div>
+
+        <!-- Google OAuth (Placeholder) -->
+        <div id="google-section" style="display: none;">
+          <button type="button" class="btn-google" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24">
+              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+            </svg>
+            Continue with Google (Coming soon)
+          </button>
+
+          <div class="divider"><span>or</span></div>
+        </div>
+
+        <!-- Magic Link Form -->
+        <div id="magic-link-section">
+          <form id="magic-link-form">
+            <div class="form-group">
+              <label for="email">Email address</label>
+              <input type="email" id="email" placeholder="you@example.com" required>
+            </div>
+            <button type="submit" class="btn-primary" id="submit-btn">
+              Send magic link
+            </button>
+          </form>
+        </div>
+
+        <!-- Not Configured -->
+        <div id="not-configured-section" style="display: none;" class="not-configured">
+          <h2>Authentication Not Configured</h2>
+          <p>This domain is verified but authentication has not been configured yet.</p>
+        </div>
+      </div>
+
+      <!-- Success State -->
+      <div id="success-section" style="display: none;">
+        <div class="check-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+          </svg>
+        </div>
+        <h1 id="success-title">Check your email</h1>
+        <p class="subtitle" id="success-message">We sent a magic link to your email. Click the link to sign in.</p>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        <a href="https://reauth.dev">Powered by reauth.dev</a>
+      </div>
     </div>
   </div>
+
+  <script>
+    const domain = window.location.hostname;
+    let config = null;
+
+    // DOM Elements
+    const loadingSection = document.getElementById('loading-section');
+    const loginSection = document.getElementById('login-section');
+    const successSection = document.getElementById('success-section');
+    const googleSection = document.getElementById('google-section');
+    const magicLinkSection = document.getElementById('magic-link-section');
+    const notConfiguredSection = document.getElementById('not-configured-section');
+    const domainDisplay = document.getElementById('domain-display');
+    const errorMessage = document.getElementById('error-message');
+    const magicLinkForm = document.getElementById('magic-link-form');
+    const emailInput = document.getElementById('email');
+    const submitBtn = document.getElementById('submit-btn');
+    const successTitle = document.getElementById('success-title');
+    const successMessage = document.getElementById('success-message');
+
+    async function init() {
+      // Check if we're handling a magic link callback
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('token');
+
+      if (token) {
+        await handleMagicLinkCallback(token);
+        return;
+      }
+
+      // Fetch domain config
+      try {
+        const res = await fetch(`/api/public/domain/${domain}/config`);
+        if (res.ok) {
+          config = await res.json();
+          renderLoginPage();
+        } else {
+          showError('This domain is not configured for authentication.');
+        }
+      } catch (e) {
+        showError('Failed to load configuration. Please try again.');
+      }
+    }
+
+    function renderLoginPage() {
+      loadingSection.style.display = 'none';
+      loginSection.style.display = 'block';
+      domainDisplay.textContent = domain;
+
+      const hasAnyMethod = config.auth_methods.magic_link || config.auth_methods.google_oauth;
+
+      if (!hasAnyMethod) {
+        notConfiguredSection.style.display = 'block';
+        return;
+      }
+
+      if (config.auth_methods.google_oauth) {
+        googleSection.style.display = 'block';
+      }
+
+      if (config.auth_methods.magic_link) {
+        magicLinkSection.style.display = 'block';
+      }
+    }
+
+    function showError(message) {
+      loadingSection.style.display = 'none';
+      loginSection.style.display = 'block';
+      errorMessage.textContent = message;
+      errorMessage.style.display = 'block';
+    }
+
+    function showSuccess(title, message) {
+      loadingSection.style.display = 'none';
+      loginSection.style.display = 'none';
+      successSection.style.display = 'block';
+      successTitle.textContent = title;
+      successMessage.textContent = message;
+    }
+
+    async function handleMagicLinkCallback(token) {
+      loadingSection.style.display = 'block';
+
+      try {
+        const res = await fetch(`/api/public/domain/${domain}/auth/verify-magic-link`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token }),
+          credentials: 'include',
+        });
+
+        const data = await res.json();
+
+        if (res.ok && data.success) {
+          if (data.redirect_url) {
+            // Redirect to configured URL
+            window.location.href = data.redirect_url;
+          } else {
+            // Show success message
+            showSuccess('Login successful!', `You are now signed in as ${data.email || 'authenticated user'}.`);
+          }
+        } else {
+          showError('This magic link is invalid or has expired. Please request a new one.');
+          // Remove token from URL
+          window.history.replaceState({}, document.title, window.location.pathname);
+          // Reload to show login form
+          setTimeout(() => init(), 2000);
+        }
+      } catch (e) {
+        showError('Failed to verify magic link. Please try again.');
+      }
+    }
+
+    magicLinkForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      const email = emailInput.value.trim();
+      if (!email) return;
+
+      errorMessage.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Sending...';
+
+      try {
+        const res = await fetch(`/api/public/domain/${domain}/auth/request-magic-link`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+          credentials: 'include',
+        });
+
+        if (res.ok || res.status === 202) {
+          showSuccess('Check your email', `We sent a magic link to ${email}. Click the link to sign in.`);
+        } else if (res.status === 429) {
+          showError('Too many requests. Please wait a moment and try again.');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Send magic link';
+        } else {
+          const data = await res.json().catch(() => ({}));
+          showError(data.message || 'Failed to send magic link. Please try again.');
+          submitBtn.disabled = false;
+          submitBtn.textContent = 'Send magic link';
+        }
+      } catch (e) {
+        showError('Network error. Please check your connection and try again.');
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Send magic link';
+      }
+    });
+
+    // Initialize
+    init();
+  </script>
 </body>
 </html>

@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
@@ -25,6 +25,9 @@ pub fn router() -> Router<AppState> {
         .route("/{domain_id}/verify", post(start_verification))
         .route("/{domain_id}/status", get(get_verification_status))
         .route("/{domain_id}", delete(delete_domain))
+        .route("/{domain_id}/auth-config", get(get_auth_config))
+        .route("/{domain_id}/auth-config", patch(update_auth_config))
+        .route("/{domain_id}/end-users", get(list_end_users))
 }
 
 #[derive(Deserialize)]
@@ -233,4 +236,115 @@ fn current_user(jar: &CookieJar, app_state: &AppState) -> AppResult<(CookieJar, 
     let user_id = Uuid::parse_str(&claims.sub)
         .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
     Ok((jar.clone(), user_id))
+}
+
+// ============================================================================
+// Auth Config Endpoints
+// ============================================================================
+
+#[derive(Serialize)]
+struct AuthConfigResponse {
+    magic_link_enabled: bool,
+    google_oauth_enabled: bool,
+    redirect_url: Option<String>,
+    magic_link_config: Option<MagicLinkConfigResponse>,
+}
+
+#[derive(Serialize)]
+struct MagicLinkConfigResponse {
+    from_email: String,
+    has_api_key: bool,
+}
+
+async fn get_auth_config(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let (auth_config, magic_link_config) = app_state
+        .domain_auth_use_cases
+        .get_auth_config(user_id, domain_id)
+        .await?;
+
+    let magic_link_response = magic_link_config.map(|c| MagicLinkConfigResponse {
+        from_email: c.from_email,
+        has_api_key: !c.resend_api_key_encrypted.is_empty(),
+    });
+
+    Ok(Json(AuthConfigResponse {
+        magic_link_enabled: auth_config.magic_link_enabled,
+        google_oauth_enabled: auth_config.google_oauth_enabled,
+        redirect_url: auth_config.redirect_url,
+        magic_link_config: magic_link_response,
+    }))
+}
+
+#[derive(Deserialize)]
+struct UpdateAuthConfigPayload {
+    magic_link_enabled: Option<bool>,
+    google_oauth_enabled: Option<bool>,
+    redirect_url: Option<String>,
+    resend_api_key: Option<String>,
+    from_email: Option<String>,
+}
+
+async fn update_auth_config(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<UpdateAuthConfigPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .domain_auth_use_cases
+        .update_auth_config(
+            user_id,
+            domain_id,
+            payload.magic_link_enabled.unwrap_or(false),
+            payload.google_oauth_enabled.unwrap_or(false),
+            payload.redirect_url.as_deref(),
+            payload.resend_api_key.as_deref(),
+            payload.from_email.as_deref(),
+        )
+        .await?;
+
+    Ok(StatusCode::OK)
+}
+
+#[derive(Serialize)]
+struct EndUserResponse {
+    id: Uuid,
+    email: String,
+    email_verified_at: Option<chrono::NaiveDateTime>,
+    last_login_at: Option<chrono::NaiveDateTime>,
+    created_at: Option<chrono::NaiveDateTime>,
+}
+
+async fn list_end_users(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let end_users = app_state
+        .domain_auth_use_cases
+        .list_end_users(user_id, domain_id)
+        .await?;
+
+    let response: Vec<EndUserResponse> = end_users
+        .into_iter()
+        .map(|u| EndUserResponse {
+            id: u.id,
+            email: u.email,
+            email_verified_at: u.email_verified_at,
+            last_login_at: u.last_login_at,
+            created_at: u.created_at,
+        })
+        .collect();
+
+    Ok(Json(response))
 }

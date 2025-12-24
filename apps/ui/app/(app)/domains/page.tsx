@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 
 type Domain = {
   id: string;
@@ -19,6 +20,7 @@ type Domain = {
 type WizardStep = 'closed' | 'input' | 'records' | 'verifying';
 
 export default function DomainsPage() {
+  const router = useRouter();
   const [domains, setDomains] = useState<Domain[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardStep, setWizardStep] = useState<WizardStep>('closed');
@@ -413,6 +415,11 @@ export default function DomainsPage() {
               {getStatusBadge(domain.status)}
             </div>
             <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
+              {domain.status === 'verified' && (
+                <button onClick={() => router.push(`/domains/${domain.id}/auth`)}>
+                  Auth Settings
+                </button>
+              )}
               {domain.status === 'failed' && (
                 <button onClick={() => handleRetryVerification(domain)}>Retry</button>
               )}
