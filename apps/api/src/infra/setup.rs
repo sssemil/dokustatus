@@ -1,9 +1,10 @@
 use crate::{
-    adapters::{email::resend::ResendEmailSender, http::app_state::AppState},
+    adapters::{dns::HickoryDnsVerifier, email::resend::ResendEmailSender, http::app_state::AppState},
     infra::{
         config::AppConfig, magic_links::MagicLinkStore, postgres_persistence,
         rate_limit::RateLimiter,
     },
+    use_cases::domain::{DomainRepo, DomainUseCases},
     use_cases::user::{AuthUseCases, UserRepo},
 };
 use std::fs::File;
@@ -33,6 +34,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     ));
 
     let user_repo_arc = postgres_arc.clone() as Arc<dyn UserRepo>;
+    let domain_repo_arc = postgres_arc.clone() as Arc<dyn DomainRepo>;
 
     let auth_use_cases = AuthUseCases::new(
         user_repo_arc.clone(),
@@ -41,9 +43,17 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         config.app_origin.to_string(),
     );
 
+    let dns_verifier = Arc::new(HickoryDnsVerifier::new());
+    let domain_use_cases = DomainUseCases::new(
+        domain_repo_arc,
+        dns_verifier,
+        "ingress.reauth.dev".to_string(),
+    );
+
     Ok(AppState {
         config: Arc::new(config),
         auth_use_cases: Arc::new(auth_use_cases),
+        domain_use_cases: Arc::new(domain_use_cases),
         user_repo: user_repo_arc,
         rate_limiter,
     })

@@ -17,6 +17,28 @@ pub fn primary_button(url: &str, label: &str) -> String {
     )
 }
 
+pub fn domain_verification_failed_email(app_origin: &str, domain: &str) -> (String, String) {
+    let subject = format!("Domain verification failed: {}", domain);
+    let headline = "Domain verification failed";
+    let lead = format!(
+        "We couldn't verify your domain <strong>{}</strong> after checking for one hour.",
+        domain
+    );
+    let body = format!(
+        r#"<p style="margin:12px 0 0;color:#374151;">Please check that your DNS records are correctly configured:</p>
+        <ul style="margin:12px 0;color:#374151;padding-left:20px;">
+          <li>CNAME record for <code>{domain}</code> pointing to <code>ingress.reauth.dev</code></li>
+          <li>TXT record for <code>_reauth.{domain}</code> with your project ID</li>
+        </ul>
+        <p style="margin:12px 0 0;color:#374151;">DNS propagation can sometimes take longer than expected. You can retry verification from your dashboard.</p>"#,
+        domain = domain
+    );
+    let reason = format!("you added {} to your reauth account", domain);
+
+    let html = wrap_email(app_origin, headline, &lead, &body, &reason, None);
+    (subject, html)
+}
+
 pub fn wrap_email(
     app_origin: &str,
     headline: &str,

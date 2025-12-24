@@ -26,6 +26,9 @@ impl IntoResponse for AppError {
             AppError::TooManyDocuments => {
                 error_resp(StatusCode::BAD_REQUEST, ErrorCode::TooManyDocuments)
             }
+            AppError::NotFound => {
+                error_resp(StatusCode::NOT_FOUND, ErrorCode::NotFound)
+            }
             AppError::Internal(_) => {
                 error_resp(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::InternalError)
             }

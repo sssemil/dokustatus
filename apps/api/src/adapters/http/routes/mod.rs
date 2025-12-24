@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod domain;
 pub mod user;
 
 use axum::Router;
@@ -9,4 +10,5 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .nest("/auth", auth::router())
         .nest("/user", user::router())
+        .nest("/domains", domain::router())
 }

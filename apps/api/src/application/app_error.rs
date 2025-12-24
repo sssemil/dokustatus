@@ -17,6 +17,9 @@ pub enum AppError {
     #[error("Too many documents")]
     TooManyDocuments,
 
+    #[error("Not found")]
+    NotFound,
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -28,6 +31,7 @@ pub enum ErrorCode {
     RateLimited,
     InvalidInput,
     TooManyDocuments,
+    NotFound,
     InternalError,
 }
 
@@ -39,6 +43,7 @@ impl ErrorCode {
             ErrorCode::RateLimited => "RATE_LIMITED",
             ErrorCode::InvalidInput => "INVALID_INPUT",
             ErrorCode::TooManyDocuments => "TOO_MANY_DOCUMENTS",
+            ErrorCode::NotFound => "NOT_FOUND",
             ErrorCode::InternalError => "INTERNAL_ERROR",
         }
     }

@@ -5,6 +5,7 @@ use axum::extract::FromRef;
 use crate::{
     infra::config::AppConfig,
     infra::rate_limit::RateLimiter,
+    use_cases::domain::DomainUseCases,
     use_cases::user::{AuthUseCases, UserRepo},
 };
 
@@ -12,6 +13,7 @@ use crate::{
 pub struct AppState {
     pub config: Arc<AppConfig>,
     pub auth_use_cases: Arc<AuthUseCases>,
+    pub domain_use_cases: Arc<DomainUseCases>,
     pub user_repo: Arc<dyn UserRepo>,
     pub rate_limiter: Arc<RateLimiter>,
 }

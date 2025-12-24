@@ -1,0 +1,217 @@
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::{delete, get, post},
+};
+use axum_extra::extract::cookie::CookieJar;
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+use crate::{
+    adapters::http::app_state::AppState,
+    app_error::AppResult,
+    application::jwt,
+    domain::entities::domain::DomainStatus,
+};
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/", post(create_domain))
+        .route("/", get(list_domains))
+        .route("/{domain_id}", get(get_domain))
+        .route("/{domain_id}/verify", post(start_verification))
+        .route("/{domain_id}/status", get(get_verification_status))
+        .route("/{domain_id}", delete(delete_domain))
+}
+
+#[derive(Deserialize)]
+struct CreateDomainPayload {
+    domain: String,
+}
+
+#[derive(Serialize)]
+struct DomainResponse {
+    id: Uuid,
+    domain: String,
+    status: String,
+    dns_records: Option<DnsRecordsResponse>,
+    verified_at: Option<chrono::NaiveDateTime>,
+    created_at: Option<chrono::NaiveDateTime>,
+}
+
+#[derive(Serialize)]
+struct DnsRecordsResponse {
+    cname_name: String,
+    cname_value: String,
+    txt_name: String,
+    txt_value: String,
+}
+
+async fn create_domain(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Json(payload): Json<CreateDomainPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let domain = app_state
+        .domain_use_cases
+        .add_domain(user_id, &payload.domain)
+        .await?;
+
+    let dns_records = app_state
+        .domain_use_cases
+        .get_dns_records(&domain.domain, domain.id);
+
+    Ok((
+        StatusCode::CREATED,
+        Json(DomainResponse {
+            id: domain.id,
+            domain: domain.domain,
+            status: domain.status.as_str().to_string(),
+            dns_records: Some(DnsRecordsResponse {
+                cname_name: dns_records.cname_name,
+                cname_value: dns_records.cname_value,
+                txt_name: dns_records.txt_name,
+                txt_value: dns_records.txt_value,
+            }),
+            verified_at: domain.verified_at,
+            created_at: domain.created_at,
+        }),
+    ))
+}
+
+async fn list_domains(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let domains = app_state.domain_use_cases.list_domains(user_id).await?;
+
+    let response: Vec<DomainResponse> = domains
+        .into_iter()
+        .map(|d| {
+            let dns_records = app_state.domain_use_cases.get_dns_records(&d.domain, d.id);
+            DomainResponse {
+                id: d.id,
+                domain: d.domain,
+                status: d.status.as_str().to_string(),
+                dns_records: Some(DnsRecordsResponse {
+                    cname_name: dns_records.cname_name,
+                    cname_value: dns_records.cname_value,
+                    txt_name: dns_records.txt_name,
+                    txt_value: dns_records.txt_value,
+                }),
+                verified_at: d.verified_at,
+                created_at: d.created_at,
+            }
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+async fn get_domain(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let domain = app_state
+        .domain_use_cases
+        .get_domain(user_id, domain_id)
+        .await?;
+
+    let dns_records = app_state
+        .domain_use_cases
+        .get_dns_records(&domain.domain, domain.id);
+
+    Ok(Json(DomainResponse {
+        id: domain.id,
+        domain: domain.domain,
+        status: domain.status.as_str().to_string(),
+        dns_records: Some(DnsRecordsResponse {
+            cname_name: dns_records.cname_name,
+            cname_value: dns_records.cname_value,
+            txt_name: dns_records.txt_name,
+            txt_value: dns_records.txt_value,
+        }),
+        verified_at: domain.verified_at,
+        created_at: domain.created_at,
+    }))
+}
+
+async fn start_verification(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let domain = app_state
+        .domain_use_cases
+        .start_verification(user_id, domain_id)
+        .await?;
+
+    Ok(Json(DomainResponse {
+        id: domain.id,
+        domain: domain.domain,
+        status: domain.status.as_str().to_string(),
+        dns_records: None,
+        verified_at: domain.verified_at,
+        created_at: domain.created_at,
+    }))
+}
+
+#[derive(Serialize)]
+struct VerificationStatusResponse {
+    status: String,
+    verified: bool,
+}
+
+async fn get_verification_status(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let domain = app_state
+        .domain_use_cases
+        .get_domain(user_id, domain_id)
+        .await?;
+
+    Ok(Json(VerificationStatusResponse {
+        status: domain.status.as_str().to_string(),
+        verified: domain.status == DomainStatus::Verified,
+    }))
+}
+
+async fn delete_domain(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .domain_use_cases
+        .delete_domain(user_id, domain_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+fn current_user(jar: &CookieJar, app_state: &AppState) -> AppResult<(CookieJar, Uuid)> {
+    let Some(access_cookie) = jar.get("access_token") else {
+        return Err(crate::app_error::AppError::InvalidCredentials);
+    };
+    let claims = jwt::verify(access_cookie.value(), &app_state.config.jwt_secret)?;
+    let user_id = Uuid::parse_str(&claims.sub)
+        .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
+    Ok((jar.clone(), user_id))
+}
