@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAppContext } from '../layout';
 
 type Domain = {
   id: string;
@@ -22,23 +21,8 @@ type WizardStep = 'closed' | 'input' | 'records';
 
 export default function DomainsPage() {
   const router = useRouter();
-  const { isIngress } = useAppContext();
   const [domains, setDomains] = useState<Domain[]>([]);
   const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    if (isIngress) {
-      window.location.href = '/profile';
-    }
-  }, [isIngress]);
-
-  if (isIngress) {
-    return (
-      <div className="flex items-center justify-center" style={{ minHeight: '200px' }}>
-        <div className="spinner" />
-      </div>
-    );
-  }
   const [wizardStep, setWizardStep] = useState<WizardStep>('closed');
   const [newDomain, setNewDomain] = useState('');
   const [createdDomain, setCreatedDomain] = useState<Domain | null>(null);

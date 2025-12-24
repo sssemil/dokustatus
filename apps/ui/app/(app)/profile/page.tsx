@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useAppContext } from '../layout';
 
 export default function ProfilePage() {
-  const { user, isIngress, displayDomain } = useAppContext();
+  const { user, displayDomain } = useAppContext();
   const [email, setEmail] = useState('');
   const [originalEmail, setOriginalEmail] = useState('');
   const [updateStatus, setUpdateStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
@@ -18,13 +18,6 @@ export default function ProfilePage() {
       setOriginalEmail(user.email);
     }
   }, [user]);
-
-  // Redirect to ingress if accessed from main app
-  useEffect(() => {
-    if (!isIngress) {
-      window.location.href = 'https://reauth.reauth.dev/profile';
-    }
-  }, [isIngress]);
 
   const handleUpdateEmail = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,15 +70,6 @@ export default function ProfilePage() {
       setErrorMessage('Network error. Please try again.');
     }
   };
-
-  // Show loading while redirecting from main app
-  if (!isIngress) {
-    return (
-      <div className="flex items-center justify-center" style={{ minHeight: '200px' }}>
-        <div className="spinner" />
-      </div>
-    );
-  }
 
   return (
     <>

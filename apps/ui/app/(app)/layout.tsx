@@ -121,7 +121,17 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   }
 
   // Simplified layout for ingress domains (custom domains)
+  // Only /profile is allowed on ingress
   if (isIngress) {
+    if (pathname !== '/profile') {
+      window.location.href = '/profile';
+      return (
+        <div className="flex items-center justify-center" style={{ minHeight: '100vh' }}>
+          <div className="spinner" />
+        </div>
+      );
+    }
+
     return (
       <AppContext.Provider value={{ user, refetchUser: fetchUser, isIngress, displayDomain }}>
         <main className="flex items-center justify-center" style={{ padding: 'var(--spacing-xl)' }}>

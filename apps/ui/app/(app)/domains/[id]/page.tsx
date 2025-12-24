@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { useAppContext } from '../../layout';
 
 type Domain = {
   id: string;
@@ -31,14 +30,7 @@ type AuthConfig = {
 export default function DomainDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const { isIngress } = useAppContext();
   const domainId = params.id as string;
-
-  useEffect(() => {
-    if (isIngress) {
-      window.location.href = '/profile';
-    }
-  }, [isIngress]);
 
   const [domain, setDomain] = useState<Domain | null>(null);
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
@@ -243,7 +235,7 @@ export default function DomainDetailPage() {
     });
   };
 
-  if (isIngress || loading) {
+  if (loading) {
     return (
       <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
         <span className="spinner" />
