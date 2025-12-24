@@ -45,7 +45,7 @@ async fn delete_account(
     let end_user_id = Uuid::parse_str(&claims.sub)
         .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
 
-    app_state.domain_auth_use_cases.delete_end_user(end_user_id).await?;
+    app_state.domain_auth_use_cases.delete_own_account(end_user_id).await?;
 
     let mut headers = HeaderMap::new();
     for (name, value, http_only) in [

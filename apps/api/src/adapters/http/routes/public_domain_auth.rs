@@ -441,7 +441,7 @@ async fn delete_account(
     // Delete the account
     app_state
         .domain_auth_use_cases
-        .delete_end_user(end_user_id)
+        .delete_own_account(end_user_id)
         .await?;
 
     // Clear cookies

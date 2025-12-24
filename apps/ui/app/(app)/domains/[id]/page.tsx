@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 
 type Domain = {
@@ -27,6 +27,18 @@ type AuthConfig = {
   } | null;
 };
 
+type EndUser = {
+  id: string;
+  email: string;
+  email_verified_at: string | null;
+  last_login_at: string | null;
+  is_frozen: boolean;
+  is_whitelisted: boolean;
+  created_at: string | null;
+};
+
+type Tab = 'configuration' | 'users';
+
 export default function DomainDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -39,6 +51,11 @@ export default function DomainDetailPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>('configuration');
+  const [endUsers, setEndUsers] = useState<EndUser[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
 
   // Auth config form state
   const [magicLinkEnabled, setMagicLinkEnabled] = useState(false);
@@ -78,6 +95,39 @@ export default function DomainDetailPage() {
   useEffect(() => {
     fetchData();
   }, [fetchData]);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const fetchEndUsers = useCallback(async () => {
+    if (!domain || domain.status !== 'verified') return;
+    setLoadingUsers(true);
+    try {
+      const res = await fetch(`/api/domains/${domainId}/end-users`, { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setEndUsers(data);
+      }
+    } catch {
+      // Ignore
+    } finally {
+      setLoadingUsers(false);
+    }
+  }, [domainId, domain]);
+
+  useEffect(() => {
+    if (activeTab === 'users' && domain?.status === 'verified') {
+      fetchEndUsers();
+    }
+  }, [activeTab, domain, fetchEndUsers]);
 
   // Poll for verification status when domain is verifying
   useEffect(() => {
@@ -174,6 +224,42 @@ export default function DomainDetailPage() {
         router.push('/domains');
       } else {
         setError('Failed to delete domain');
+      }
+    } catch {
+      setError('Network error. Please try again.');
+    }
+  };
+
+  const handleUserAction = async (userId: string, action: 'freeze' | 'unfreeze' | 'whitelist' | 'unwhitelist' | 'delete') => {
+    if (action === 'delete' && !confirm('Are you sure you want to delete this user? This cannot be undone.')) return;
+
+    const methodMap = {
+      freeze: 'POST',
+      unfreeze: 'DELETE',
+      whitelist: 'POST',
+      unwhitelist: 'DELETE',
+      delete: 'DELETE',
+    };
+
+    const urlMap = {
+      freeze: `/api/domains/${domainId}/end-users/${userId}/freeze`,
+      unfreeze: `/api/domains/${domainId}/end-users/${userId}/freeze`,
+      whitelist: `/api/domains/${domainId}/end-users/${userId}/whitelist`,
+      unwhitelist: `/api/domains/${domainId}/end-users/${userId}/whitelist`,
+      delete: `/api/domains/${domainId}/end-users/${userId}`,
+    };
+
+    try {
+      const res = await fetch(urlMap[action], {
+        method: methodMap[action],
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        setOpenMenuId(null);
+        fetchEndUsers();
+      } else {
+        setError(`Failed to ${action} user`);
       }
     } catch {
       setError('Network error. Please try again.');
@@ -428,7 +514,7 @@ export default function DomainDetailPage() {
         </div>
       )}
 
-      {/* Configuration Section - Only show when verified */}
+      {/* Tabs Section - Only show when verified */}
       {domain.status === 'verified' && (
         <>
           {error && (
@@ -443,22 +529,57 @@ export default function DomainDetailPage() {
             </div>
           )}
 
-          <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-            <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Configuration</h2>
-            <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-              Login URL:{' '}
-              <a
-                href={`https://reauth.${domain.domain}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ color: 'var(--accent-blue)' }}
+          {/* Tabs */}
+          <div style={{
+            display: 'flex',
+            gap: 'var(--spacing-xs)',
+            marginBottom: 'var(--spacing-lg)',
+            borderBottom: '1px solid var(--border-primary)',
+          }}>
+            {[
+              { id: 'configuration' as Tab, label: 'Configuration' },
+              { id: 'users' as Tab, label: 'Users' },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  padding: 'var(--spacing-sm) var(--spacing-md)',
+                  backgroundColor: activeTab === tab.id ? 'var(--bg-tertiary)' : 'transparent',
+                  border: activeTab === tab.id ? '1px solid var(--border-primary)' : '1px solid transparent',
+                  borderBottom: activeTab === tab.id ? '1px solid var(--bg-tertiary)' : '1px solid transparent',
+                  borderRadius: 'var(--radius-sm) var(--radius-sm) 0 0',
+                  color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-muted)',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                  fontWeight: activeTab === tab.id ? 600 : 400,
+                  marginBottom: '-1px',
+                }}
               >
-                https://reauth.{domain.domain}
-              </a>
-            </p>
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          <form onSubmit={handleSaveConfig}>
+          {/* Configuration Tab */}
+          {activeTab === 'configuration' && (
+            <>
+              <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+                <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Configuration</h2>
+                <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
+                  Login URL:{' '}
+                  <a
+                    href={`https://reauth.${domain.domain}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{ color: 'var(--accent-blue)' }}
+                  >
+                    https://reauth.{domain.domain}
+                  </a>
+                </p>
+              </div>
+
+              <form onSubmit={handleSaveConfig}>
             {/* Magic Link Section */}
             <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -564,7 +685,191 @@ export default function DomainDetailPage() {
             <button type="submit" className="primary" disabled={saving}>
               {saving ? 'Saving...' : 'Save changes'}
             </button>
-          </form>
+              </form>
+            </>
+          )}
+
+          {/* Users Tab */}
+          {activeTab === 'users' && (
+            <>
+              {loadingUsers ? (
+                <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
+                  <span className="spinner" />
+                </div>
+              ) : endUsers.length === 0 ? (
+                <div className="card" style={{ textAlign: 'center' }}>
+                  <p className="text-muted">No users have signed up yet.</p>
+                </div>
+              ) : (
+                endUsers.map((user) => (
+                  <div
+                    key={user.id}
+                    className="card"
+                    onClick={() => router.push(`/domains/${domainId}/users/${user.id}`)}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      cursor: 'pointer',
+                      transition: 'background-color 0.15s ease',
+                      marginBottom: 'var(--spacing-sm)',
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)')}
+                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '')}
+                  >
+                    <div>
+                      <div style={{ fontWeight: 600, marginBottom: 'var(--spacing-xs)' }}>{user.email}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
+                        {user.last_login_at && (
+                          <span className="text-muted" style={{ fontSize: '12px' }}>
+                            Last login: {formatDate(user.last_login_at)}
+                          </span>
+                        )}
+                        {user.is_frozen && (
+                          <span style={{
+                            padding: '2px 6px',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--accent-red)',
+                            color: '#fff',
+                            fontSize: '11px',
+                            fontWeight: 500,
+                          }}>
+                            Frozen
+                          </span>
+                        )}
+                        {user.is_whitelisted && (
+                          <span style={{
+                            padding: '2px 6px',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'var(--accent-green)',
+                            color: '#000',
+                            fontSize: '11px',
+                            fontWeight: 500,
+                          }}>
+                            Whitelisted
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
+                      <div ref={openMenuId === user.id ? menuRef : null} style={{ position: 'relative' }}>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenuId(openMenuId === user.id ? null : user.id);
+                          }}
+                          style={{
+                            padding: 'var(--spacing-xs)',
+                            backgroundColor: 'transparent',
+                            border: 'none',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                          }}
+                        >
+                          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                            <circle cx="12" cy="5" r="2" />
+                            <circle cx="12" cy="12" r="2" />
+                            <circle cx="12" cy="19" r="2" />
+                          </svg>
+                        </button>
+                        {openMenuId === user.id && (
+                          <div style={{
+                            position: 'absolute',
+                            top: '100%',
+                            right: 0,
+                            marginTop: 'var(--spacing-xs)',
+                            backgroundColor: 'var(--bg-secondary)',
+                            border: '1px solid var(--border-primary)',
+                            borderRadius: 'var(--radius-sm)',
+                            boxShadow: 'var(--shadow-md)',
+                            zIndex: 100,
+                            minWidth: '140px',
+                          }}>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/domains/${domainId}/users/${user.id}`);
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: 'var(--spacing-sm) var(--spacing-md)',
+                                backgroundColor: 'transparent',
+                                border: 'none',
+                                color: 'var(--text-primary)',
+                                fontSize: '13px',
+                                textAlign: 'left',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              View details
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleUserAction(user.id, user.is_frozen ? 'unfreeze' : 'freeze');
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: 'var(--spacing-sm) var(--spacing-md)',
+                                backgroundColor: 'transparent',
+                                border: 'none',
+                                color: 'var(--text-primary)',
+                                fontSize: '13px',
+                                textAlign: 'left',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {user.is_frozen ? 'Unfreeze' : 'Freeze'}
+                            </button>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleUserAction(user.id, user.is_whitelisted ? 'unwhitelist' : 'whitelist');
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: 'var(--spacing-sm) var(--spacing-md)',
+                                backgroundColor: 'transparent',
+                                border: 'none',
+                                color: 'var(--text-primary)',
+                                fontSize: '13px',
+                                textAlign: 'left',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {user.is_whitelisted ? 'Remove from whitelist' : 'Whitelist'}
+                            </button>
+                            <div style={{ borderTop: '1px solid var(--border-primary)', margin: '4px 0' }} />
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleUserAction(user.id, 'delete');
+                              }}
+                              style={{
+                                width: '100%',
+                                padding: 'var(--spacing-sm) var(--spacing-md)',
+                                backgroundColor: 'transparent',
+                                border: 'none',
+                                color: 'var(--accent-red)',
+                                fontSize: '13px',
+                                textAlign: 'left',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      <span className="text-muted" style={{ fontSize: '18px' }}>&rarr;</span>
+                    </div>
+                  </div>
+                ))
+              )}
+            </>
+          )}
         </>
       )}
     </>

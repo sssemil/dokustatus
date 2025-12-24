@@ -51,6 +51,8 @@ pub trait DomainEndUserRepo: Send + Sync {
     async fn update_last_login(&self, id: Uuid) -> AppResult<()>;
     async fn list_by_domain(&self, domain_id: Uuid) -> AppResult<Vec<DomainEndUserProfile>>;
     async fn delete(&self, id: Uuid) -> AppResult<()>;
+    async fn set_frozen(&self, id: Uuid, frozen: bool) -> AppResult<()>;
+    async fn set_whitelisted(&self, id: Uuid, whitelisted: bool) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -99,6 +101,8 @@ pub struct DomainEndUserProfile {
     pub roles: Vec<String>,
     pub email_verified_at: Option<NaiveDateTime>,
     pub last_login_at: Option<NaiveDateTime>,
+    pub is_frozen: bool,
+    pub is_whitelisted: bool,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
 }
@@ -402,9 +406,147 @@ impl DomainAuthUseCases {
         self.end_user_repo.list_by_domain(domain_id).await
     }
 
-    /// Delete an end-user account
+    /// Get a single end-user by ID (domain owner only)
     #[instrument(skip(self))]
-    pub async fn delete_end_user(&self, end_user_id: Uuid) -> AppResult<()> {
+    pub async fn get_end_user(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+        user_id: Uuid,
+    ) -> AppResult<DomainEndUserProfile> {
+        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+
+        let user = self
+            .end_user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        if user.domain_id != domain_id {
+            return Err(AppError::NotFound);
+        }
+
+        Ok(user)
+    }
+
+    /// Delete an end-user account (domain owner only)
+    #[instrument(skip(self))]
+    pub async fn delete_end_user(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+        user_id: Uuid,
+    ) -> AppResult<()> {
+        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+
+        let user = self
+            .end_user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        if user.domain_id != domain_id {
+            return Err(AppError::NotFound);
+        }
+
+        self.end_user_repo.delete(user_id).await
+    }
+
+    /// Freeze an end-user account (domain owner only)
+    #[instrument(skip(self))]
+    pub async fn freeze_end_user(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+        user_id: Uuid,
+    ) -> AppResult<()> {
+        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+
+        let user = self
+            .end_user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        if user.domain_id != domain_id {
+            return Err(AppError::NotFound);
+        }
+
+        self.end_user_repo.set_frozen(user_id, true).await
+    }
+
+    /// Unfreeze an end-user account (domain owner only)
+    #[instrument(skip(self))]
+    pub async fn unfreeze_end_user(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+        user_id: Uuid,
+    ) -> AppResult<()> {
+        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+
+        let user = self
+            .end_user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        if user.domain_id != domain_id {
+            return Err(AppError::NotFound);
+        }
+
+        self.end_user_repo.set_frozen(user_id, false).await
+    }
+
+    /// Whitelist an end-user (domain owner only)
+    #[instrument(skip(self))]
+    pub async fn whitelist_end_user(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+        user_id: Uuid,
+    ) -> AppResult<()> {
+        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+
+        let user = self
+            .end_user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        if user.domain_id != domain_id {
+            return Err(AppError::NotFound);
+        }
+
+        self.end_user_repo.set_whitelisted(user_id, true).await
+    }
+
+    /// Remove end-user from whitelist (domain owner only)
+    #[instrument(skip(self))]
+    pub async fn unwhitelist_end_user(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+        user_id: Uuid,
+    ) -> AppResult<()> {
+        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+
+        let user = self
+            .end_user_repo
+            .get_by_id(user_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        if user.domain_id != domain_id {
+            return Err(AppError::NotFound);
+        }
+
+        self.end_user_repo.set_whitelisted(user_id, false).await
+    }
+
+    /// Delete own account (for self-service account deletion)
+    #[instrument(skip(self))]
+    pub async fn delete_own_account(&self, end_user_id: Uuid) -> AppResult<()> {
         self.end_user_repo.delete(end_user_id).await
     }
 
@@ -426,6 +568,21 @@ impl DomainAuthUseCases {
     // ========================================================================
     // Helpers
     // ========================================================================
+
+    /// Verify that the end-user owns the specified domain
+    async fn verify_domain_ownership(&self, owner_end_user_id: Uuid, domain_id: Uuid) -> AppResult<()> {
+        let domain = self
+            .domain_repo
+            .get_by_id(domain_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        if domain.owner_end_user_id != Some(owner_end_user_id) {
+            return Err(AppError::InvalidCredentials);
+        }
+
+        Ok(())
+    }
 
     /// Get email config: domain-specific if available, otherwise global
     async fn get_email_config(&self, domain_id: Uuid) -> AppResult<(String, String)> {
