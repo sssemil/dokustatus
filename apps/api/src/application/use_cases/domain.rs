@@ -190,9 +190,17 @@ fn is_root_domain(domain: &str) -> bool {
 
 /// Extract root domain from a reauth.* hostname
 /// e.g., "reauth.example.com" -> "example.com"
+/// Special case: "reauth.dev" stays as "reauth.dev" (it's the actual domain)
 pub fn extract_root_from_reauth_hostname(hostname: &str) -> String {
     if hostname.starts_with("reauth.") {
-        hostname.strip_prefix("reauth.").unwrap_or(hostname).to_string()
+        let remainder = hostname.strip_prefix("reauth.").unwrap_or(hostname);
+        // Only strip if remainder is a valid domain (contains at least one dot)
+        // This prevents "reauth.dev" from becoming "dev"
+        if remainder.contains('.') {
+            remainder.to_string()
+        } else {
+            hostname.to_string()
+        }
     } else {
         hostname.to_string()
     }

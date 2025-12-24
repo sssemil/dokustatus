@@ -20,8 +20,11 @@ function MagicLinkHandler() {
     }
 
     const consumeToken = async () => {
+      const hostname = window.location.hostname;
+      const isMainApp = hostname === 'reauth.dev' || hostname === 'www.reauth.dev';
+
       try {
-        const res = await fetch('/api/public/domain/reauth.dev/auth/verify-magic-link', {
+        const res = await fetch(`/api/public/domain/${hostname}/auth/verify-magic-link`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
@@ -29,9 +32,16 @@ function MagicLinkHandler() {
         });
 
         if (res.ok) {
+          const data = await res.json();
           setStatus('success');
           setTimeout(() => {
-            router.push('/dashboard');
+            if (isMainApp) {
+              router.push('/dashboard');
+            } else if (data.redirect_url) {
+              window.location.href = data.redirect_url;
+            } else {
+              router.push('/profile');
+            }
           }, 1000);
         } else if (res.status === 401) {
           setStatus('error');

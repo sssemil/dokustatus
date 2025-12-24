@@ -14,6 +14,8 @@ type User = {
 type AppContextType = {
   user: User | null;
   refetchUser: () => Promise<void>;
+  isIngress: boolean;
+  displayDomain: string;
 };
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -30,24 +32,41 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [isIngress, setIsIngress] = useState(false);
+  const [displayDomain, setDisplayDomain] = useState('');
+  const [apiDomain, setApiDomain] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const pathname = usePathname();
   const { theme, cycleTheme } = useTheme();
 
+  useEffect(() => {
+    const hostname = window.location.hostname;
+    const isMainApp = hostname === 'reauth.dev' || hostname === 'www.reauth.dev';
+    setIsIngress(!isMainApp && hostname !== 'localhost');
+    setApiDomain(hostname);
+
+    // Display domain: strip "reauth." prefix for ingress subdomains
+    const rootDomain = hostname.startsWith('reauth.') && hostname !== 'reauth.dev'
+      ? hostname.slice(7)
+      : hostname;
+    setDisplayDomain(rootDomain);
+  }, []);
+
   const fetchUser = async () => {
+    const hostname = window.location.hostname;
     try {
-      let res = await fetch('/api/public/domain/reauth.dev/auth/session', { credentials: 'include' });
+      let res = await fetch(`/api/public/domain/${hostname}/auth/session`, { credentials: 'include' });
 
       // If session check fails with 401, try to refresh the token
       if (res.status === 401) {
-        const refreshRes = await fetch('/api/public/domain/reauth.dev/auth/refresh', {
+        const refreshRes = await fetch(`/api/public/domain/${hostname}/auth/refresh`, {
           method: 'POST',
           credentials: 'include',
         });
         if (refreshRes.ok) {
           // Retry session check after refresh
-          res = await fetch('/api/public/domain/reauth.dev/auth/session', { credentials: 'include' });
+          res = await fetch(`/api/public/domain/${hostname}/auth/session`, { credentials: 'include' });
         }
       }
 
@@ -85,8 +104,10 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   }, []);
 
   const handleLogout = async () => {
-    await fetch('/api/public/domain/reauth.dev/auth/logout', { method: 'POST', credentials: 'include' });
-    router.push('/');
+    const hostname = window.location.hostname;
+    await fetch(`/api/public/domain/${hostname}/auth/logout`, { method: 'POST', credentials: 'include' });
+    // Full page reload to clear state
+    window.location.href = '/';
   };
 
   const themeLabel = theme === 'dark' ? 'Dark' : theme === 'light' ? 'Light' : 'System';
@@ -99,6 +120,20 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     );
   }
 
+  // Simplified layout for ingress domains (custom domains)
+  if (isIngress) {
+    return (
+      <AppContext.Provider value={{ user, refetchUser: fetchUser, isIngress, displayDomain }}>
+        <main className="flex items-center justify-center" style={{ padding: 'var(--spacing-xl)' }}>
+          <div style={{ maxWidth: '400px', width: '100%' }}>
+            {children}
+          </div>
+        </main>
+      </AppContext.Provider>
+    );
+  }
+
+  // Full dashboard layout for reauth.dev
   const navItems = [
     { href: '/dashboard', label: 'Dashboard', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
     { href: '/domains', label: 'Domains', icon: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9' },
@@ -108,7 +143,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const emailInitial = user.email ? user.email.charAt(0).toUpperCase() : '?';
 
   return (
-    <AppContext.Provider value={{ user, refetchUser: fetchUser }}>
+    <AppContext.Provider value={{ user, refetchUser: fetchUser, isIngress, displayDomain }}>
       <div style={{ display: 'flex', minHeight: '100vh' }}>
         {/* Sidebar */}
         <aside style={{
@@ -128,7 +163,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           {/* Nav items */}
           <nav style={{ flex: 1 }}>
             {navItems.map((item) => {
-              const isActive = pathname === item.href || (item.href === '/settings' && pathname === '/profile');
+              const isActive = pathname === item.href;
               return (
                 <Link
                   key={item.href}
@@ -215,7 +250,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 zIndex: 100,
               }}>
                 <button
-                  onClick={() => { setMenuOpen(false); router.push('/profile'); }}
+                  onClick={() => { setMenuOpen(false); window.location.href = 'https://reauth.reauth.dev/profile'; }}
                   style={{
                     width: '100%',
                     padding: 'var(--spacing-sm) var(--spacing-md)',

@@ -7,20 +7,63 @@ export default function Home() {
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<'checking' | 'idle' | 'loading' | 'sent' | 'error'>('checking');
   const [errorMessage, setErrorMessage] = useState('');
+  const [displayDomain, setDisplayDomain] = useState('');
   const router = useRouter();
 
   useEffect(() => {
+    const hostname = window.location.hostname;
+
+    // Determine if we're on an auth ingress (reauth.* subdomain) or main app (reauth.dev)
+    const isMainApp = hostname === 'reauth.dev' || hostname === 'www.reauth.dev';
+    const isLocalhost = hostname === 'localhost';
+
+    // For API calls, use the current hostname (ingress handles its own domain)
+    const apiDomain = hostname;
+
+    // Display domain: strip "reauth." prefix for ingress subdomains
+    const rootDomain = hostname.startsWith('reauth.') && hostname !== 'reauth.dev'
+      ? hostname.slice(7)
+      : hostname;
+    setDisplayDomain(rootDomain);
+
     const checkAuth = async () => {
       try {
-        const res = await fetch('/api/public/domain/reauth.dev/auth/session', { credentials: 'include' });
+        const res = await fetch(`/api/public/domain/${apiDomain}/auth/session`, { credentials: 'include' });
         if (res.ok) {
-          router.push('/dashboard');
-          return;
+          const data = await res.json();
+          if (data.valid) {
+            if (isMainApp) {
+              // On reauth.dev, go to dashboard
+              router.push('/dashboard');
+            } else {
+              // On ingress, fetch redirect URL and redirect there
+              try {
+                const configRes = await fetch(`/api/public/domain/${apiDomain}/config`);
+                if (configRes.ok) {
+                  const config = await configRes.json();
+                  if (config.redirect_url) {
+                    window.location.href = config.redirect_url;
+                    return;
+                  }
+                }
+              } catch {}
+              // Fallback: show profile link
+              router.push('/profile');
+            }
+            return;
+          }
         }
       } catch {
-        // Not authenticated, show login form
+        // Not authenticated
       }
-      setStatus('idle');
+
+      if (isMainApp) {
+        // On reauth.dev, redirect to auth ingress for login
+        window.location.href = 'https://reauth.reauth.dev/';
+      } else {
+        // On auth ingress, show login form
+        setStatus('idle');
+      }
     };
     checkAuth();
   }, [router]);
@@ -30,8 +73,10 @@ export default function Home() {
     setStatus('loading');
     setErrorMessage('');
 
+    const hostname = window.location.hostname;
+
     try {
-      const res = await fetch('/api/public/domain/reauth.dev/auth/request-magic-link', {
+      const res = await fetch(`/api/public/domain/${hostname}/auth/request-magic-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
@@ -91,8 +136,9 @@ export default function Home() {
     <main className="flex items-center justify-center">
       <div className="card" style={{ maxWidth: '400px', width: '100%' }}>
         <div className="text-center" style={{ marginBottom: 'var(--spacing-lg)' }}>
-          <h2 style={{ marginBottom: 'var(--spacing-xs)', borderBottom: 'none', paddingBottom: 0 }}>reauth.dev</h2>
-          <p style={{ marginBottom: 'var(--spacing-sm)' }}>Auth, billing, email. One DNS setup.</p>
+          <h2 style={{ marginBottom: 'var(--spacing-xs)', borderBottom: 'none', paddingBottom: 0 }}>
+            {displayDomain || 'Sign In'}
+          </h2>
           <p className="text-muted" style={{ fontSize: '13px', marginBottom: 0 }}>Sign in to your account</p>
         </div>
 

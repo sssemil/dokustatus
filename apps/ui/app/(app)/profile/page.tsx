@@ -1,44 +1,27 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useAppContext } from '../layout';
 
 export default function ProfilePage() {
-  const [email, setEmail] = useState('');
-  const [originalEmail, setOriginalEmail] = useState('');
-  const [updateStatus, setUpdateStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
+  const { user, isIngress, displayDomain } = useAppContext();
   const [deleteStatus, setDeleteStatus] = useState<'idle' | 'confirming' | 'loading'>('idle');
   const [errorMessage, setErrorMessage] = useState('');
-  const router = useRouter();
 
+  // Redirect to ingress if accessed from main app
   useEffect(() => {
-    const fetchUser = async () => {
-      try {
-        const res = await fetch('/api/public/domain/reauth.dev/auth/session', { credentials: 'include' });
-        if (res.ok) {
-          const data = await res.json();
-          setEmail(data.email);
-          setOriginalEmail(data.email);
-        }
-      } catch {
-        // Error handled by layout
-      }
-    };
-    fetchUser();
-  }, []);
+    if (!isIngress) {
+      window.location.href = 'https://reauth.reauth.dev/profile';
+    }
+  }, [isIngress]);
 
-  const handleUpdateEmail = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (email === originalEmail) return;
-
-    setUpdateStatus('loading');
-    setErrorMessage('');
-
-    // For now, just show a message that email update requires verification
-    setTimeout(() => {
-      setUpdateStatus('idle');
-      setErrorMessage('Email updates are not yet available. Coming soon!');
-    }, 500);
+  const handleLogout = async () => {
+    const hostname = window.location.hostname;
+    await fetch(`/api/public/domain/${hostname}/auth/logout`, {
+      method: 'POST',
+      credentials: 'include',
+    });
+    window.location.href = '/';
   };
 
   const handleDeleteAccount = async () => {
@@ -48,15 +31,16 @@ export default function ProfilePage() {
     }
 
     setDeleteStatus('loading');
+    const hostname = window.location.hostname;
 
     try {
-      const res = await fetch('/api/public/domain/reauth.dev/auth/account', {
+      const res = await fetch(`/api/public/domain/${hostname}/auth/account`, {
         method: 'DELETE',
         credentials: 'include',
       });
 
       if (res.ok) {
-        router.push('/');
+        window.location.href = '/';
       } else {
         setDeleteStatus('idle');
         setErrorMessage('Failed to delete account. Please try again.');
@@ -67,59 +51,52 @@ export default function ProfilePage() {
     }
   };
 
-  const hasEmailChanged = email !== originalEmail;
+  // Show loading while redirecting from main app
+  if (!isIngress) {
+    return (
+      <div className="flex items-center justify-center" style={{ minHeight: '200px' }}>
+        <div className="spinner" />
+      </div>
+    );
+  }
 
   return (
     <>
-      <h1>Profile</h1>
-
       <div className="card">
-        <h2>Your email</h2>
-        <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-          This is the email address associated with your account.
-        </p>
+        <div className="text-center" style={{ marginBottom: 'var(--spacing-lg)' }}>
+          <h2 style={{ marginBottom: 'var(--spacing-xs)', borderBottom: 'none', paddingBottom: 0 }}>
+            {displayDomain}
+          </h2>
+          <p className="text-muted" style={{ fontSize: '13px', marginBottom: 0 }}>Your account</p>
+        </div>
 
-        <form onSubmit={handleUpdateEmail}>
-          <label htmlFor="email">Email address</label>
-          <input
-            id="email"
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            style={{ marginBottom: 'var(--spacing-md)' }}
-          />
+        <div style={{ marginBottom: 'var(--spacing-lg)' }}>
+          <label style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: 'var(--spacing-xs)', display: 'block' }}>
+            Email address
+          </label>
+          <p style={{ margin: 0, wordBreak: 'break-all' }}>{user?.email}</p>
+        </div>
 
-          {errorMessage && (
-            <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
-              {errorMessage}
-            </div>
-          )}
-
-          {updateStatus === 'success' && (
-            <div className="message success" style={{ marginBottom: 'var(--spacing-md)' }}>
-              Email updated successfully!
-            </div>
-          )}
-
-          <button
-            type="submit"
-            className="primary"
-            disabled={!hasEmailChanged || updateStatus === 'loading'}
-          >
-            {updateStatus === 'loading' ? 'Updating...' : 'Update email'}
-          </button>
-        </form>
+        <button onClick={handleLogout} style={{ width: '100%' }}>
+          Sign out
+        </button>
       </div>
 
-      <div className="card" style={{ borderColor: 'var(--accent-red)' }}>
-        <h2 style={{ color: 'var(--accent-red)' }}>Danger Zone</h2>
-        <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-          Permanently delete your account and all associated data. This action cannot be undone.
+      <div className="card" style={{ borderColor: 'var(--accent-red)', marginTop: 'var(--spacing-lg)' }}>
+        <h3 style={{ color: 'var(--accent-red)', fontSize: '14px', marginBottom: 'var(--spacing-sm)' }}>Danger Zone</h3>
+        <p className="text-muted" style={{ fontSize: '13px', marginBottom: 'var(--spacing-md)' }}>
+          Permanently delete your account and all associated data.
         </p>
+
+        {errorMessage && (
+          <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
+            {errorMessage}
+          </div>
+        )}
 
         {deleteStatus === 'confirming' && (
           <div className="message warning" style={{ marginBottom: 'var(--spacing-md)' }}>
-            Are you sure? This will permanently delete your account and all data.
+            Are you sure? This action cannot be undone.
           </div>
         )}
 
@@ -128,16 +105,17 @@ export default function ProfilePage() {
             className="danger"
             onClick={handleDeleteAccount}
             disabled={deleteStatus === 'loading'}
+            style={{ flex: 1 }}
           >
             {deleteStatus === 'loading'
               ? 'Deleting...'
               : deleteStatus === 'confirming'
-              ? 'Yes, delete my account'
+              ? 'Yes, delete'
               : 'Delete Account'}
           </button>
 
           {deleteStatus === 'confirming' && (
-            <button onClick={() => setDeleteStatus('idle')}>
+            <button onClick={() => setDeleteStatus('idle')} style={{ flex: 1 }}>
               Cancel
             </button>
           )}

@@ -17,13 +17,7 @@ reauth.dev, www.reauth.dev {
     reverse_proxy 127.0.0.1:3000
 }
 
-# Ingress subdomain - serves static page
-ingress.reauth.dev {
-    root * /srv/ingress
-    file_server
-}
-
-# Catch-all for custom domains (on-demand TLS)
+# Catch-all for custom domains including reauth.reauth.dev (on-demand TLS)
 # This handles any domain that CNAMEs to ingress.reauth.dev
 :443 {
     tls {
@@ -35,17 +29,6 @@ ingress.reauth.dev {
         reverse_proxy 127.0.0.1:3001
     }
 
-    # Magic link verification page - proxy to UI
-    handle /magic* {
-        reverse_proxy 127.0.0.1:3000
-    }
-
-    # Next.js static assets needed for magic page
-    handle /_next/* {
-        reverse_proxy 127.0.0.1:3000
-    }
-
-    # Static ingress page (login form)
-    root * /srv/ingress
-    file_server
+    # All other routes go to Next.js UI
+    reverse_proxy 127.0.0.1:3000
 }
