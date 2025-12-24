@@ -6,7 +6,7 @@ INFRA_DIR="${ROOT_DIR}/infra"
 COMPOSE_FILE="${INFRA_DIR}/compose.yml"
 ENV_FILE="${ENV_FILE:-${INFRA_DIR}/.env}"
 SECRETS_DIR="${SECRETS_DIR:-${INFRA_DIR}/secrets}"
-NGINX_DIR="${INFRA_DIR}/nginx"
+CADDY_DIR="${INFRA_DIR}/caddy"
 
 DEPLOY_HOST="${DEPLOY_HOST:-}"
 DEPLOY_USER="${DEPLOY_USER:-$USER}"
@@ -47,12 +47,11 @@ docker save "$API_IMAGE" > "${IMAGES_DIR}/reauth-api.tar"
 docker save "$UI_IMAGE" > "${IMAGES_DIR}/reauth-ui.tar"
 
 echo "Syncing artifacts to ${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}"
-ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p ${REMOTE_DIR}/images ${REMOTE_DIR}/nginx ${REMOTE_DIR}/secrets" || true
+ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" "sudo mkdir -p ${REMOTE_DIR}/images ${REMOTE_DIR}/caddy/ingress ${REMOTE_DIR}/secrets && sudo chown -R ${DEPLOY_USER}:${DEPLOY_USER} ${REMOTE_DIR}" || true
 
 rsync -az -e "ssh ${SSH_OPTS}" "$COMPOSE_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/compose.yml"
 rsync -az -e "ssh ${SSH_OPTS}" "$ENV_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/.env"
-rsync -az -e "ssh ${SSH_OPTS}" "$NGINX_DIR/" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/nginx/"
-rsync -az -e "ssh ${SSH_OPTS}" "${INFRA_DIR}/certbot-check.sh" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/certbot-check.sh"
+rsync -az -e "ssh ${SSH_OPTS}" "$CADDY_DIR/" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/caddy/"
 rsync -az -e "ssh ${SSH_OPTS}" "$SECRETS_DIR/" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/secrets/"
 rsync -az -e "ssh ${SSH_OPTS}" "$IMAGES_DIR/" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/images/"
 
@@ -60,15 +59,14 @@ echo "Deploying on remote host..."
 ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
 set -euo pipefail
 cd "${REMOTE_DIR}"
-chmod +x certbot-check.sh
 docker load -i images/reauth-api.tar
 docker load -i images/reauth-ui.tar
 
 # Try docker compose (v2) first, fall back to docker-compose (v1)
 if docker compose version >/dev/null 2>&1; then
-  docker compose -f compose.yml --env-file .env up -d
+  docker compose -f compose.yml --env-file .env up -d --remove-orphans
 else
-  docker-compose -f compose.yml --env-file .env up -d
+  docker-compose -f compose.yml --env-file .env up -d --remove-orphans
 fi
 EOF
 

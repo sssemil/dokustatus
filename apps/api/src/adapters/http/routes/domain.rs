@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{delete, get, post},
@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(create_domain))
         .route("/", get(list_domains))
+        .route("/check-allowed", get(check_allowed))
         .route("/{domain_id}", get(get_domain))
         .route("/{domain_id}/verify", post(start_verification))
         .route("/{domain_id}/status", get(get_verification_status))
@@ -29,6 +30,24 @@ pub fn router() -> Router<AppState> {
 #[derive(Deserialize)]
 struct CreateDomainPayload {
     domain: String,
+}
+
+#[derive(Deserialize)]
+struct CheckAllowedParams {
+    domain: String,
+}
+
+/// Used by Caddy's on_demand_tls to check if a domain is allowed for SSL provisioning.
+/// Returns 200 if domain is verified, 404 otherwise.
+/// This endpoint is public (no auth required).
+async fn check_allowed(
+    State(app_state): State<AppState>,
+    Query(params): Query<CheckAllowedParams>,
+) -> impl IntoResponse {
+    match app_state.domain_use_cases.is_domain_allowed(&params.domain).await {
+        Ok(true) => StatusCode::OK,
+        _ => StatusCode::NOT_FOUND,
+    }
 }
 
 #[derive(Serialize)]

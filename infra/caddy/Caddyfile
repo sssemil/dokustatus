@@ -1,0 +1,41 @@
+{
+    email contact@tqdm.org
+
+    on_demand_tls {
+        ask http://127.0.0.1:3001/api/domains/check-allowed
+    }
+}
+
+# Main app - reauth.dev and www.reauth.dev
+reauth.dev, www.reauth.dev {
+    # API routes
+    handle /api/* {
+        reverse_proxy 127.0.0.1:3001
+    }
+
+    # Everything else goes to UI
+    reverse_proxy 127.0.0.1:3000
+}
+
+# Ingress subdomain - serves static page
+ingress.reauth.dev {
+    root * /srv/ingress
+    file_server
+}
+
+# Catch-all for custom domains (on-demand TLS)
+# This handles any domain that CNAMEs to ingress.reauth.dev
+:443 {
+    tls {
+        on_demand
+    }
+
+    # API routes for custom domains (session checks, auth)
+    handle /api/* {
+        reverse_proxy 127.0.0.1:3001
+    }
+
+    # Static ingress page
+    root * /srv/ingress
+    file_server
+}

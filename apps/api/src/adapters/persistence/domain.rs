@@ -53,6 +53,17 @@ impl DomainRepo for PostgresPersistence {
         Ok(row.map(row_to_profile))
     }
 
+    async fn get_by_domain(&self, domain: &str) -> AppResult<Option<DomainProfile>> {
+        let row = sqlx::query(
+            "SELECT id, user_id, domain, status, verification_started_at, verified_at, created_at, updated_at FROM domains WHERE domain = $1",
+        )
+        .bind(domain)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+        Ok(row.map(row_to_profile))
+    }
+
     async fn list_by_user(&self, user_id: Uuid) -> AppResult<Vec<DomainProfile>> {
         let rows = sqlx::query(
             "SELECT id, user_id, domain, status, verification_started_at, verified_at, created_at, updated_at FROM domains WHERE user_id = $1 ORDER BY created_at DESC",
@@ -144,7 +155,6 @@ impl DomainRepo for PostgresPersistence {
                 SELECT id, user_id, domain, status, verification_started_at, verified_at, created_at, updated_at
                 FROM domains
                 WHERE status = 'verifying'
-                  AND verification_started_at > NOW() - INTERVAL '1 hour'
             "#,
         )
         .fetch_all(&self.pool)

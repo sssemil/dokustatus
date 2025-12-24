@@ -12,6 +12,7 @@ use crate::domain::entities::domain::DomainStatus;
 pub trait DomainRepo: Send + Sync {
     async fn create(&self, user_id: Uuid, domain: &str) -> AppResult<DomainProfile>;
     async fn get_by_id(&self, domain_id: Uuid) -> AppResult<Option<DomainProfile>>;
+    async fn get_by_domain(&self, domain: &str) -> AppResult<Option<DomainProfile>>;
     async fn list_by_user(&self, user_id: Uuid) -> AppResult<Vec<DomainProfile>>;
     async fn update_status(&self, domain_id: Uuid, status: &str) -> AppResult<DomainProfile>;
     async fn set_verifying(&self, domain_id: Uuid) -> AppResult<DomainProfile>;
@@ -129,6 +130,16 @@ impl DomainUseCases {
 
     pub async fn get_verifying_domains(&self) -> AppResult<Vec<DomainProfile>> {
         self.repo.get_verifying_domains().await
+    }
+
+    /// Check if a domain is allowed for SSL provisioning (used by Caddy on_demand_tls)
+    #[instrument(skip(self))]
+    pub async fn is_domain_allowed(&self, domain: &str) -> AppResult<bool> {
+        let domain = self.repo.get_by_domain(domain).await?;
+        match domain {
+            Some(d) if d.status == DomainStatus::Verified => Ok(true),
+            _ => Ok(false),
+        }
     }
 }
 

@@ -33,6 +33,12 @@ This project pairs a Rust backend (Axum + SQLx, Redis for rate limits) with a Ne
 - Commit history favors short, imperative summaries (e.g., `polish up ui a bit and new endpoints`, `fix env default val`); follow that style.
 - PRs should include: brief description, linked issue (if any), list of commands/tests run, and screenshots for UI changes. Note schema changes and required env updates explicitly.
 
+## Deployment
+- **Deploy command**: `BUILD_ARGS="--network=host" DEPLOY_HOST=63.178.106.82 DEPLOY_USER=ubuntu REMOTE_DIR=/opt/reauth ./infra/deploy.sh`
+- The deploy script builds Docker images, syncs them to the server, and runs `docker compose up -d`.
+- Server runs Caddy for SSL termination with on-demand TLS for custom domains.
+- After deploying, stop orphan nginx containers if needed: `ssh ubuntu@63.178.106.82 "cd /opt/reauth && docker compose down nginx-http nginx-https certbot --remove-orphans"`
+
 ## Security & Configuration Tips
 - Never commit secrets; load them via `.env`. Keep `JWT_SECRET`, DB credentials, and email keys private.
 - When changing request/response shapes, update both backend routes (`apps/api/src/adapters/http/routes/`) and the UI consumers under `apps/ui/app/` to stay in sync.

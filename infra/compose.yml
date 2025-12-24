@@ -1,5 +1,3 @@
-version: "3.9"
-
 x-default-env: &default-env
   env_file:
     - .env
@@ -86,11 +84,11 @@ services:
         POSTGRES_PASSWORD_RAW="$$(cat /run/secrets/postgres_password)"
         POSTGRES_PASSWORD_ENC="$$(echo -n "$$POSTGRES_PASSWORD_RAW" | sed 's/+/%2B/g; s/\//%2F/g; s/=/%3D/g')"
         export DATABASE_URL="postgres://${DB_USER}:$$POSTGRES_PASSWORD_ENC@${DB_HOST}:${DB_PORT}/${DB_NAME}"
-        
+
         # Redis password should NOT be URL-encoded - Redis client handles it differently
         REDIS_PASSWORD_RAW="$$(cat /run/secrets/redis_password)"
         export REDIS_URL="redis://default:$$REDIS_PASSWORD_RAW@${REDIS_HOST}:${REDIS_PORT}"
-        
+
         export JWT_SECRET="$$(cat /run/secrets/jwt_secret)"
         export RESEND_API_KEY="$$(cat /run/secrets/resend_api_key)"
         exec reauth-api
@@ -140,63 +138,24 @@ services:
     networks:
       - reauth-net
 
-  nginx-http:
-    image: nginx:latest
+  caddy:
+    image: caddy:2-alpine
     network_mode: host
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        envsubst '$$PRIMARY_DOMAIN' < /etc/nginx/templates/http.conf.template > /etc/nginx/nginx.conf
-        exec nginx -g 'daemon off;'
-    environment:
-      PRIMARY_DOMAIN: ${LETSENCRYPT_PRIMARY_DOMAIN:?}
     volumes:
-      - ./nginx/http.conf.template:/etc/nginx/templates/http.conf.template:ro
-      - certbot-www-data:/var/www/certbot
-    restart: unless-stopped
-
-  nginx-https:
-    image: nginx:latest
-    network_mode: host
-    entrypoint:
-      - /bin/sh
-      - -c
-      - |
-        envsubst '$$PRIMARY_DOMAIN' < /etc/nginx/templates/https.conf.template > /etc/nginx/nginx.conf
-        exec nginx -g 'daemon off;'
-    environment:
-      PRIMARY_DOMAIN: ${LETSENCRYPT_PRIMARY_DOMAIN:?}
-    volumes:
-      - ./nginx/https.conf.template:/etc/nginx/templates/https.conf.template:ro
-      - letsencrypt-data:/etc/letsencrypt
-      - nginx-logs-data:/var/log/nginx
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/ingress:/srv/ingress:ro
+      - caddy-data:/data
+      - caddy-config:/config
     depends_on:
       - ui
-      - certbot
+      - api
     restart: unless-stopped
-
-  certbot:
-    image: certbot/certbot:latest
-    entrypoint: [ "sh", "/certbot-check.sh" ]
-    environment:
-      CERTBOT_EMAIL: ${LETSENCRYPT_EMAIL:?}
-      CERTBOT_DOMAINS: ${LETSENCRYPT_DOMAINS:?}
-      CERTBOT_STAGING: ${LETSENCRYPT_STAGING:-false}
-    volumes:
-      - letsencrypt-data:/etc/letsencrypt
-      - certbot-www-data:/var/www/certbot
-      - ./certbot-check.sh:/certbot-check.sh:ro
-    restart: unless-stopped
-    networks:
-      - reauth-net
 
 volumes:
   postgres_data:
   redis_data:
-  letsencrypt-data:
-  nginx-logs-data:
-  certbot-www-data:
+  caddy-data:
+  caddy-config:
 
 secrets:
   jwt_secret:
