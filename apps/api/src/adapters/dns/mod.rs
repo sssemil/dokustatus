@@ -22,7 +22,14 @@ impl DnsVerifier for HickoryDnsVerifier {
     async fn check_cname(&self, domain: &str, expected_target: &str) -> AppResult<bool> {
         debug!(domain = %domain, expected = %expected_target, "Checking CNAME record");
 
-        match self.resolver.lookup(domain, RecordType::CNAME).await {
+        // Append trailing dot to make it an FQDN and prevent search domain appending
+        let fqdn = if domain.ends_with('.') {
+            domain.to_string()
+        } else {
+            format!("{}.", domain)
+        };
+
+        match self.resolver.lookup(&fqdn, RecordType::CNAME).await {
             Ok(lookup) => {
                 for record in lookup.records() {
                     if let Some(cname) = record.data().as_cname() {
@@ -49,7 +56,14 @@ impl DnsVerifier for HickoryDnsVerifier {
     async fn check_txt(&self, domain: &str, expected_value: &str) -> AppResult<bool> {
         debug!(domain = %domain, expected = %expected_value, "Checking TXT record");
 
-        match self.resolver.lookup(domain, RecordType::TXT).await {
+        // Append trailing dot to make it an FQDN and prevent search domain appending
+        let fqdn = if domain.ends_with('.') {
+            domain.to_string()
+        } else {
+            format!("{}.", domain)
+        };
+
+        match self.resolver.lookup(&fqdn, RecordType::TXT).await {
             Ok(lookup) => {
                 for record in lookup.records() {
                     if let Some(txt) = record.data().as_txt() {

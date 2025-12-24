@@ -12,14 +12,9 @@ export default function Home() {
   useEffect(() => {
     const checkAuth = async () => {
       try {
-        const res = await fetch('/api/user/me', { credentials: 'include' });
+        const res = await fetch('/api/public/domain/reauth.dev/auth/session', { credentials: 'include' });
         if (res.ok) {
-          const user = await res.json();
-          if (user.on_waitlist) {
-            router.push('/waitlist');
-          } else {
-            router.push('/dashboard');
-          }
+          router.push('/dashboard');
           return;
         }
       } catch {
@@ -36,7 +31,7 @@ export default function Home() {
     setErrorMessage('');
 
     try {
-      const res = await fetch('/api/auth/request', {
+      const res = await fetch('/api/public/domain/reauth.dev/auth/request-magic-link', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),
@@ -98,7 +93,7 @@ export default function Home() {
         <div className="text-center" style={{ marginBottom: 'var(--spacing-lg)' }}>
           <h2 style={{ marginBottom: 'var(--spacing-xs)', borderBottom: 'none', paddingBottom: 0 }}>reauth.dev</h2>
           <p style={{ marginBottom: 'var(--spacing-sm)' }}>Auth, billing, email. One DNS setup.</p>
-          <p className="text-muted" style={{ fontSize: '13px', marginBottom: 0 }}>Sign in to join the waitlist</p>
+          <p className="text-muted" style={{ fontSize: '13px', marginBottom: 0 }}>Sign in to your account</p>
         </div>
 
         <form onSubmit={handleSubmit}>

@@ -14,7 +14,7 @@ export default function ProfilePage() {
   useEffect(() => {
     const fetchUser = async () => {
       try {
-        const res = await fetch('/api/user/me', { credentials: 'include' });
+        const res = await fetch('/api/public/domain/reauth.dev/auth/session', { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
           setEmail(data.email);
@@ -50,7 +50,7 @@ export default function ProfilePage() {
     setDeleteStatus('loading');
 
     try {
-      const res = await fetch('/api/user/delete', {
+      const res = await fetch('/api/public/domain/reauth.dev/auth/account', {
         method: 'DELETE',
         credentials: 'include',
       });

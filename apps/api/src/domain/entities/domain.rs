@@ -32,7 +32,7 @@ impl DomainStatus {
 #[derive(Debug)]
 pub struct Domain {
     pub id: Uuid,
-    pub user_id: Uuid,
+    pub owner_end_user_id: Option<Uuid>, // NULL for system domains like reauth.dev
     pub domain: String,
     pub status: DomainStatus,
     pub verification_started_at: Option<chrono::NaiveDateTime>,

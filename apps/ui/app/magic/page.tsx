@@ -21,7 +21,7 @@ function MagicLinkHandler() {
 
     const consumeToken = async () => {
       try {
-        const res = await fetch('/api/auth/consume', {
+        const res = await fetch('/api/public/domain/reauth.dev/auth/verify-magic-link', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
@@ -30,13 +30,8 @@ function MagicLinkHandler() {
 
         if (res.ok) {
           setStatus('success');
-          // Check user status to determine redirect
-          const meRes = await fetch('/api/user/me', { credentials: 'include' });
-          const redirectPath = meRes.ok && (await meRes.json()).on_waitlist === false
-            ? '/dashboard'
-            : '/waitlist';
           setTimeout(() => {
-            router.push(redirectPath);
+            router.push('/dashboard');
           }, 1000);
         } else if (res.status === 401) {
           setStatus('error');

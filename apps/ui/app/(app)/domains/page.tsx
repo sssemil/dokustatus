@@ -17,7 +17,7 @@ type Domain = {
   created_at: string | null;
 };
 
-type WizardStep = 'closed' | 'input' | 'records' | 'verifying';
+type WizardStep = 'closed' | 'input' | 'records';
 
 export default function DomainsPage() {
   const router = useRouter();
@@ -47,42 +47,64 @@ export default function DomainsPage() {
     fetchDomains();
   }, [fetchDomains]);
 
-  useEffect(() => {
-    if (wizardStep !== 'verifying' || !createdDomain) return;
 
-    const interval = setInterval(async () => {
-      try {
-        const res = await fetch(`/api/domains/${createdDomain.id}/status`, {
-          credentials: 'include',
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (data.status === 'verified') {
-            clearInterval(interval);
-            setWizardStep('closed');
-            setCreatedDomain(null);
-            fetchDomains();
-          } else if (data.status === 'failed') {
-            clearInterval(interval);
-            setWizardStep('closed');
-            setCreatedDomain(null);
-            fetchDomains();
-          }
+  const validateDomain = (domain: string): string | null => {
+    const trimmed = domain.trim().toLowerCase();
+
+    if (!trimmed) {
+      return 'Please enter a domain name';
+    }
+
+    // Check for protocol prefix
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return 'Enter just the domain name without http:// or https://';
+    }
+
+    // Check for path
+    if (trimmed.includes('/')) {
+      return 'Enter just the domain name without any path';
+    }
+
+    // Basic domain format check
+    const parts = trimmed.split('.');
+    if (parts.length < 2) {
+      return 'Please enter a valid domain (e.g., example.com)';
+    }
+
+    // Check for empty parts (e.g., "example..com")
+    if (parts.some(p => p.length === 0)) {
+      return 'Invalid domain format';
+    }
+
+    // Multi-part TLDs
+    const multiPartTlds = ['co.uk', 'com.au', 'co.nz', 'com.br', 'co.jp', 'org.uk', 'net.au'];
+    for (const tld of multiPartTlds) {
+      if (trimmed.endsWith(tld)) {
+        if (parts.length > 3) {
+          return `Please enter your root domain (e.g., example.${tld}), not a subdomain`;
         }
-      } catch {
-        // Continue polling
+        if (parts.length < 3) {
+          return 'Please enter a valid domain';
+        }
+        return null; // Valid multi-part TLD domain
       }
-    }, 5000);
+    }
 
-    return () => clearInterval(interval);
-  }, [wizardStep, createdDomain, fetchDomains]);
+    // Standard TLDs - should have exactly 2 parts
+    if (parts.length > 2) {
+      return `Please enter your root domain (e.g., ${parts.slice(-2).join('.')}), not a subdomain`;
+    }
+
+    return null; // Valid
+  };
 
   const handleCreateDomain = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
 
-    if (!newDomain.trim()) {
-      setError('Please enter a domain name');
+    const validationError = validateDomain(newDomain);
+    if (validationError) {
+      setError(validationError);
       return;
     }
 
@@ -90,7 +112,7 @@ export default function DomainsPage() {
       const res = await fetch('/api/domains', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain: newDomain.trim() }),
+        body: JSON.stringify({ domain: newDomain.trim().toLowerCase() }),
         credentials: 'include',
       });
 
@@ -118,8 +140,8 @@ export default function DomainsPage() {
       });
 
       if (res.ok) {
-        setWizardStep('verifying');
-        fetchDomains();
+        // Navigate to domain detail page
+        router.push(`/domains/${createdDomain.id}`);
       } else {
         setError('Failed to start verification');
       }
@@ -231,18 +253,21 @@ export default function DomainsPage() {
             <>
               <h2>Add a domain</h2>
               <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-                Enter the domain you want to use for authentication.
+                Enter your root domain. Your login page will be at <code>reauth.yourdomain.com</code>
               </p>
               <form onSubmit={handleCreateDomain}>
-                <label htmlFor="domain">Domain name</label>
+                <label htmlFor="domain">Root domain</label>
                 <input
                   id="domain"
                   type="text"
                   value={newDomain}
                   onChange={(e) => setNewDomain(e.target.value)}
-                  placeholder="login.example.com"
+                  placeholder="example.com"
                   style={{ marginBottom: 'var(--spacing-md)' }}
                 />
+                <p className="text-muted" style={{ fontSize: '12px', marginTop: '-12px', marginBottom: 'var(--spacing-md)' }}>
+                  Enter your root domain (e.g., example.com), not a subdomain
+                </p>
                 {error && (
                   <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
                     {error}
@@ -368,25 +393,6 @@ export default function DomainsPage() {
             </>
           )}
 
-          {wizardStep === 'verifying' && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)' }}>
-                <div className="spinner" />
-                <div>
-                  <h2 style={{ margin: 0 }}>Looking for DNS records...</h2>
-                  <p className="text-muted" style={{ margin: 'var(--spacing-xs) 0 0' }}>
-                    It may take a few minutes or hours, depending on your DNS provider&apos;s propagation time.
-                  </p>
-                </div>
-              </div>
-              <p className="text-muted" style={{ marginTop: 'var(--spacing-md)' }}>
-                You can close this wizard and we&apos;ll keep checking in the background. We&apos;ll email you when verification is complete or if it fails.
-              </p>
-              <button onClick={closeWizard} style={{ marginTop: 'var(--spacing-md)' }}>
-                Close
-              </button>
-            </>
-          )}
         </div>
       )}
 
@@ -404,28 +410,50 @@ export default function DomainsPage() {
           <div
             key={domain.id}
             className="card"
+            onClick={() => router.push(`/domains/${domain.id}`)}
             style={{
               display: 'flex',
               justifyContent: 'space-between',
               alignItems: 'center',
+              cursor: 'pointer',
+              transition: 'background-color 0.15s ease',
             }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)')}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '')}
           >
             <div>
               <div style={{ fontWeight: 600, marginBottom: 'var(--spacing-xs)' }}>{domain.domain}</div>
+              {domain.status === 'verified' && (
+                <div style={{ fontSize: '12px', marginBottom: 'var(--spacing-xs)' }}>
+                  <span className="text-muted">Login: </span>
+                  <span style={{ color: 'var(--accent-blue)' }}>
+                    reauth.{domain.domain}
+                  </span>
+                </div>
+              )}
               {getStatusBadge(domain.status)}
             </div>
-            <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
-              {domain.status === 'verified' && (
-                <button onClick={() => router.push(`/domains/${domain.id}/auth`)}>
-                  Auth Settings
+            <div style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
+              {domain.status === 'failed' && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleRetryVerification(domain);
+                  }}
+                >
+                  Retry
                 </button>
               )}
-              {domain.status === 'failed' && (
-                <button onClick={() => handleRetryVerification(domain)}>Retry</button>
-              )}
-              <button className="danger" onClick={() => handleDeleteDomain(domain.id)}>
+              <button
+                className="danger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleDeleteDomain(domain.id);
+                }}
+              >
                 Delete
               </button>
+              <span className="text-muted" style={{ fontSize: '18px' }}>&rarr;</span>
             </div>
           </div>
         ))

@@ -228,14 +228,24 @@ async fn delete_domain(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Extracts the current end-user from the session.
+/// Only allows access if the user is a reauth.dev end-user (dashboard users).
 fn current_user(jar: &CookieJar, app_state: &AppState) -> AppResult<(CookieJar, Uuid)> {
-    let Some(access_cookie) = jar.get("access_token") else {
+    // Check for end_user_access_token (new auth)
+    let Some(access_cookie) = jar.get("end_user_access_token") else {
         return Err(crate::app_error::AppError::InvalidCredentials);
     };
-    let claims = jwt::verify(access_cookie.value(), &app_state.config.jwt_secret)?;
-    let user_id = Uuid::parse_str(&claims.sub)
+
+    let claims = jwt::verify_domain_end_user(access_cookie.value(), &app_state.config.jwt_secret)?;
+
+    // Only allow reauth.dev end-users to access dashboard
+    if claims.domain != "reauth.dev" {
+        return Err(crate::app_error::AppError::InvalidCredentials);
+    }
+
+    let end_user_id = Uuid::parse_str(&claims.sub)
         .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
-    Ok((jar.clone(), user_id))
+    Ok((jar.clone(), end_user_id))
 }
 
 // ============================================================================

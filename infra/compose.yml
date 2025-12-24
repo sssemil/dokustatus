@@ -76,6 +76,7 @@ services:
       - resend_api_key
       - postgres_password
       - redis_password
+      - process_number_key
     entrypoint:
       - /bin/sh
       - -c
@@ -91,6 +92,7 @@ services:
 
         export JWT_SECRET="$$(cat /run/secrets/jwt_secret)"
         export RESEND_API_KEY="$$(cat /run/secrets/resend_api_key)"
+        export PROCESS_NUMBER_KEY="$$(cat /run/secrets/process_number_key)"
         exec reauth-api
     restart: unless-stopped
     networks:
@@ -166,6 +168,8 @@ secrets:
     file: ./secrets/postgres_password
   redis_password:
     file: ./secrets/redis_password
+  process_number_key:
+    file: ./secrets/process_number_key
 
 networks:
   reauth-net:

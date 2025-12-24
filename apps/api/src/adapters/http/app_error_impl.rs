@@ -12,30 +12,34 @@ impl IntoResponse for AppError {
 
         match self {
             AppError::Database(_) => {
-                error_resp(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::DatabaseError)
+                error_resp(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::DatabaseError, None)
             }
             AppError::InvalidCredentials => {
-                error_resp(StatusCode::UNAUTHORIZED, ErrorCode::InvalidCredentials)
+                error_resp(StatusCode::UNAUTHORIZED, ErrorCode::InvalidCredentials, None)
             }
             AppError::RateLimited => {
-                error_resp(StatusCode::TOO_MANY_REQUESTS, ErrorCode::RateLimited)
+                error_resp(StatusCode::TOO_MANY_REQUESTS, ErrorCode::RateLimited, None)
             }
-            AppError::InvalidInput(_) => {
-                error_resp(StatusCode::BAD_REQUEST, ErrorCode::InvalidInput)
+            AppError::InvalidInput(msg) => {
+                error_resp(StatusCode::BAD_REQUEST, ErrorCode::InvalidInput, Some(msg))
             }
             AppError::TooManyDocuments => {
-                error_resp(StatusCode::BAD_REQUEST, ErrorCode::TooManyDocuments)
+                error_resp(StatusCode::BAD_REQUEST, ErrorCode::TooManyDocuments, None)
             }
             AppError::NotFound => {
-                error_resp(StatusCode::NOT_FOUND, ErrorCode::NotFound)
+                error_resp(StatusCode::NOT_FOUND, ErrorCode::NotFound, None)
             }
             AppError::Internal(_) => {
-                error_resp(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::InternalError)
+                error_resp(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::InternalError, None)
             }
         }
     }
 }
 
-fn error_resp(status: StatusCode, code: ErrorCode) -> Response {
-    (status, Json(serde_json::json!({ "code": code.as_str() }))).into_response()
+fn error_resp(status: StatusCode, code: ErrorCode, message: Option<String>) -> Response {
+    let body = match message {
+        Some(msg) => serde_json::json!({ "code": code.as_str(), "message": msg }),
+        None => serde_json::json!({ "code": code.as_str() }),
+    };
+    (status, Json(body)).into_response()
 }

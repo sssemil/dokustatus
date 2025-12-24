@@ -50,6 +50,7 @@ pub trait DomainEndUserRepo: Send + Sync {
     async fn mark_verified(&self, id: Uuid) -> AppResult<DomainEndUserProfile>;
     async fn update_last_login(&self, id: Uuid) -> AppResult<()>;
     async fn list_by_domain(&self, domain_id: Uuid) -> AppResult<Vec<DomainEndUserProfile>>;
+    async fn delete(&self, id: Uuid) -> AppResult<()>;
 }
 
 #[async_trait]
@@ -74,6 +75,8 @@ pub struct DomainAuthConfigProfile {
     pub magic_link_enabled: bool,
     pub google_oauth_enabled: bool,
     pub redirect_url: Option<String>,
+    pub access_token_ttl_secs: i32,
+    pub refresh_token_ttl_days: i32,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
 }
@@ -93,6 +96,7 @@ pub struct DomainEndUserProfile {
     pub id: Uuid,
     pub domain_id: Uuid,
     pub email: String,
+    pub roles: Vec<String>,
     pub email_verified_at: Option<NaiveDateTime>,
     pub last_login_at: Option<NaiveDateTime>,
     pub created_at: Option<NaiveDateTime>,
@@ -235,8 +239,10 @@ impl DomainAuthUseCases {
             .save(&token_hash, end_user.id, domain.id, ttl_minutes)
             .await?;
 
-        // Build magic link URL (uses the custom domain)
-        let link = format!("https://{}/magic?token={}", domain_name, raw);
+        // Build magic link URL (uses reauth.{domain} for the login page)
+        // The ingress index.html handles ?token= param directly
+        let reauth_hostname = format!("reauth.{}", domain_name);
+        let link = format!("https://{}/?token={}", reauth_hostname, raw);
 
         // Send email
         let subject = "Sign in to your account";
@@ -251,7 +257,7 @@ impl DomainAuthUseCases {
             "This one-time link keeps your account protected; delete this email if you did not request it.";
 
         let button = primary_button(&link, button_label);
-        let origin = format!("https://{}", domain_name);
+        let origin = format!("https://{}", reauth_hostname);
         let html = wrap_email(
             &origin,
             headline,
@@ -289,11 +295,11 @@ impl DomainAuthUseCases {
     // Protected endpoints (for dashboard)
     // ========================================================================
 
-    /// Get auth config for a domain (workspace owner only)
+    /// Get auth config for a domain (domain owner only)
     #[instrument(skip(self))]
     pub async fn get_auth_config(
         &self,
-        user_id: Uuid,
+        end_user_id: Uuid,
         domain_id: Uuid,
     ) -> AppResult<(DomainAuthConfigProfile, Option<DomainAuthMagicLinkProfile>)> {
         // Verify ownership
@@ -303,7 +309,7 @@ impl DomainAuthUseCases {
             .await?
             .ok_or(AppError::NotFound)?;
 
-        if domain.user_id != user_id {
+        if domain.owner_end_user_id != Some(end_user_id) {
             return Err(AppError::InvalidCredentials);
         }
 
@@ -317,6 +323,8 @@ impl DomainAuthUseCases {
                 magic_link_enabled: false,
                 google_oauth_enabled: false,
                 redirect_url: None,
+                access_token_ttl_secs: 86400,
+                refresh_token_ttl_days: 30,
                 created_at: None,
                 updated_at: None,
             });
@@ -326,11 +334,11 @@ impl DomainAuthUseCases {
         Ok((auth_config, magic_link_config))
     }
 
-    /// Update auth config for a domain (workspace owner only)
+    /// Update auth config for a domain (domain owner only)
     #[instrument(skip(self, resend_api_key))]
     pub async fn update_auth_config(
         &self,
-        user_id: Uuid,
+        end_user_id: Uuid,
         domain_id: Uuid,
         magic_link_enabled: bool,
         google_oauth_enabled: bool,
@@ -345,12 +353,21 @@ impl DomainAuthUseCases {
             .await?
             .ok_or(AppError::NotFound)?;
 
-        if domain.user_id != user_id {
+        if domain.owner_end_user_id != Some(end_user_id) {
             return Err(AppError::InvalidCredentials);
         }
 
         if domain.status != DomainStatus::Verified {
             return Err(AppError::InvalidInput("Domain must be verified before configuring authentication".into()));
+        }
+
+        // Validate redirect URL is on the domain or a subdomain
+        if let Some(url) = redirect_url {
+            if !is_valid_redirect_url(url, &domain.domain) {
+                return Err(AppError::InvalidInput(
+                    format!("Redirect URL must be on {} or a subdomain", domain.domain)
+                ));
+            }
         }
 
         // Update general auth config
@@ -369,9 +386,9 @@ impl DomainAuthUseCases {
         Ok(())
     }
 
-    /// List end-users for a domain (workspace owner only)
+    /// List end-users for a domain (domain owner only)
     #[instrument(skip(self))]
-    pub async fn list_end_users(&self, user_id: Uuid, domain_id: Uuid) -> AppResult<Vec<DomainEndUserProfile>> {
+    pub async fn list_end_users(&self, end_user_id: Uuid, domain_id: Uuid) -> AppResult<Vec<DomainEndUserProfile>> {
         // Verify ownership
         let domain = self
             .domain_repo
@@ -379,11 +396,32 @@ impl DomainAuthUseCases {
             .await?
             .ok_or(AppError::NotFound)?;
 
-        if domain.user_id != user_id {
+        if domain.owner_end_user_id != Some(end_user_id) {
             return Err(AppError::InvalidCredentials);
         }
 
         self.end_user_repo.list_by_domain(domain_id).await
+    }
+
+    /// Delete an end-user account
+    #[instrument(skip(self))]
+    pub async fn delete_end_user(&self, end_user_id: Uuid) -> AppResult<()> {
+        self.end_user_repo.delete(end_user_id).await
+    }
+
+    /// Get auth config for a domain by name (no ownership check, for public endpoints)
+    #[instrument(skip(self))]
+    pub async fn get_auth_config_for_domain(&self, domain_name: &str) -> AppResult<DomainAuthConfigProfile> {
+        let domain = self
+            .domain_repo
+            .get_by_domain(domain_name)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        self.auth_config_repo
+            .get_by_domain_id(domain.id)
+            .await?
+            .ok_or(AppError::NotFound)
     }
 
     // ========================================================================
@@ -427,6 +465,20 @@ fn hash_domain_token(raw: &str, session_id: &str, domain: &str) -> String {
     hex::encode(out)
 }
 
+/// Validate that a redirect URL is on the specified domain or a subdomain
+fn is_valid_redirect_url(url: &str, domain: &str) -> bool {
+    let Ok(parsed) = url::Url::parse(url) else {
+        return false;
+    };
+
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+
+    // Check if host matches domain exactly or is a subdomain
+    host == domain || host.ends_with(&format!(".{}", domain))
+}
+
 /// Extract root domain from hostname for cookie scoping
 /// e.g., "login.example.com" -> "example.com"
 /// e.g., "app.staging.example.co.uk" -> "example.co.uk"
@@ -467,5 +519,29 @@ mod tests {
         assert_eq!(get_root_domain("example.com"), "example.com");
         assert_eq!(get_root_domain("login.example.co.uk"), "example.co.uk");
         assert_eq!(get_root_domain("app.example.co.uk"), "example.co.uk");
+    }
+
+    #[test]
+    fn test_is_valid_redirect_url() {
+        // Valid: exact domain match
+        assert!(is_valid_redirect_url("https://example.com/callback", "example.com"));
+        assert!(is_valid_redirect_url("https://example.com", "example.com"));
+        assert!(is_valid_redirect_url("http://example.com/path", "example.com"));
+
+        // Valid: subdomain
+        assert!(is_valid_redirect_url("https://app.example.com/callback", "example.com"));
+        assert!(is_valid_redirect_url("https://login.example.com", "example.com"));
+        assert!(is_valid_redirect_url("https://deep.nested.example.com/path", "example.com"));
+
+        // Invalid: different domain
+        assert!(!is_valid_redirect_url("https://evil.com/callback", "example.com"));
+        assert!(!is_valid_redirect_url("https://notexample.com", "example.com"));
+
+        // Invalid: domain suffix attack (evil.com shouldn't match example.com)
+        assert!(!is_valid_redirect_url("https://fakeexample.com", "example.com"));
+
+        // Invalid: malformed URLs
+        assert!(!is_valid_redirect_url("not-a-url", "example.com"));
+        assert!(!is_valid_redirect_url("", "example.com"));
     }
 }

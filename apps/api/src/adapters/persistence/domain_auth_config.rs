@@ -15,6 +15,8 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainAuthConfigProfile {
         magic_link_enabled: row.get("magic_link_enabled"),
         google_oauth_enabled: row.get("google_oauth_enabled"),
         redirect_url: row.get("redirect_url"),
+        access_token_ttl_secs: row.get("access_token_ttl_secs"),
+        refresh_token_ttl_days: row.get("refresh_token_ttl_days"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
     }
@@ -24,7 +26,7 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainAuthConfigProfile {
 impl DomainAuthConfigRepo for PostgresPersistence {
     async fn get_by_domain_id(&self, domain_id: Uuid) -> AppResult<Option<DomainAuthConfigProfile>> {
         let row = sqlx::query(
-            "SELECT id, domain_id, magic_link_enabled, google_oauth_enabled, redirect_url, created_at, updated_at FROM domain_auth_config WHERE domain_id = $1",
+            "SELECT id, domain_id, magic_link_enabled, google_oauth_enabled, redirect_url, access_token_ttl_secs, refresh_token_ttl_days, created_at, updated_at FROM domain_auth_config WHERE domain_id = $1",
         )
         .bind(domain_id)
         .fetch_optional(&self.pool)
@@ -43,14 +45,14 @@ impl DomainAuthConfigRepo for PostgresPersistence {
         let id = Uuid::new_v4();
         let row = sqlx::query(
             r#"
-            INSERT INTO domain_auth_config (id, domain_id, magic_link_enabled, google_oauth_enabled, redirect_url)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO domain_auth_config (id, domain_id, magic_link_enabled, google_oauth_enabled, redirect_url, access_token_ttl_secs, refresh_token_ttl_days)
+            VALUES ($1, $2, $3, $4, $5, 86400, 30)
             ON CONFLICT (domain_id) DO UPDATE SET
                 magic_link_enabled = EXCLUDED.magic_link_enabled,
                 google_oauth_enabled = EXCLUDED.google_oauth_enabled,
                 redirect_url = EXCLUDED.redirect_url,
                 updated_at = CURRENT_TIMESTAMP
-            RETURNING id, domain_id, magic_link_enabled, google_oauth_enabled, redirect_url, created_at, updated_at
+            RETURNING id, domain_id, magic_link_enabled, google_oauth_enabled, redirect_url, access_token_ttl_secs, refresh_token_ttl_days, created_at, updated_at
             "#,
         )
         .bind(id)

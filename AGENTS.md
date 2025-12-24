@@ -46,6 +46,31 @@ The `SQLX_OFFLINE=true` flag is required because the local database may not be r
 - Server runs Caddy for SSL termination with on-demand TLS for custom domains.
 - After deploying, stop orphan nginx containers if needed: `ssh ubuntu@63.178.106.82 "cd /opt/reauth && docker compose down nginx-http nginx-https certbot --remove-orphans"`
 
+## Secrets Management
+Secrets are stored in `infra/secrets/` as individual files (one secret per file). These are mounted into containers via Docker secrets and read at runtime.
+
+**Current secrets:**
+- `jwt_secret` - JWT signing key for user sessions
+- `resend_api_key` - Platform Resend API key for sending emails
+- `postgres_password` - Database password
+- `redis_password` - Redis password
+- `process_number_key` - AES-256 key (base64) for encrypting sensitive data (e.g., domain Resend API keys)
+
+**Adding a new secret:**
+1. Create the file in `infra/secrets/` (e.g., `infra/secrets/my_secret`)
+2. Add to `infra/compose.yml` under the `secrets:` section
+3. Add to the service's `secrets:` list
+4. Export in the service's entrypoint: `export MY_SECRET="$$(cat /run/secrets/my_secret)"`
+
+**Generating keys:**
+```bash
+# Generate a new AES-256 key (for encryption)
+openssl rand -base64 32
+
+# Generate a new JWT secret
+openssl rand -base64 32
+```
+
 ## Security & Configuration Tips
-- Never commit secrets; load them via `.env`. Keep `JWT_SECRET`, DB credentials, and email keys private.
+- Never commit secrets; load them via `infra/secrets/`. Keep `JWT_SECRET`, DB credentials, and email keys private.
 - When changing request/response shapes, update both backend routes (`apps/api/src/adapters/http/routes/`) and the UI consumers under `apps/ui/app/` to stay in sync.

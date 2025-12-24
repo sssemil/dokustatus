@@ -35,7 +35,17 @@ ingress.reauth.dev {
         reverse_proxy 127.0.0.1:3001
     }
 
-    # Static ingress page
+    # Magic link verification page - proxy to UI
+    handle /magic* {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    # Next.js static assets needed for magic page
+    handle /_next/* {
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    # Static ingress page (login form)
     root * /srv/ingress
     file_server
 }

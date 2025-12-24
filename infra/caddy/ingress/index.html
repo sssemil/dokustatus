@@ -191,6 +191,70 @@
     }
     #magic-link-section { display: none; }
     #success-section { display: none; }
+    #dashboard-section { display: none; }
+    .user-email {
+      font-weight: 600;
+      color: #fff;
+      word-break: break-all;
+    }
+    .btn-logout {
+      background: transparent;
+      border: 1px solid #333;
+      color: #ccc;
+      margin-top: 1rem;
+    }
+    .btn-logout:hover:not(:disabled) {
+      background: #333;
+      color: #fff;
+    }
+    .danger-zone {
+      margin-top: 2rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid #333;
+    }
+    .danger-zone h3 {
+      font-size: 0.9rem;
+      color: #ff6b68;
+      margin: 0 0 0.5rem;
+    }
+    .danger-zone p {
+      font-size: 0.85rem;
+      color: #888;
+      margin: 0 0 1rem;
+    }
+    .btn-danger {
+      background: transparent;
+      border: 1px solid #ff6b68;
+      color: #ff6b68;
+    }
+    .btn-danger:hover:not(:disabled) {
+      background: #3d1f1f;
+    }
+    .confirm-delete {
+      display: none;
+      margin-top: 0.75rem;
+    }
+    .confirm-delete.visible {
+      display: block;
+    }
+    .confirm-delete p {
+      color: #ff6b68;
+      margin-bottom: 0.75rem;
+    }
+    .btn-group {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .btn-group button {
+      flex: 1;
+    }
+    .btn-cancel {
+      background: #333;
+      color: #ccc;
+    }
+    .btn-cancel:hover:not(:disabled) {
+      background: #444;
+    }
   </style>
 </head>
 <body>
@@ -255,6 +319,36 @@
         <p class="subtitle" id="success-message">We sent a magic link to your email. Click the link to sign in.</p>
       </div>
 
+      <!-- Dashboard (Logged In) State -->
+      <div id="dashboard-section" style="display: none;">
+        <div class="check-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+          </svg>
+        </div>
+        <h1>You're signed in</h1>
+        <p class="subtitle" id="dashboard-domain-display"></p>
+        <p class="user-email" id="user-email-display"></p>
+        <p id="redirect-notice" class="subtitle" style="display: none; margin-top: 1rem;">
+          Redirecting in <span id="countdown">3</span>s...
+        </p>
+        <button type="button" class="btn-logout" id="logout-btn">Sign out</button>
+
+        <!-- Danger Zone -->
+        <div class="danger-zone">
+          <h3>Danger Zone</h3>
+          <p>Permanently delete your account and all associated data.</p>
+          <button type="button" class="btn-danger" id="delete-account-btn">Delete Account</button>
+          <div id="confirm-delete" class="confirm-delete">
+            <p>Are you sure? This action cannot be undone.</p>
+            <div class="btn-group">
+              <button type="button" class="btn-danger" id="confirm-delete-btn">Yes, delete</button>
+              <button type="button" class="btn-cancel" id="cancel-delete-btn">Cancel</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- Footer -->
       <div class="footer">
         <a href="https://reauth.dev">Powered by reauth.dev</a>
@@ -263,13 +357,16 @@
   </div>
 
   <script>
-    const domain = window.location.hostname;
+    // The hostname is reauth.example.com, extract root domain for display
+    const hostname = window.location.hostname;
+    const rootDomain = hostname.startsWith('reauth.') ? hostname.slice(7) : hostname;
     let config = null;
 
     // DOM Elements
     const loadingSection = document.getElementById('loading-section');
     const loginSection = document.getElementById('login-section');
     const successSection = document.getElementById('success-section');
+    const dashboardSection = document.getElementById('dashboard-section');
     const googleSection = document.getElementById('google-section');
     const magicLinkSection = document.getElementById('magic-link-section');
     const notConfiguredSection = document.getElementById('not-configured-section');
@@ -280,6 +377,70 @@
     const submitBtn = document.getElementById('submit-btn');
     const successTitle = document.getElementById('success-title');
     const successMessage = document.getElementById('success-message');
+    const userEmailDisplay = document.getElementById('user-email-display');
+    const logoutBtn = document.getElementById('logout-btn');
+
+    // Get email from cookie (set as non-httpOnly for display purposes)
+    function getUserEmail() {
+      const match = document.cookie.match(/(?:^|; )end_user_email=([^;]*)/);
+      return match ? decodeURIComponent(match[1]) : null;
+    }
+
+    async function checkSession() {
+      try {
+        const res = await fetch(`/api/public/domain/${hostname}/auth/session`, {
+          credentials: 'include',
+        });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    }
+
+    function showDashboard(email, redirectUrl) {
+      loadingSection.style.display = 'none';
+      loginSection.style.display = 'none';
+      successSection.style.display = 'none';
+      dashboardSection.style.display = 'block';
+      document.getElementById('dashboard-domain-display').textContent = rootDomain;
+      userEmailDisplay.textContent = email || 'authenticated user';
+
+      // If there's a redirect URL, start countdown
+      if (redirectUrl) {
+        const redirectNotice = document.getElementById('redirect-notice');
+        const countdownEl = document.getElementById('countdown');
+        redirectNotice.style.display = 'block';
+
+        let seconds = 3;
+        countdownEl.textContent = seconds;
+
+        const interval = setInterval(() => {
+          seconds--;
+          countdownEl.textContent = seconds;
+          if (seconds <= 0) {
+            clearInterval(interval);
+            window.location.href = redirectUrl;
+          }
+        }, 1000);
+      }
+    }
+
+    async function handleLogout() {
+      logoutBtn.disabled = true;
+      logoutBtn.textContent = 'Signing out...';
+
+      try {
+        await fetch(`/api/public/domain/${hostname}/auth/logout`, {
+          method: 'POST',
+          credentials: 'include',
+        });
+      } catch {
+        // Continue even if request fails - cookies will be cleared by server
+      }
+
+      // Reload to show login page
+      window.location.reload();
+    }
 
     async function init() {
       // Check if we're handling a magic link callback
@@ -291,9 +452,26 @@
         return;
       }
 
-      // Fetch domain config
+      // Check if user is already logged in
+      const isLoggedIn = await checkSession();
+      if (isLoggedIn) {
+        const email = getUserEmail();
+        // Fetch config to get redirect URL
+        let redirectUrl = null;
+        try {
+          const configRes = await fetch(`/api/public/domain/${hostname}/config`);
+          if (configRes.ok) {
+            const configData = await configRes.json();
+            redirectUrl = configData.redirect_url || null;
+          }
+        } catch {}
+        showDashboard(email, redirectUrl);
+        return;
+      }
+
+      // Fetch domain config (use full hostname for API, server extracts root domain)
       try {
-        const res = await fetch(`/api/public/domain/${domain}/config`);
+        const res = await fetch(`/api/public/domain/${hostname}/config`);
         if (res.ok) {
           config = await res.json();
           renderLoginPage();
@@ -308,7 +486,7 @@
     function renderLoginPage() {
       loadingSection.style.display = 'none';
       loginSection.style.display = 'block';
-      domainDisplay.textContent = domain;
+      domainDisplay.textContent = rootDomain;
 
       const hasAnyMethod = config.auth_methods.magic_link || config.auth_methods.google_oauth;
 
@@ -345,7 +523,7 @@
       loadingSection.style.display = 'block';
 
       try {
-        const res = await fetch(`/api/public/domain/${domain}/auth/verify-magic-link`, {
+        const res = await fetch(`/api/public/domain/${hostname}/auth/verify-magic-link`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
@@ -355,13 +533,10 @@
         const data = await res.json();
 
         if (res.ok && data.success) {
-          if (data.redirect_url) {
-            // Redirect to configured URL
-            window.location.href = data.redirect_url;
-          } else {
-            // Show success message
-            showSuccess('Login successful!', `You are now signed in as ${data.email || 'authenticated user'}.`);
-          }
+          // Remove token from URL
+          window.history.replaceState({}, document.title, window.location.pathname);
+          // Show dashboard with countdown if redirect URL exists
+          showDashboard(data.email, data.redirect_url);
         } else {
           showError('This magic link is invalid or has expired. Please request a new one.');
           // Remove token from URL
@@ -385,7 +560,7 @@
       submitBtn.textContent = 'Sending...';
 
       try {
-        const res = await fetch(`/api/public/domain/${domain}/auth/request-magic-link`, {
+        const res = await fetch(`/api/public/domain/${hostname}/auth/request-magic-link`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email }),
@@ -410,6 +585,59 @@
         submitBtn.textContent = 'Send magic link';
       }
     });
+
+    // Delete account elements
+    const deleteAccountBtn = document.getElementById('delete-account-btn');
+    const confirmDeleteSection = document.getElementById('confirm-delete');
+    const confirmDeleteBtn = document.getElementById('confirm-delete-btn');
+    const cancelDeleteBtn = document.getElementById('cancel-delete-btn');
+
+    function showConfirmDelete() {
+      confirmDeleteSection.classList.add('visible');
+      deleteAccountBtn.style.display = 'none';
+    }
+
+    function hideConfirmDelete() {
+      confirmDeleteSection.classList.remove('visible');
+      deleteAccountBtn.style.display = 'block';
+    }
+
+    async function handleDeleteAccount() {
+      confirmDeleteBtn.disabled = true;
+      confirmDeleteBtn.textContent = 'Deleting...';
+      cancelDeleteBtn.disabled = true;
+
+      try {
+        const res = await fetch(`/api/public/domain/${hostname}/auth/account`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+
+        if (res.ok) {
+          // Account deleted, reload to show login
+          window.location.reload();
+        } else {
+          const data = await res.json().catch(() => ({}));
+          showError(data.message || 'Failed to delete account. Please try again.');
+          hideConfirmDelete();
+          confirmDeleteBtn.disabled = false;
+          confirmDeleteBtn.textContent = 'Yes, delete';
+          cancelDeleteBtn.disabled = false;
+        }
+      } catch (e) {
+        showError('Network error. Please try again.');
+        hideConfirmDelete();
+        confirmDeleteBtn.disabled = false;
+        confirmDeleteBtn.textContent = 'Yes, delete';
+        cancelDeleteBtn.disabled = false;
+      }
+    }
+
+    // Event listeners
+    logoutBtn.addEventListener('click', handleLogout);
+    deleteAccountBtn.addEventListener('click', showConfirmDelete);
+    confirmDeleteBtn.addEventListener('click', handleDeleteAccount);
+    cancelDeleteBtn.addEventListener('click', hideConfirmDelete);
 
     // Initialize
     init();

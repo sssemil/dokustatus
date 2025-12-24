@@ -54,6 +54,7 @@ pub struct DomainEndUserClaims {
     pub sub: String,        // end_user_id
     pub domain_id: String,
     pub domain: String,     // root domain (e.g., "example.com")
+    pub roles: Vec<String>, // user's roles (e.g., ["admin", "user"])
     pub exp: i64,
     pub iat: i64,
 }
@@ -62,6 +63,7 @@ pub fn issue_domain_end_user(
     end_user_id: Uuid,
     domain_id: Uuid,
     domain: &str,
+    roles: Vec<String>,
     secret: &secrecy::SecretString,
     ttl: Duration,
 ) -> AppResult<String> {
@@ -75,6 +77,7 @@ pub fn issue_domain_end_user(
         sub: end_user_id.to_string(),
         domain_id: domain_id.to_string(),
         domain: root_domain,
+        roles,
         iat: now,
         exp,
     };

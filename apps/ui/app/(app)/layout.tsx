@@ -8,6 +8,7 @@ import { useTheme } from '../components/ThemeContext';
 type User = {
   email: string;
   id: string;
+  roles: string[];
 };
 
 type AppContextType = {
@@ -36,18 +37,31 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   const fetchUser = async () => {
     try {
-      const res = await fetch('/api/user/me', { credentials: 'include' });
+      let res = await fetch('/api/public/domain/reauth.dev/auth/session', { credentials: 'include' });
+
+      // If session check fails with 401, try to refresh the token
+      if (res.status === 401) {
+        const refreshRes = await fetch('/api/public/domain/reauth.dev/auth/refresh', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (refreshRes.ok) {
+          // Retry session check after refresh
+          res = await fetch('/api/public/domain/reauth.dev/auth/session', { credentials: 'include' });
+        }
+      }
+
       if (res.status === 401) {
         router.push('/');
         return;
       }
       if (res.ok) {
         const data = await res.json();
-        if (data.on_waitlist) {
-          router.push('/waitlist');
+        if (!data.valid) {
+          router.push('/');
           return;
         }
-        setUser({ email: data.email, id: data.id });
+        setUser({ email: data.email || '', id: data.end_user_id || '', roles: data.roles || [] });
       }
     } catch {
       router.push('/');
@@ -71,7 +85,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   }, []);
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
+    await fetch('/api/public/domain/reauth.dev/auth/logout', { method: 'POST', credentials: 'include' });
     router.push('/');
   };
 
@@ -91,7 +105,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     { href: '/settings', label: 'Settings', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
   ];
 
-  const emailInitial = user.email.charAt(0).toUpperCase();
+  const emailInitial = user.email ? user.email.charAt(0).toUpperCase() : '?';
 
   return (
     <AppContext.Provider value={{ user, refetchUser: fetchUser }}>

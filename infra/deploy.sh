@@ -38,7 +38,7 @@ require rsync
 [ -f "${SECRETS_DIR}/jwt_secret" ] || { echo "Secret file ${SECRETS_DIR}/jwt_secret is required" >&2; exit 1; }
 
 echo "Building images..."
-DOCKER_BUILDKIT=1 bash "${ROOT_DIR}/build-images.sh"
+DOCKER_BUILDKIT=1 BUILD_ARGS="${BUILD_ARGS:-}" bash "${ROOT_DIR}/build-images.sh"
 
 IMAGES_DIR="$(mktemp -d "${INFRA_DIR}/images.XXXX")"
 trap 'rm -rf "$IMAGES_DIR"' EXIT
@@ -51,22 +51,36 @@ ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" "sudo mkdir -p ${REMOTE_DIR}/image
 
 rsync -az -e "ssh ${SSH_OPTS}" "$COMPOSE_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/compose.yml"
 rsync -az -e "ssh ${SSH_OPTS}" "$ENV_FILE" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/.env"
-rsync -az -e "ssh ${SSH_OPTS}" "$CADDY_DIR/" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/caddy/"
+
+# Sync caddy files and capture if anything changed
+CADDY_CHANGED=$(rsync -az --itemize-changes -e "ssh ${SSH_OPTS}" "$CADDY_DIR/" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/caddy/" | grep -c '^>f' || true)
+
 rsync -az -e "ssh ${SSH_OPTS}" "$SECRETS_DIR/" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/secrets/"
 rsync -az -e "ssh ${SSH_OPTS}" "$IMAGES_DIR/" "${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}/images/"
 
 echo "Deploying on remote host..."
-ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
+ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" bash -s -- "$CADDY_CHANGED" <<'EOF'
 set -euo pipefail
-cd "${REMOTE_DIR}"
+CADDY_CHANGED="$1"
+cd "${REMOTE_DIR:-/opt/reauth}"
 docker load -i images/reauth-api.tar
 docker load -i images/reauth-ui.tar
 
-# Try docker compose (v2) first, fall back to docker-compose (v1)
-if docker compose version >/dev/null 2>&1; then
-  docker compose -f compose.yml --env-file .env up -d --remove-orphans
-else
-  docker-compose -f compose.yml --env-file .env up -d --remove-orphans
+# Helper function for docker compose
+dc() {
+  if docker compose version >/dev/null 2>&1; then
+    docker compose -f compose.yml --env-file .env "$@"
+  else
+    docker-compose -f compose.yml --env-file .env "$@"
+  fi
+}
+
+dc up -d --remove-orphans
+
+# Restart caddy if its config files changed
+if [ "$CADDY_CHANGED" -gt 0 ]; then
+  echo "Caddy config changed, restarting caddy..."
+  dc restart caddy
 fi
 EOF
 
