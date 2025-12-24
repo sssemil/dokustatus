@@ -20,6 +20,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(create_domain))
         .route("/", get(list_domains))
+        .route("/stats", get(get_usage_stats))
         .route("/check-allowed", get(check_allowed))
         .route("/{domain_id}", get(get_domain))
         .route("/{domain_id}/verify", post(start_verification))
@@ -57,6 +58,31 @@ async fn check_allowed(
         Ok(true) => StatusCode::OK,
         _ => StatusCode::NOT_FOUND,
     }
+}
+
+#[derive(Serialize)]
+struct UsageStatsResponse {
+    domains_count: usize,
+    total_users: i64,
+}
+
+async fn get_usage_stats(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let domains = app_state.domain_use_cases.list_domains(user_id).await?;
+    let domain_ids: Vec<_> = domains.iter().map(|d| d.id).collect();
+    let total_users = app_state
+        .domain_auth_use_cases
+        .count_users_by_domain_ids(&domain_ids)
+        .await?;
+
+    Ok(Json(UsageStatsResponse {
+        domains_count: domains.len(),
+        total_users,
+    }))
 }
 
 #[derive(Serialize)]

@@ -55,6 +55,7 @@ pub trait DomainEndUserRepo: Send + Sync {
     async fn set_frozen(&self, id: Uuid, frozen: bool) -> AppResult<()>;
     async fn set_whitelisted(&self, id: Uuid, whitelisted: bool) -> AppResult<()>;
     async fn whitelist_all_in_domain(&self, domain_id: Uuid) -> AppResult<()>;
+    async fn count_by_domain_ids(&self, domain_ids: &[Uuid]) -> AppResult<i64>;
 }
 
 #[async_trait]
@@ -608,6 +609,11 @@ impl DomainAuthUseCases {
             (Some(key), Some(from)) => Ok((key.clone(), from.clone())),
             _ => Err(AppError::InvalidInput("Email sending not configured for this domain".into())),
         }
+    }
+
+    /// Count total users across multiple domains
+    pub async fn count_users_by_domain_ids(&self, domain_ids: &[Uuid]) -> AppResult<i64> {
+        self.end_user_repo.count_by_domain_ids(domain_ids).await
     }
 }
 

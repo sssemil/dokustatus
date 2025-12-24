@@ -145,4 +145,18 @@ impl DomainEndUserRepo for PostgresPersistence {
             .map_err(AppError::from)?;
         Ok(())
     }
+
+    async fn count_by_domain_ids(&self, domain_ids: &[Uuid]) -> AppResult<i64> {
+        if domain_ids.is_empty() {
+            return Ok(0);
+        }
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM domain_end_users WHERE domain_id = ANY($1)",
+        )
+        .bind(domain_ids)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+        Ok(row.0)
+    }
 }
