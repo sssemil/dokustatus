@@ -71,9 +71,9 @@ export default function ProfilePage() {
 
   return (
     <>
-      <h1 style={{ marginBottom: 'var(--spacing-lg)' }}>Profile</h1>
+      <h1>Profile</h1>
 
-      <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+      <div className="card">
         <h2>Your email</h2>
         <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
           This is the email address associated with your account.

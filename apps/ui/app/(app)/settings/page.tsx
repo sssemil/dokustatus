@@ -14,7 +14,7 @@ export default function SettingsPage() {
 
   return (
     <>
-      <h1 style={{ marginBottom: 'var(--spacing-lg)' }}>Settings</h1>
+      <h1>Settings</h1>
 
       {/* Tabs */}
       <div style={{

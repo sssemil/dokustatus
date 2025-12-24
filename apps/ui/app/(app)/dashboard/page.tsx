@@ -3,7 +3,7 @@
 export default function DashboardPage() {
   return (
     <>
-      <h1 style={{ marginBottom: 'var(--spacing-lg)' }}>Dashboard</h1>
+      <h1>Dashboard</h1>
 
       <div className="card">
         <h2>Welcome back</h2>
