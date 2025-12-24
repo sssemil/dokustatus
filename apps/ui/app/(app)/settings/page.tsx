@@ -22,7 +22,6 @@ export default function SettingsPage() {
         gap: 'var(--spacing-xs)',
         marginBottom: 'var(--spacing-lg)',
         borderBottom: '1px solid var(--border-primary)',
-        paddingBottom: 'var(--spacing-sm)',
       }}>
         {tabs.map((tab) => (
           <button
@@ -32,12 +31,13 @@ export default function SettingsPage() {
               padding: 'var(--spacing-sm) var(--spacing-md)',
               backgroundColor: activeTab === tab.id ? 'var(--bg-tertiary)' : 'transparent',
               border: activeTab === tab.id ? '1px solid var(--border-primary)' : '1px solid transparent',
-              borderBottom: 'none',
+              borderBottom: activeTab === tab.id ? '1px solid var(--bg-tertiary)' : '1px solid transparent',
               borderRadius: 'var(--radius-sm) var(--radius-sm) 0 0',
               color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-muted)',
               cursor: 'pointer',
               fontSize: '14px',
               fontWeight: activeTab === tab.id ? 600 : 400,
+              marginBottom: '-1px',
             }}
           >
             {tab.label}
