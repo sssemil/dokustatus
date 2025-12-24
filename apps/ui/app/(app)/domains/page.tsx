@@ -529,6 +529,7 @@ export default function DomainsPage() {
         confirmLabel="Delete"
         cancelLabel="Cancel"
         variant="danger"
+        confirmText={domains.find(d => d.id === deleteConfirmId)?.domain}
         onConfirm={() => deleteConfirmId && handleDeleteDomain(deleteConfirmId)}
         onCancel={() => setDeleteConfirmId(null)}
       />

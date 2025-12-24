@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useCallback } from 'react';
+import { useEffect, useCallback, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 type ConfirmModalProps = {
@@ -10,6 +10,8 @@ type ConfirmModalProps = {
   confirmLabel?: string;
   cancelLabel?: string;
   variant?: 'danger' | 'default';
+  confirmText?: string;
+  confirmPlaceholder?: string;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -21,9 +23,13 @@ export default function ConfirmModal({
   confirmLabel = 'Confirm',
   cancelLabel = 'Cancel',
   variant = 'default',
+  confirmText,
+  confirmPlaceholder,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
+  const [inputValue, setInputValue] = useState('');
+
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -37,12 +43,15 @@ export default function ConfirmModal({
     if (isOpen) {
       document.addEventListener('keydown', handleKeyDown);
       document.body.style.overflow = 'hidden';
+      setInputValue('');
     }
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = '';
     };
   }, [isOpen, handleKeyDown]);
+
+  const isConfirmDisabled = confirmText ? inputValue !== confirmText : false;
 
   if (!isOpen) return null;
 
@@ -110,6 +119,21 @@ export default function ConfirmModal({
           }}
         >
           {message}
+          {confirmText && (
+            <div style={{ marginTop: 'var(--spacing-md)' }}>
+              <label style={{ display: 'block', marginBottom: 'var(--spacing-xs)', fontSize: '13px' }}>
+                Type <strong style={{ color: 'var(--text-primary)' }}>{confirmText}</strong> to confirm:
+              </label>
+              <input
+                type="text"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                placeholder={confirmPlaceholder || confirmText}
+                style={{ width: '100%', boxSizing: 'border-box' }}
+                autoFocus
+              />
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -125,14 +149,18 @@ export default function ConfirmModal({
           <button onClick={onCancel}>{cancelLabel}</button>
           <button
             onClick={onConfirm}
+            disabled={isConfirmDisabled}
             className={variant === 'danger' ? '' : 'primary'}
             style={
               variant === 'danger'
                 ? {
-                    backgroundColor: 'var(--accent-red)',
+                    backgroundColor: isConfirmDisabled ? 'var(--text-muted)' : 'var(--accent-red)',
                     color: '#fff',
                     border: 'none',
+                    cursor: isConfirmDisabled ? 'not-allowed' : 'pointer',
                   }
+                : isConfirmDisabled
+                ? { opacity: 0.5, cursor: 'not-allowed' }
                 : undefined
             }
           >

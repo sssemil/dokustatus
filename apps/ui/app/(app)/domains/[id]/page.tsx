@@ -68,6 +68,7 @@ export default function DomainDetailPage() {
   const [fromEmail, setFromEmail] = useState('');
   const [redirectUrl, setRedirectUrl] = useState('');
   const [whitelistEnabled, setWhitelistEnabled] = useState(false);
+  const [userSearch, setUserSearch] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -772,6 +773,17 @@ export default function DomainDetailPage() {
       {/* Users Tab */}
       {activeTab === 'users' && domain.status === 'verified' && (
             <>
+              {/* Search Input */}
+              <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                <input
+                  type="text"
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                  placeholder="Search by email..."
+                  style={{ width: '100%', maxWidth: '400px' }}
+                />
+              </div>
+
               {loadingUsers ? (
                 <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
                   <span className="spinner" />
@@ -780,8 +792,14 @@ export default function DomainDetailPage() {
                 <div className="card" style={{ textAlign: 'center' }}>
                   <p className="text-muted">No users have signed up yet.</p>
                 </div>
+              ) : endUsers.filter((user) => user.email.toLowerCase().includes(userSearch.toLowerCase())).length === 0 ? (
+                <div className="card" style={{ textAlign: 'center' }}>
+                  <p className="text-muted">No users match your search.</p>
+                </div>
               ) : (
-                endUsers.map((user) => (
+                endUsers
+                  .filter((user) => user.email.toLowerCase().includes(userSearch.toLowerCase()))
+                  .map((user) => (
                   <div
                     key={user.id}
                     className="card"
@@ -960,6 +978,7 @@ export default function DomainDetailPage() {
         confirmLabel="Delete"
         cancelLabel="Cancel"
         variant="danger"
+        confirmText={domain?.domain}
         onConfirm={handleDeleteDomain}
         onCancel={() => setShowDeleteDomainConfirm(false)}
       />
