@@ -240,9 +240,8 @@ impl DomainAuthUseCases {
             .await?;
 
         // Build magic link URL (uses reauth.{domain} for the login page)
-        // The ingress index.html handles ?token= param directly
         let reauth_hostname = format!("reauth.{}", domain_name);
-        let link = format!("https://{}/?token={}", reauth_hostname, raw);
+        let link = format!("https://{}/magic?token={}", reauth_hostname, raw);
 
         // Send email
         let subject = "Sign in to your account";
