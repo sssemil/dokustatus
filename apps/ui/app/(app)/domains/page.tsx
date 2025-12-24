@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 
 type Domain = {
@@ -28,6 +28,19 @@ export default function DomainsPage() {
   const [createdDomain, setCreatedDomain] = useState<Domain | null>(null);
   const [error, setError] = useState('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close menu when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
+        setOpenMenuId(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const fetchDomains = useCallback(async () => {
     try {
@@ -444,15 +457,63 @@ export default function DomainsPage() {
                   Retry
                 </button>
               )}
-              <button
-                className="danger"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteDomain(domain.id);
-                }}
-              >
-                Delete
-              </button>
+              <div ref={openMenuId === domain.id ? menuRef : null} style={{ position: 'relative' }}>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenMenuId(openMenuId === domain.id ? null : domain.id);
+                  }}
+                  style={{
+                    padding: 'var(--spacing-xs)',
+                    backgroundColor: 'transparent',
+                    border: 'none',
+                    cursor: 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                  }}
+                >
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+                    <circle cx="12" cy="5" r="2" />
+                    <circle cx="12" cy="12" r="2" />
+                    <circle cx="12" cy="19" r="2" />
+                  </svg>
+                </button>
+                {openMenuId === domain.id && (
+                  <div style={{
+                    position: 'absolute',
+                    top: '100%',
+                    right: 0,
+                    marginTop: 'var(--spacing-xs)',
+                    backgroundColor: 'var(--bg-secondary)',
+                    border: '1px solid var(--border-primary)',
+                    borderRadius: 'var(--radius-sm)',
+                    boxShadow: 'var(--shadow-md)',
+                    zIndex: 100,
+                    minWidth: '120px',
+                  }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setOpenMenuId(null);
+                        handleDeleteDomain(domain.id);
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: 'var(--spacing-sm) var(--spacing-md)',
+                        backgroundColor: 'transparent',
+                        border: 'none',
+                        color: 'var(--accent-red)',
+                        fontSize: '13px',
+                        textAlign: 'left',
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                )}
+              </div>
               <span className="text-muted" style={{ fontSize: '18px' }}>&rarr;</span>
             </div>
           </div>
