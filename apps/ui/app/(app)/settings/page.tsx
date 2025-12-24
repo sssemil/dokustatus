@@ -1,11 +1,27 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useAppContext } from '../layout';
 
 type Tab = 'usage' | 'billing';
 
 export default function SettingsPage() {
+  const { isIngress } = useAppContext();
   const [activeTab, setActiveTab] = useState<Tab>('usage');
+
+  useEffect(() => {
+    if (isIngress) {
+      window.location.href = '/profile';
+    }
+  }, [isIngress]);
+
+  if (isIngress) {
+    return (
+      <div className="flex items-center justify-center" style={{ minHeight: '200px' }}>
+        <div className="spinner" />
+      </div>
+    );
+  }
 
   const tabs: { id: Tab; label: string }[] = [
     { id: 'usage', label: 'Usage' },

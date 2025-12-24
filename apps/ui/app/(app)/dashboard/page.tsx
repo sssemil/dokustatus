@@ -1,6 +1,25 @@
 'use client';
 
+import { useEffect } from 'react';
+import { useAppContext } from '../layout';
+
 export default function DashboardPage() {
+  const { isIngress } = useAppContext();
+
+  useEffect(() => {
+    if (isIngress) {
+      window.location.href = '/profile';
+    }
+  }, [isIngress]);
+
+  if (isIngress) {
+    return (
+      <div className="flex items-center justify-center" style={{ minHeight: '200px' }}>
+        <div className="spinner" />
+      </div>
+    );
+  }
+
   return (
     <>
       <h1>Dashboard</h1>
