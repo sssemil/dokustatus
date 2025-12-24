@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n                INSERT INTO users (id, email, language)\n                VALUES ($1, $2, $3)\n                ON CONFLICT (email) DO UPDATE\n                SET language = COALESCE($3, users.language)\n                RETURNING id, email, created_at, updated_at, language\n            ",
+  "query": "SELECT id, email, created_at, updated_at, on_waitlist FROM users WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -25,15 +25,13 @@
       },
       {
         "ordinal": 4,
-        "name": "language",
-        "type_info": "Varchar"
+        "name": "on_waitlist",
+        "type_info": "Bool"
       }
     ],
     "parameters": {
       "Left": [
-        "Uuid",
-        "Varchar",
-        "Varchar"
+        "Uuid"
       ]
     },
     "nullable": [
@@ -44,5 +42,5 @@
       false
     ]
   },
-  "hash": "484f1cd1ef4300f3804cf75df0102c8abad9da6c4b28c74f34fc1c1b511e6446"
+  "hash": "68839943d584e71d90300db2d186cfaa7add48778cdbb078071bb16f9811edf0"
 }

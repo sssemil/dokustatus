@@ -7,17 +7,13 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::app_error::AppResult;
-use crate::application::{
-    dictionaries::t,
-    email_templates::{primary_button, wrap_email},
-    language::UserLanguage,
-};
+use crate::application::email_templates::{primary_button, wrap_email};
 
 #[async_trait]
 pub trait UserRepo: Send + Sync {
-    async fn upsert_by_email(&self, email: &str, language: Option<&str>) -> AppResult<UserProfile>;
+    async fn upsert_by_email(&self, email: &str) -> AppResult<UserProfile>;
     async fn get_profile_by_id(&self, user_id: Uuid) -> AppResult<Option<UserProfile>>;
-    async fn update_language(&self, user_id: Uuid, language: &str) -> AppResult<()>;
+    async fn get_waitlist_position(&self, user_id: Uuid) -> AppResult<Option<WaitlistPosition>>;
     async fn delete_user(&self, user_id: Uuid) -> AppResult<()>;
 }
 
@@ -61,67 +57,38 @@ impl AuthUseCases {
         email: &str,
         session_id: &str,
         ttl_minutes: i64,
-        language: Option<&str>,
     ) -> AppResult<()> {
-        let requested_lang = UserLanguage::from_raw(language);
-        let profile = self
-            .repo
-            .upsert_by_email(email, Some(requested_lang.as_str()))
-            .await?;
+        let profile = self.repo.upsert_by_email(email).await?;
         let user_id = profile.id;
-        let lang = UserLanguage::from_raw(Some(&profile.language));
         let raw = generate_token();
         let token_hash = hash_token(&raw, session_id);
         self.magic_links
             .save(&token_hash, user_id, ttl_minutes)
             .await?;
-        let link = format!("{}/magic?token={}", self.app_origin, raw);
-        let (subject, headline, lead, button_label, reason, footer_note) = match lang {
-            UserLanguage::En => (
-                "Sign in to Dokustatus",
-                "Your sign-in link is ready",
-                format!(
-                    "Use this secure link to finish signing in. It expires in {} minutes.",
-                    ttl_minutes
-                ),
-                "Continue to Dokustatus",
-                format!(
-                    "you asked to sign in to {}",
-                    self.app_origin.trim_end_matches('/')
-                ),
-                "This one-time link keeps your account protected; delete this email if you did not request it.",
-            ),
-            UserLanguage::De => (
-                "Bei Dokustatus anmelden",
-                "Dein Anmeldelink ist startklar",
-                format!(
-                    "Nutze diesen sicheren Link, um dich anzumelden. Er läuft in {} Minuten ab.",
-                    ttl_minutes
-                ),
-                "Weiter zu Dokustatus",
-                format!(
-                    "du hast dich auf {} angemeldet",
-                    self.app_origin.trim_end_matches('/')
-                ),
-                "Dieser einmalige Link schützt deinen Zugang; lösche die E-Mail, falls du sie nicht angefordert hast.",
-            ),
-        };
+        let origin = self.app_origin.trim_end_matches('/');
+        let link = format!("{}/magic?token={}", origin, raw);
+
+        let subject = "Sign in to your account";
+        let headline = "Your sign-in link is ready";
+        let lead = format!(
+            "Use this secure link to finish signing in. It expires in {} minutes.",
+            ttl_minutes
+        );
+        let button_label = "Sign in";
+        let reason = format!(
+            "you requested to sign in to {}",
+            self.app_origin.trim_end_matches('/')
+        );
+        let footer_note =
+            "This one-time link keeps your account protected; delete this email if you did not request it.";
+
         let button = primary_button(&link, button_label);
         let html = wrap_email(
-            lang,
             &self.app_origin,
             headline,
             &lead,
             &format!(
-                "{button}<p style=\"margin:12px 0 0;font-size:14px;color:#4b5563;\">{fallback}</p>",
-                fallback = match lang {
-                    UserLanguage::En => format!(
-                        "If the button does not work, copy and paste this URL:<br><span style=\"word-break:break-all;color:#111827;\">{link}</span>"
-                    ),
-                    UserLanguage::De => format!(
-                        "Falls der Button nicht funktioniert, kopiere diesen Link:<br><span style=\"word-break:break-all;color:#111827;\">{link}</span>"
-                    ),
-                }
+                "{button}<p style=\"margin:12px 0 0;font-size:14px;color:#4b5563;\">If the button does not work, copy and paste this URL:<br><span style=\"word-break:break-all;color:#111827;\">{link}</span></p>"
             ),
             &reason,
             Some(footer_note),
@@ -143,36 +110,36 @@ impl AuthUseCases {
     }
 
     #[instrument(skip(self))]
-    pub async fn delete_account(&self, user_id: Uuid, lang_header: Option<&str>) -> AppResult<()> {
+    pub async fn delete_account(&self, user_id: Uuid) -> AppResult<()> {
         let profile = self
             .repo
             .get_profile_by_id(user_id)
             .await?
             .ok_or(crate::app_error::AppError::InvalidCredentials)?;
-        let lang = UserLanguage::from_raw(lang_header.or(Some(&profile.language)));
 
-        let subject = t(lang, "emails.accountDeletion.subject");
-        let headline = t(lang, "emails.accountDeletion.headline");
-        let lead = t(lang, "emails.accountDeletion.lead");
-        let body_text = t(lang, "emails.accountDeletion.body");
-        let reason = t(lang, "emails.accountDeletion.reason")
-            .replace("{app}", self.app_origin.trim_end_matches('/'));
-        let footer = t(lang, "emails.accountDeletion.footer");
+        let subject = "Your account has been deleted";
+        let headline = "Account deleted";
+        let lead = "Your account and all associated data have been permanently deleted.";
+        let body_text = "If you did not request this, please contact support immediately.";
+        let reason = format!(
+            "your account on {} was deleted",
+            self.app_origin.trim_end_matches('/')
+        );
+        let footer = "This is an automated message, no action is required.";
         let body = wrap_email(
-            lang,
             &self.app_origin,
-            &headline,
-            &lead,
+            headline,
+            lead,
             &format!(
                 "<p style=\"margin:12px 0 0;color:#374151;\">{}</p>",
                 body_text
             ),
             &reason,
-            Some(&footer),
+            Some(footer),
         );
 
         self.repo.delete_user(user_id).await?;
-        let _ = self.email.send(&profile.email, &subject, &body).await;
+        let _ = self.email.send(&profile.email, subject, &body).await;
         Ok(())
     }
 }
@@ -181,8 +148,14 @@ impl AuthUseCases {
 pub struct UserProfile {
     pub id: Uuid,
     pub email: String,
-    pub language: String,
     pub updated_at: Option<chrono::NaiveDateTime>,
+    pub on_waitlist: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct WaitlistPosition {
+    pub position: u32,
+    pub total: u32,
 }
 
 fn generate_token() -> String {

@@ -26,11 +26,11 @@ RUN pacman -S --noconfirm --needed ca-certificates openssl
 RUN pacman -Scc --noconfirm
 
 WORKDIR /app
-COPY --from=builder /app/target/release/dokustatus /usr/local/bin/dokustatus
+COPY --from=builder /app/target/release/reauth-api /usr/local/bin/reauth-api
 COPY --from=builder /root/.cargo/bin/sqlx /usr/local/bin/sqlx
 COPY apps/api/migrations ./migrations
 
 ENV RUST_LOG=info
 EXPOSE 3001
 
-CMD ["dokustatus"]
+CMD ["reauth-api"]

@@ -11,7 +11,7 @@ This project pairs a Rust backend (Axum + SQLx, Redis for rate limits) with a Ne
 ## Build, Test, and Development Commands
 - `docker compose up -d postgres redis`: start local DB and Redis.
 - `sqlx migrate run`: apply migrations (uses `DATABASE_URL`).
-- `cargo sqlx prepare -- --bin dokustatus`: refresh offline SQLx data when queries change.
+- `cargo sqlx prepare -- --bin reauth-api`: refresh offline SQLx data when queries change.
 - `cargo run`: start the API (bind addr from config).
 - `cargo fmt` / `cargo clippy --all-targets --all-features`: format and lint Rust.
 - `cargo test`: run backend tests (add `DATABASE_URL` pointing to a test DB if hitting the database).

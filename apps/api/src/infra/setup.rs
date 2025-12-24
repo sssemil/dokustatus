@@ -1,16 +1,10 @@
 use crate::{
-    adapters::{
-        email::resend::ResendEmailSender, http::app_state::AppState,
-        pass_status::MunichPassStatusClient,
-    },
+    adapters::{email::resend::ResendEmailSender, http::app_state::AppState},
     infra::{
-        config::AppConfig, crypto::ProcessCipher, magic_links::MagicLinkStore,
-        postgres_persistence, rate_limit::RateLimiter,
+        config::AppConfig, magic_links::MagicLinkStore, postgres_persistence,
+        rate_limit::RateLimiter,
     },
-    use_cases::{
-        pass_status::{PassStatusRepo, PassStatusUseCases},
-        user::{AuthUseCases, UserRepo},
-    },
+    use_cases::user::{AuthUseCases, UserRepo},
 };
 use std::fs::File;
 use std::sync::Arc;
@@ -19,8 +13,7 @@ use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberI
 pub async fn init_app_state() -> anyhow::Result<AppState> {
     let config = AppConfig::from_env();
 
-    let cipher = Arc::new(ProcessCipher::new_from_base64(&config.process_number_key)?);
-    let postgres_arc = Arc::new(postgres_persistence(cipher.clone(), &config.database_url).await?);
+    let postgres_arc = Arc::new(postgres_persistence(&config.database_url).await?);
 
     let rate_limiter = Arc::new(
         RateLimiter::new(
@@ -40,11 +33,6 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     ));
 
     let user_repo_arc = postgres_arc.clone() as Arc<dyn UserRepo>;
-    let pass_repo_arc = postgres_arc.clone() as Arc<dyn PassStatusRepo>;
-    let status_client = Arc::new(MunichPassStatusClient::new(
-        config.pass_status_url.to_string(),
-        config.pass_status_info_url.to_string(),
-    ));
 
     let auth_use_cases = AuthUseCases::new(
         user_repo_arc.clone(),
@@ -53,20 +41,9 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         config.app_origin.to_string(),
     );
 
-    let pass_status_use_cases = PassStatusUseCases::new(
-        pass_repo_arc.clone(),
-        email,
-        status_client,
-        user_repo_arc.clone(),
-        config.pass_status_poll_seconds,
-        config.max_documents_per_user,
-        config.app_origin.to_string(),
-    );
-
     Ok(AppState {
         config: Arc::new(config),
         auth_use_cases: Arc::new(auth_use_cases),
-        pass_status_use_cases: Arc::new(pass_status_use_cases),
         user_repo: user_repo_arc,
         rate_limiter,
     })

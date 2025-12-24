@@ -1,4 +1,4 @@
-# Dokustatus Infra
+# Reauth Infra
 
 Scripts and compose files for building images, shipping them to a remote host over SSH, and running the stack with Nginx + Certbot.
 
@@ -12,7 +12,6 @@ Scripts and compose files for building images, shipping them to a remote host ov
 ## Secrets directory
 Create text files containing only the secret value:
 - `infra/secrets/jwt_secret` — JWT signing key.
-- `infra/secrets/process_number_key` — base64 key for encrypting process numbers (PROCESS_NUMBER_KEY).
 - `infra/secrets/resend_api_key` — Resend API key.
 - `infra/secrets/postgres_password` — Postgres password (used by the DB container and to build `DATABASE_URL` for the API).
 - `infra/secrets/redis_password` — Redis password (used by Redis and to build `REDIS_URL` for the API).
@@ -37,17 +36,17 @@ HOST=root@your-host ./infra/setup_firewall.sh
 
 ## Environment (.env)
 Copy `.env.example` to `.env` and adjust:
-- Domain: set `LETSENCRYPT_PRIMARY_DOMAIN` and `LETSENCRYPT_DOMAINS` (e.g. `dokustatus.de,dokustatus.de`).
+- Domain: set `LETSENCRYPT_PRIMARY_DOMAIN` and `LETSENCRYPT_DOMAINS` (e.g. `reauth.dev,reauth.dev`).
 - Cert email: `LETSENCRYPT_EMAIL`.
 - API/UI: `NEXT_PUBLIC_API_BASE_URL`, `APP_ORIGIN`, `API_PORT`, `UI_PORT`.
-- Backend config: DB/Redis hosts/ports/users, `EMAIL_FROM`, optional `PASS_STATUS_*`, rate limits.
+- Backend config: DB/Redis hosts/ports/users, `EMAIL_FROM`, rate limits.
 
 ## Deploy
-Example to deploy to `root@116.203.46.179` into `/opt/dokustatus`:
+Example to deploy to `root@your-server` into `/opt/reauth`:
 ```bash
-DEPLOY_HOST=116.203.46.179 \
+DEPLOY_HOST=your-server \
 DEPLOY_USER=root \
-REMOTE_DIR=/opt/dokustatus \
+REMOTE_DIR=/opt/reauth \
 ./infra/deploy.sh
 ```
 You can pass SSH options (e.g. non-standard port) via `SSH_OPTS="-p 2222"`.

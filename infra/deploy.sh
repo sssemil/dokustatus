@@ -10,15 +10,15 @@ NGINX_DIR="${INFRA_DIR}/nginx"
 
 DEPLOY_HOST="${DEPLOY_HOST:-}"
 DEPLOY_USER="${DEPLOY_USER:-$USER}"
-REMOTE_DIR="${REMOTE_DIR:-/opt/dokustatus}"
+REMOTE_DIR="${REMOTE_DIR:-/opt/reauth}"
 SSH_OPTS="${SSH_OPTS:-}"
 
-API_IMAGE="dokustatus-api:latest"
-UI_IMAGE="dokustatus-ui:latest"
+API_IMAGE="reauth-api:latest"
+UI_IMAGE="reauth-ui:latest"
 
 usage() {
   cat <<EOF
-Usage: DEPLOY_HOST=example.com [DEPLOY_USER=ubuntu] [REMOTE_DIR=/opt/dokustatus] \
+Usage: DEPLOY_HOST=example.com [DEPLOY_USER=ubuntu] [REMOTE_DIR=/opt/reauth] \
 [ENV_FILE=infra/.env] [SECRETS_DIR=infra/secrets] [SSH_OPTS="-p 2222"] ./infra/deploy.sh
 EOF
 }
@@ -43,8 +43,8 @@ DOCKER_BUILDKIT=1 bash "${ROOT_DIR}/build-images.sh"
 IMAGES_DIR="$(mktemp -d "${INFRA_DIR}/images.XXXX")"
 trap 'rm -rf "$IMAGES_DIR"' EXIT
 
-docker save "$API_IMAGE" > "${IMAGES_DIR}/dokustatus-api.tar"
-docker save "$UI_IMAGE" > "${IMAGES_DIR}/dokustatus-ui.tar"
+docker save "$API_IMAGE" > "${IMAGES_DIR}/reauth-api.tar"
+docker save "$UI_IMAGE" > "${IMAGES_DIR}/reauth-ui.tar"
 
 echo "Syncing artifacts to ${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}"
 ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" "mkdir -p ${REMOTE_DIR}/images ${REMOTE_DIR}/nginx ${REMOTE_DIR}/secrets" || true
@@ -61,8 +61,8 @@ ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" <<EOF
 set -euo pipefail
 cd "${REMOTE_DIR}"
 chmod +x certbot-check.sh
-docker load -i images/dokustatus-api.tar
-docker load -i images/dokustatus-ui.tar
+docker load -i images/reauth-api.tar
+docker load -i images/reauth-ui.tar
 
 # Try docker compose (v2) first, fall back to docker-compose (v1)
 if docker compose version >/dev/null 2>&1; then

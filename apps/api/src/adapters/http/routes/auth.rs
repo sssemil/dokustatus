@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::{get, post},
 };
@@ -37,20 +37,15 @@ pub fn router() -> Router<AppState> {
 
 async fn request(
     State(app_state): State<AppState>,
-    headers: HeaderMap,
     jar: CookieJar,
     Json(payload): Json<RequestPayload>,
 ) -> AppResult<impl IntoResponse> {
     let (jar, session_id) = ensure_login_session(jar, app_state.config.magic_link_ttl_minutes);
     let auth: Arc<AuthUseCases> = app_state.auth_use_cases.clone();
-    let language = headers
-        .get(header::ACCEPT_LANGUAGE)
-        .and_then(|v| v.to_str().ok());
     auth.request_magic_link(
         &payload.email,
         &session_id,
         app_state.config.magic_link_ttl_minutes,
-        language,
     )
     .await?;
     Ok((StatusCode::ACCEPTED, jar))

@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT\n                position,\n                total\n            FROM (\n                SELECT\n                    id,\n                    ROW_NUMBER() OVER (ORDER BY created_at ASC) as position,\n                    COUNT(*) OVER () as total\n                FROM users\n                WHERE on_waitlist = true\n            ) ranked\n            WHERE id = $1\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "position",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 1,
+        "name": "total",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "8dce6d35e359708b91ac81d7426ace5c7696a9927749ac3c7b5abfd4330d7f90"
+}

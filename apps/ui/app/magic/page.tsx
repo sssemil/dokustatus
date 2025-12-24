@@ -1,80 +1,116 @@
-"use client";
-import { useEffect, useState } from "react";
+'use client';
 
-function getTokenFromSearch(): string | null {
-  if (typeof window === "undefined") return null;
-  const url = new URL(window.location.href);
-  return url.searchParams.get("token");
-}
+import { useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { Suspense } from 'react';
 
-export default function MagicPage() {
-  const [status, setStatus] = useState("Processing magic link...");
-  const [done, setDone] = useState(false);
-  const [error, setError] = useState(false);
+function MagicLinkHandler() {
+  const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
+  const [errorMessage, setErrorMessage] = useState('');
+  const router = useRouter();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
-    const token = getTokenFromSearch();
+    const token = searchParams.get('token');
+
     if (!token) {
-      setStatus("Missing authentication token");
-      setError(true);
+      setStatus('error');
+      setErrorMessage('Invalid or missing token.');
       return;
     }
-    
-    (async () => {
+
+    const consumeToken = async () => {
       try {
-        const res = await fetch("/api/auth/consume", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
+        const res = await fetch('/api/auth/consume', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
-          credentials: "include",
+          credentials: 'include',
         });
-        
-        if (!res.ok) {
-          throw new Error("Invalid or expired token");
+
+        if (res.ok) {
+          setStatus('success');
+          // Check user status to determine redirect
+          const meRes = await fetch('/api/user/me', { credentials: 'include' });
+          const redirectPath = meRes.ok && (await meRes.json()).on_waitlist === false
+            ? '/dashboard'
+            : '/waitlist';
+          setTimeout(() => {
+            router.push(redirectPath);
+          }, 1000);
+        } else if (res.status === 401) {
+          setStatus('error');
+          setErrorMessage('This link has expired or already been used. Please request a new one.');
+        } else {
+          setStatus('error');
+          setErrorMessage('Something went wrong. Please try again.');
         }
-        
-        setStatus("Authentication successful! Redirecting...");
-        setDone(true);
-        
-        setTimeout(() => {
-          window.location.href = "/";
-        }, 500);
-      } catch (e: any) {
-        setStatus(e.message || "Authentication failed");
-        setError(true);
+      } catch {
+        setStatus('error');
+        setErrorMessage('Network error. Please check your connection.');
       }
-    })();
-  }, []);
+    };
+
+    consumeToken();
+  }, [searchParams, router]);
 
   return (
-    <main>
-      <div className="container" style={{ maxWidth: '480px', margin: '80px auto', textAlign: 'center' }}>
-        <h1>🔑 Magic Link</h1>
-        
-        {done ? (
-          <div className="message success">
-            <div className="loading-text" style={{ justifyContent: 'center' }}>
-              <span className="spinner" />
-              <span>{status}</span>
+    <main className="flex items-center justify-center">
+      <div className="card text-center" style={{ maxWidth: '400px', width: '100%' }}>
+        {status === 'loading' && (
+          <>
+            <div className="spinner" style={{ margin: '0 auto', marginBottom: 'var(--spacing-lg)' }} />
+            <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>Signing you in...</h2>
+            <p className="text-muted">Please wait a moment.</p>
+          </>
+        )}
+
+        {status === 'success' && (
+          <>
+            <div style={{ marginBottom: 'var(--spacing-lg)' }}>
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" strokeWidth="2" style={{ margin: '0 auto' }}>
+                <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
             </div>
-          </div>
-        ) : error ? (
-          <div className="message error">
-            <strong>✗ Authentication Failed</strong>
-            <p style={{ marginTop: '8px', marginBottom: 0 }}>{status}</p>
-            <p style={{ marginTop: '16px', marginBottom: 0 }}>
-              <a href="/">← Return to sign in</a>
-            </p>
-          </div>
-        ) : (
-          <div className="message info">
-            <div className="loading-text" style={{ justifyContent: 'center' }}>
-              <span className="spinner" />
-              <span>{status}</span>
+            <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>You&apos;re in!</h2>
+            <p className="text-muted">Redirecting...</p>
+          </>
+        )}
+
+        {status === 'error' && (
+          <>
+            <div style={{ marginBottom: 'var(--spacing-lg)' }}>
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-red)" strokeWidth="2" style={{ margin: '0 auto' }}>
+                <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
             </div>
-          </div>
+            <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>Link expired</h2>
+            <p className="text-muted">{errorMessage}</p>
+            <button
+              onClick={() => router.push('/')}
+              className="primary"
+              style={{ marginTop: 'var(--spacing-md)' }}
+            >
+              Try again
+            </button>
+          </>
         )}
       </div>
     </main>
+  );
+}
+
+export default function MagicPage() {
+  return (
+    <Suspense fallback={
+      <main className="flex items-center justify-center">
+        <div className="card text-center" style={{ maxWidth: '400px', width: '100%' }}>
+          <div className="spinner" style={{ margin: '0 auto' }} />
+          <h2 style={{ marginTop: 'var(--spacing-lg)', borderBottom: 'none', paddingBottom: 0 }}>Loading...</h2>
+        </div>
+      </main>
+    }>
+      <MagicLinkHandler />
+    </Suspense>
   );
 }

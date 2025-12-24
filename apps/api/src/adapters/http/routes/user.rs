@@ -1,32 +1,78 @@
 use axum::{
-    Router,
+    Json, Router,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
-    routing::delete,
+    http::{HeaderMap, StatusCode},
+    response::IntoResponse,
+    routing::{delete, get},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use serde::Serialize;
 use time;
 
 use crate::{adapters::http::app_state::AppState, app_error::AppResult, application::jwt};
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/delete", delete(delete_account))
+    Router::new()
+        .route("/me", get(get_me))
+        .route("/waitlist", get(get_waitlist_position))
+        .route("/delete", delete(delete_account))
+}
+
+#[derive(Serialize)]
+struct MeResponse {
+    email: String,
+    on_waitlist: bool,
+}
+
+async fn get_me(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let profile = app_state
+        .user_repo
+        .get_profile_by_id(user_id)
+        .await?
+        .ok_or(crate::app_error::AppError::InvalidCredentials)?;
+
+    Ok(Json(MeResponse {
+        email: profile.email,
+        on_waitlist: profile.on_waitlist,
+    }))
+}
+
+#[derive(Serialize)]
+struct WaitlistResponse {
+    position: u32,
+    total: u32,
+}
+
+async fn get_waitlist_position(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    let position = app_state
+        .user_repo
+        .get_waitlist_position(user_id)
+        .await?
+        .ok_or(crate::app_error::AppError::InvalidCredentials)?;
+
+    Ok(Json(WaitlistResponse {
+        position: position.position,
+        total: position.total,
+    }))
 }
 
 async fn delete_account(
     State(app_state): State<AppState>,
-    headers: HeaderMap,
     jar: CookieJar,
 ) -> AppResult<(StatusCode, HeaderMap)> {
     let (_, user_id) = current_user(&jar, &app_state)?;
-    let lang = headers
-        .get(header::ACCEPT_LANGUAGE)
-        .and_then(|v| v.to_str().ok());
 
-    app_state
-        .auth_use_cases
-        .delete_account(user_id, lang)
-        .await?;
+    app_state.auth_use_cases.delete_account(user_id).await?;
 
     let mut headers = HeaderMap::new();
     for (name, value, http_only) in [

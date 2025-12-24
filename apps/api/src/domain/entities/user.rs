@@ -6,5 +6,5 @@ pub struct User {
     pub created_at: Option<chrono::NaiveDateTime>,
     pub updated_at: Option<chrono::NaiveDateTime>,
     pub email: String,
-    pub language: String,
+    pub on_waitlist: bool,
 }

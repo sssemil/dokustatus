@@ -8,11 +8,8 @@ pub mod magic_links;
 pub mod rate_limit;
 pub mod setup;
 
-pub async fn postgres_persistence(
-    cipher: std::sync::Arc<crypto::ProcessCipher>,
-    database_url: &str,
-) -> anyhow::Result<PostgresPersistence> {
+pub async fn postgres_persistence(database_url: &str) -> anyhow::Result<PostgresPersistence> {
     let pool = init_db(database_url).await?;
-    let persistence = PostgresPersistence::new(pool, cipher);
+    let persistence = PostgresPersistence::new(pool);
     Ok(persistence)
 }

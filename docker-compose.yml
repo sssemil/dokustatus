@@ -1,11 +1,11 @@
 services:
   postgres:
     image: postgres:16-alpine
-    container_name: dokustatus-postgres
+    container_name: reauth-postgres
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: dokustatus
+      POSTGRES_DB: reauth
     ports:
       - "5432:5432"
     volumes:
@@ -18,7 +18,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    container_name: dokustatus-redis
+    container_name: reauth-redis
     command: ["redis-server", "--save", "\"\"", "--appendonly", "no"]
     ports:
       - "6379:6379"

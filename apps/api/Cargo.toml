@@ -1,5 +1,5 @@
 [package]
-name = "dokustatus"
+name = "reauth-api"
 version = "0.1.0"
 edition = "2024"
 

@@ -1,8 +1,6 @@
 use url::Url;
 
-use crate::application::language::UserLanguage;
-
-const BRAND_NAME: &str = "Dokustatus";
+const BRAND_NAME: &str = "reauth";
 const COMPANY_NAME: &str = "TQDM Inc.";
 const COMPANY_ADDRESS: &str = "1111B S Governors Ave, STE 23256, Dover, DE 19904, USA";
 
@@ -13,11 +11,6 @@ fn origin_label(app_origin: &str) -> String {
         .unwrap_or_else(|| app_origin.to_string())
 }
 
-fn impressum_url(app_origin: &str, lang: UserLanguage) -> String {
-    let base = app_origin.trim_end_matches('/');
-    format!("{}/{}/impressum", base, lang.as_str())
-}
-
 pub fn primary_button(url: &str, label: &str) -> String {
     format!(
         r#"<a href="{url}" style="display:inline-block;padding:12px 18px;background-color:#111827;color:#ffffff;text-decoration:none;border-radius:8px;font-weight:600;">{label}</a>"#
@@ -25,7 +18,6 @@ pub fn primary_button(url: &str, label: &str) -> String {
 }
 
 pub fn wrap_email(
-    lang: UserLanguage,
     app_origin: &str,
     headline: &str,
     lead: &str,
@@ -34,20 +26,10 @@ pub fn wrap_email(
     footer_note: Option<&str>,
 ) -> String {
     let origin = origin_label(app_origin);
-    let copy = match lang {
-        UserLanguage::En => (
-            "Why you got this email",
-            "If you didn't request this, you can safely ignore it.",
-            "Sent by",
-            "Imprint",
-        ),
-        UserLanguage::De => (
-            "Grund für diese E-Mail",
-            "Falls du das nicht warst, kannst du diese Nachricht ignorieren.",
-            "Gesendet von",
-            "Impressum",
-        ),
-    };
+    let reason_label = "Why you got this email";
+    let ignore_line = "If you didn't request this, you can safely ignore it.";
+    let sent_by = "Sent by";
+
     let footer_note = footer_note
         .map(|note| {
             format!(
@@ -73,7 +55,7 @@ pub fn wrap_email(
       </div>
       <p style="margin:14px 0 4px;font-size:12px;color:#9ca3af;">{sent_by} {brand} - {origin}</p>
       <p style="margin:0;font-size:11px;color:#9ca3af;line-height:1.5;">
-        {company_name} · {company_address} · <a href="{impressum}" style="color:#6b7280;text-decoration:none;">{impressum_label}</a>
+        {company_name} · {company_address}
       </p>
     </div>
   </body>
@@ -85,13 +67,11 @@ pub fn wrap_email(
         lead = lead,
         body_html = body_html,
         reason = reason,
-        reason_label = copy.0,
-        ignore_line = copy.1,
-        sent_by = copy.2,
-        impressum_label = copy.3,
+        reason_label = reason_label,
+        ignore_line = ignore_line,
+        sent_by = sent_by,
         company_name = COMPANY_NAME,
         company_address = COMPANY_ADDRESS,
-        impressum = impressum_url(app_origin, lang),
         footer_note = footer_note,
     )
 }

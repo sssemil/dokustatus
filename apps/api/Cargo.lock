@@ -471,42 +471,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dokustatus"
-version = "0.1.0"
-dependencies = [
- "aes-gcm",
- "anyhow",
- "async-trait",
- "axum",
- "axum-extra",
- "base64",
- "chrono",
- "dotenvy",
- "env_helpers",
- "hex",
- "hmac",
- "jsonwebtoken",
- "once_cell",
- "rand 0.8.5",
- "redis",
- "reqwest",
- "secrecy",
- "serde",
- "serde_json",
- "sha2",
- "sqlx",
- "thiserror",
- "time",
- "tokio",
- "tower",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "url",
- "uuid",
-]
-
-[[package]]
 name = "dotenvy"
 version = "0.15.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1773,6 +1737,42 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "99d9a13982dcf210057a8a78572b2217b667c3beacbf3a0d8b454f6f82837d38"
 dependencies = [
  "getrandom 0.3.3",
+]
+
+[[package]]
+name = "reauth-api"
+version = "0.1.0"
+dependencies = [
+ "aes-gcm",
+ "anyhow",
+ "async-trait",
+ "axum",
+ "axum-extra",
+ "base64",
+ "chrono",
+ "dotenvy",
+ "env_helpers",
+ "hex",
+ "hmac",
+ "jsonwebtoken",
+ "once_cell",
+ "rand 0.8.5",
+ "redis",
+ "reqwest",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sha2",
+ "sqlx",
+ "thiserror",
+ "time",
+ "tokio",
+ "tower",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "uuid",
 ]
 
 [[package]]

@@ -6,37 +6,33 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    application::language::UserLanguage,
-    use_cases::user::{UserProfile, UserRepo},
+    use_cases::user::{UserProfile, UserRepo, WaitlistPosition},
 };
 
-// User struct as stored in the db.
 #[derive(sqlx::FromRow, Debug, Serialize)]
 pub struct UserDb {
     pub id: Uuid,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
     pub email: String,
-    pub language: String,
+    pub on_waitlist: bool,
 }
 
 #[async_trait]
 impl UserRepo for PostgresPersistence {
-    async fn upsert_by_email(&self, email: &str, language: Option<&str>) -> AppResult<UserProfile> {
-        let lang = UserLanguage::from_raw(language.map(|l| l.trim()));
+    async fn upsert_by_email(&self, email: &str) -> AppResult<UserProfile> {
         let id = Uuid::new_v4();
         let rec = sqlx::query_as!(
             UserDb,
             r#"
-                INSERT INTO users (id, email, language)
-                VALUES ($1, $2, $3)
+                INSERT INTO users (id, email)
+                VALUES ($1, $2)
                 ON CONFLICT (email) DO UPDATE
-                SET language = COALESCE($3, users.language)
-                RETURNING id, email, created_at, updated_at, language
+                SET updated_at = CURRENT_TIMESTAMP
+                RETURNING id, email, created_at, updated_at, on_waitlist
             "#,
             id,
             email,
-            lang.as_str(),
         )
         .fetch_one(&self.pool)
         .await
@@ -44,15 +40,15 @@ impl UserRepo for PostgresPersistence {
         Ok(UserProfile {
             id: rec.id,
             email: rec.email,
-            language: rec.language,
             updated_at: rec.updated_at,
+            on_waitlist: rec.on_waitlist,
         })
     }
 
     async fn get_profile_by_id(&self, user_id: Uuid) -> AppResult<Option<UserProfile>> {
         let rec = sqlx::query_as!(
             UserDb,
-            "SELECT id, email, created_at, updated_at, language FROM users WHERE id = $1",
+            "SELECT id, email, created_at, updated_at, on_waitlist FROM users WHERE id = $1",
             user_id
         )
         .fetch_optional(&self.pool)
@@ -61,22 +57,37 @@ impl UserRepo for PostgresPersistence {
         Ok(rec.map(|r| UserProfile {
             id: r.id,
             email: r.email,
-            language: r.language,
             updated_at: r.updated_at,
+            on_waitlist: r.on_waitlist,
         }))
     }
 
-    async fn update_language(&self, user_id: Uuid, language: &str) -> AppResult<()> {
-        let lang = UserLanguage::from_raw(Some(language.trim()));
-        sqlx::query!(
-            "UPDATE users SET language = $2 WHERE id = $1",
-            user_id,
-            lang.as_str()
+    async fn get_waitlist_position(&self, user_id: Uuid) -> AppResult<Option<WaitlistPosition>> {
+        let row = sqlx::query!(
+            r#"
+            SELECT
+                position,
+                total
+            FROM (
+                SELECT
+                    id,
+                    ROW_NUMBER() OVER (ORDER BY created_at ASC) as position,
+                    COUNT(*) OVER () as total
+                FROM users
+                WHERE on_waitlist = true
+            ) ranked
+            WHERE id = $1
+            "#,
+            user_id
         )
-        .execute(&self.pool)
+        .fetch_optional(&self.pool)
         .await
         .map_err(AppError::from)?;
-        Ok(())
+
+        Ok(row.map(|r| WaitlistPosition {
+            position: r.position.unwrap_or(0) as u32,
+            total: r.total.unwrap_or(0) as u32,
+        }))
     }
 
     async fn delete_user(&self, user_id: Uuid) -> AppResult<()> {
