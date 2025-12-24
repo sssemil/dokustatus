@@ -37,7 +37,7 @@ type EndUser = {
   created_at: string | null;
 };
 
-type Tab = 'configuration' | 'users';
+type Tab = 'dns' | 'configuration' | 'users';
 
 export default function DomainDetailPage() {
   const params = useParams();
@@ -51,7 +51,7 @@ export default function DomainDetailPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('configuration');
+  const [activeTab, setActiveTab] = useState<Tab>('dns');
   const [endUsers, setEndUsers] = useState<EndUser[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -372,6 +372,18 @@ export default function DomainDetailPage() {
         </button>
       </div>
 
+      {error && (
+        <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
+          {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="message success" style={{ marginBottom: 'var(--spacing-md)' }}>
+          {success}
+        </div>
+      )}
+
       {/* Verifying Banner */}
       {domain.status === 'verifying' && (
         <div
@@ -394,192 +406,182 @@ export default function DomainDetailPage() {
         </div>
       )}
 
-      {/* DNS Records Section */}
-      {domain.dns_records && (
-        <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--spacing-md)' }}>
-            <h2 style={{ margin: 0 }}>DNS Records</h2>
-            <a
-              href="https://resend.com/docs/knowledge-base/godaddy"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: 'var(--accent-blue)', fontSize: '14px' }}
-            >
-              How to add records
-            </a>
-          </div>
+      {/* Tabs */}
+      <div style={{
+        display: 'flex',
+        gap: 'var(--spacing-xs)',
+        marginBottom: 'var(--spacing-lg)',
+        borderBottom: '1px solid var(--border-primary)',
+      }}>
+        {[
+          { id: 'dns' as Tab, label: 'DNS Records' },
+          ...(domain.status === 'verified' ? [
+            { id: 'configuration' as Tab, label: 'Configuration' },
+            { id: 'users' as Tab, label: 'Users' },
+          ] : []),
+        ].map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => setActiveTab(tab.id)}
+            style={{
+              padding: 'var(--spacing-sm) var(--spacing-md)',
+              backgroundColor: activeTab === tab.id ? 'var(--bg-tertiary)' : 'transparent',
+              border: activeTab === tab.id ? '1px solid var(--border-primary)' : '1px solid transparent',
+              borderBottom: activeTab === tab.id ? '1px solid var(--bg-tertiary)' : '1px solid transparent',
+              borderRadius: 'var(--radius-sm) var(--radius-sm) 0 0',
+              color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-muted)',
+              cursor: 'pointer',
+              fontSize: '14px',
+              fontWeight: activeTab === tab.id ? 600 : 400,
+              marginBottom: '-1px',
+            }}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </div>
 
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
-            {/* CNAME Record */}
-            <div
-              style={{
-                backgroundColor: 'var(--bg-tertiary)',
-                borderRadius: 'var(--radius-md)',
-                padding: 'var(--spacing-md)',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
-                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>CNAME Record</span>
-                {domain.status === 'verified' && (
-                  <span style={{ color: 'var(--accent-green)', fontSize: '12px' }}>Verified</span>
-                )}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
-                <span className="text-muted">Name</span>
-                <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                  {domain.dns_records.cname_name}
-                </code>
-                <button
-                  onClick={() => copyToClipboard(domain.dns_records!.cname_name, 'cname_name')}
-                  style={{ padding: '4px 8px', fontSize: '12px' }}
-                >
-                  {copiedField === 'cname_name' ? 'Copied!' : 'Copy'}
-                </button>
-
-                <span className="text-muted">Value</span>
-                <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                  {domain.dns_records.cname_value}
-                </code>
-                <button
-                  onClick={() => copyToClipboard(domain.dns_records!.cname_value, 'cname_value')}
-                  style={{ padding: '4px 8px', fontSize: '12px' }}
-                >
-                  {copiedField === 'cname_value' ? 'Copied!' : 'Copy'}
-                </button>
-              </div>
-            </div>
-
-            {/* TXT Record */}
-            <div
-              style={{
-                backgroundColor: 'var(--bg-tertiary)',
-                borderRadius: 'var(--radius-md)',
-                padding: 'var(--spacing-md)',
-              }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
-                <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>TXT Record</span>
-                {domain.status === 'verified' && (
-                  <span style={{ color: 'var(--accent-green)', fontSize: '12px' }}>Verified</span>
-                )}
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
-                <span className="text-muted">Name</span>
-                <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                  {domain.dns_records.txt_name}
-                </code>
-                <button
-                  onClick={() => copyToClipboard(domain.dns_records!.txt_name, 'txt_name')}
-                  style={{ padding: '4px 8px', fontSize: '12px' }}
-                >
-                  {copiedField === 'txt_name' ? 'Copied!' : 'Copy'}
-                </button>
-
-                <span className="text-muted">Value</span>
-                <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                  {domain.dns_records.txt_value}
-                </code>
-                <button
-                  onClick={() => copyToClipboard(domain.dns_records!.txt_value, 'txt_value')}
-                  style={{ padding: '4px 8px', fontSize: '12px' }}
-                >
-                  {copiedField === 'txt_value' ? 'Copied!' : 'Copy'}
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Start verification button for pending_dns status */}
-          {domain.status === 'pending_dns' && (
-            <button
-              className="primary"
-              onClick={handleStartVerification}
-              style={{ marginTop: 'var(--spacing-lg)' }}
-            >
-              I&apos;ve added the records
-            </button>
-          )}
-
-          {/* Retry button for failed status */}
-          {domain.status === 'failed' && (
-            <div style={{ marginTop: 'var(--spacing-lg)' }}>
-              <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
-                DNS verification failed. Please check your DNS records and try again.
-              </div>
-              <button className="primary" onClick={handleStartVerification}>
-                Retry verification
-              </button>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Tabs Section - Only show when verified */}
-      {domain.status === 'verified' && (
+      {/* DNS Records Tab */}
+      {activeTab === 'dns' && domain.dns_records && (
         <>
-          {error && (
-            <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
-              {error}
+          <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--spacing-md)' }}>
+              <h2 style={{ margin: 0 }}>DNS Records</h2>
+              <a
+                href="https://resend.com/docs/knowledge-base/godaddy"
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: 'var(--accent-blue)', fontSize: '14px' }}
+              >
+                How to add records
+              </a>
             </div>
-          )}
 
-          {success && (
-            <div className="message success" style={{ marginBottom: 'var(--spacing-md)' }}>
-              {success}
-            </div>
-          )}
-
-          {/* Tabs */}
-          <div style={{
-            display: 'flex',
-            gap: 'var(--spacing-xs)',
-            marginBottom: 'var(--spacing-lg)',
-            borderBottom: '1px solid var(--border-primary)',
-          }}>
-            {[
-              { id: 'configuration' as Tab, label: 'Configuration' },
-              { id: 'users' as Tab, label: 'Users' },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+              {/* CNAME Record */}
+              <div
                 style={{
-                  padding: 'var(--spacing-sm) var(--spacing-md)',
-                  backgroundColor: activeTab === tab.id ? 'var(--bg-tertiary)' : 'transparent',
-                  border: activeTab === tab.id ? '1px solid var(--border-primary)' : '1px solid transparent',
-                  borderBottom: activeTab === tab.id ? '1px solid var(--bg-tertiary)' : '1px solid transparent',
-                  borderRadius: 'var(--radius-sm) var(--radius-sm) 0 0',
-                  color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-muted)',
-                  cursor: 'pointer',
-                  fontSize: '14px',
-                  fontWeight: activeTab === tab.id ? 600 : 400,
-                  marginBottom: '-1px',
+                  backgroundColor: 'var(--bg-tertiary)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: 'var(--spacing-md)',
                 }}
               >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-
-          {/* Configuration Tab */}
-          {activeTab === 'configuration' && (
-            <>
-              <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-                <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Configuration</h2>
-                <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-                  Login URL:{' '}
-                  <a
-                    href={`https://reauth.${domain.domain}`}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ color: 'var(--accent-blue)' }}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>CNAME Record</span>
+                  {domain.status === 'verified' && (
+                    <span style={{ color: 'var(--accent-green)', fontSize: '12px' }}>Verified</span>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
+                  <span className="text-muted">Name</span>
+                  <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
+                    {domain.dns_records.cname_name}
+                  </code>
+                  <button
+                    onClick={() => copyToClipboard(domain.dns_records!.cname_name, 'cname_name')}
+                    style={{ padding: '4px 8px', fontSize: '12px' }}
                   >
-                    https://reauth.{domain.domain}
-                  </a>
-                </p>
+                    {copiedField === 'cname_name' ? 'Copied!' : 'Copy'}
+                  </button>
+
+                  <span className="text-muted">Value</span>
+                  <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
+                    {domain.dns_records.cname_value}
+                  </code>
+                  <button
+                    onClick={() => copyToClipboard(domain.dns_records!.cname_value, 'cname_value')}
+                    style={{ padding: '4px 8px', fontSize: '12px' }}
+                  >
+                    {copiedField === 'cname_value' ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
               </div>
 
-              <form onSubmit={handleSaveConfig}>
+              {/* TXT Record */}
+              <div
+                style={{
+                  backgroundColor: 'var(--bg-tertiary)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: 'var(--spacing-md)',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
+                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>TXT Record</span>
+                  {domain.status === 'verified' && (
+                    <span style={{ color: 'var(--accent-green)', fontSize: '12px' }}>Verified</span>
+                  )}
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
+                  <span className="text-muted">Name</span>
+                  <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
+                    {domain.dns_records.txt_name}
+                  </code>
+                  <button
+                    onClick={() => copyToClipboard(domain.dns_records!.txt_name, 'txt_name')}
+                    style={{ padding: '4px 8px', fontSize: '12px' }}
+                  >
+                    {copiedField === 'txt_name' ? 'Copied!' : 'Copy'}
+                  </button>
+
+                  <span className="text-muted">Value</span>
+                  <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
+                    {domain.dns_records.txt_value}
+                  </code>
+                  <button
+                    onClick={() => copyToClipboard(domain.dns_records!.txt_value, 'txt_value')}
+                    style={{ padding: '4px 8px', fontSize: '12px' }}
+                  >
+                    {copiedField === 'txt_value' ? 'Copied!' : 'Copy'}
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Start verification button for pending_dns status */}
+            {domain.status === 'pending_dns' && (
+              <button
+                className="primary"
+                onClick={handleStartVerification}
+                style={{ marginTop: 'var(--spacing-lg)' }}
+              >
+                I&apos;ve added the records
+              </button>
+            )}
+
+            {/* Retry button for failed status */}
+            {domain.status === 'failed' && (
+              <div style={{ marginTop: 'var(--spacing-lg)' }}>
+                <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
+                  DNS verification failed. Please check your DNS records and try again.
+                </div>
+                <button className="primary" onClick={handleStartVerification}>
+                  Retry verification
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Configuration Tab */}
+      {activeTab === 'configuration' && domain.status === 'verified' && (
+        <>
+          <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+            <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Configuration</h2>
+            <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
+              Login URL:{' '}
+              <a
+                href={`https://reauth.${domain.domain}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                style={{ color: 'var(--accent-blue)' }}
+              >
+                https://reauth.{domain.domain}
+              </a>
+            </p>
+          </div>
+
+          <form onSubmit={handleSaveConfig}>
             {/* Magic Link Section */}
             <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -689,8 +691,8 @@ export default function DomainDetailPage() {
             </>
           )}
 
-          {/* Users Tab */}
-          {activeTab === 'users' && (
+      {/* Users Tab */}
+      {activeTab === 'users' && domain.status === 'verified' && (
             <>
               {loadingUsers ? (
                 <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
@@ -870,8 +872,6 @@ export default function DomainDetailPage() {
               )}
             </>
           )}
-        </>
-      )}
     </>
   );
 }
