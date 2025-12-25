@@ -92,7 +92,13 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
         // Check if user is on waitlist
         if (data.waitlist_position) {
-          router.push('/waitlist');
+          const hostname = window.location.hostname;
+          const isMainApp = hostname === 'reauth.dev' || hostname === 'www.reauth.dev';
+          if (isMainApp) {
+            window.location.href = 'https://reauth.reauth.dev/waitlist';
+          } else {
+            router.push('/waitlist');
+          }
           return;
         }
 

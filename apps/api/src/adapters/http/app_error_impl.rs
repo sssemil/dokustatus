@@ -23,6 +23,9 @@ impl IntoResponse for AppError {
             AppError::InvalidInput(msg) => {
                 error_resp(StatusCode::BAD_REQUEST, ErrorCode::InvalidInput, Some(msg))
             }
+            AppError::AccountSuspended => {
+                error_resp(StatusCode::FORBIDDEN, ErrorCode::AccountSuspended, Some("Your account has been suspended".to_string()))
+            }
             AppError::TooManyDocuments => {
                 error_resp(StatusCode::BAD_REQUEST, ErrorCode::TooManyDocuments, None)
             }

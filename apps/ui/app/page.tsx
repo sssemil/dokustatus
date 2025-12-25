@@ -47,7 +47,11 @@ export default function Home() {
           if (data.valid) {
             // Check if user is on waitlist
             if (data.waitlist_position) {
-              router.push('/waitlist');
+              if (isMainApp) {
+                window.location.href = 'https://reauth.reauth.dev/waitlist';
+              } else {
+                router.push('/waitlist');
+              }
               return;
             }
 

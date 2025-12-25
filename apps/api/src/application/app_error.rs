@@ -14,6 +14,9 @@ pub enum AppError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("Account suspended")]
+    AccountSuspended,
+
     #[error("Too many documents")]
     TooManyDocuments,
 
@@ -30,6 +33,7 @@ pub enum ErrorCode {
     InvalidCredentials,
     RateLimited,
     InvalidInput,
+    AccountSuspended,
     TooManyDocuments,
     NotFound,
     InternalError,
@@ -42,6 +46,7 @@ impl ErrorCode {
             ErrorCode::InvalidCredentials => "INVALID_CREDENTIALS",
             ErrorCode::RateLimited => "RATE_LIMITED",
             ErrorCode::InvalidInput => "INVALID_INPUT",
+            ErrorCode::AccountSuspended => "ACCOUNT_SUSPENDED",
             ErrorCode::TooManyDocuments => "TOO_MANY_DOCUMENTS",
             ErrorCode::NotFound => "NOT_FOUND",
             ErrorCode::InternalError => "INTERNAL_ERROR",

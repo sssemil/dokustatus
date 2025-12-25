@@ -59,6 +59,7 @@ struct SessionResponse {
     roles: Option<Vec<String>>,
     waitlist_position: Option<i64>,
     error: Option<String>,
+    error_code: Option<String>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -301,6 +302,7 @@ async fn check_session(
                                 roles: None,
                                 waitlist_position: None,
                                 error: Some("Your account has been suspended".to_string()),
+                                error_code: Some("ACCOUNT_SUSPENDED".to_string()),
                             }));
                         }
 
@@ -328,6 +330,7 @@ async fn check_session(
                                 roles: Some(claims.roles),
                                 waitlist_position,
                                 error: None,
+                                error_code: None,
                             }));
                         }
 
@@ -339,6 +342,7 @@ async fn check_session(
                             roles: Some(claims.roles),
                             waitlist_position: None,
                             error: None,
+                            error_code: None,
                         }));
                     }
                 }
@@ -351,6 +355,7 @@ async fn check_session(
                     roles: Some(claims.roles),
                     waitlist_position: None,
                     error: None,
+                    error_code: None,
                 }));
             }
         }
@@ -368,6 +373,7 @@ async fn check_session(
                     roles: None,
                     waitlist_position: None,
                     error: None,
+                    error_code: None,
                 }));
             }
         }
@@ -380,6 +386,7 @@ async fn check_session(
         roles: None,
         waitlist_position: None,
         error: None,
+        error_code: None,
     }))
 }
 
@@ -415,7 +422,7 @@ async fn refresh_token(
     // Check user's current status from database before issuing new token
     if let Ok(Some(user)) = app_state.domain_auth_use_cases.get_end_user_by_id(end_user_id).await {
         if user.is_frozen {
-            return Err(crate::app_error::AppError::InvalidInput("Your account has been suspended".into()));
+            return Err(crate::app_error::AppError::AccountSuspended);
         }
     }
 

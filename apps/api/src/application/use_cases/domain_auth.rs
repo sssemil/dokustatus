@@ -303,7 +303,7 @@ impl DomainAuthUseCases {
 
             // Check if user is frozen
             if end_user.is_frozen {
-                return Err(AppError::InvalidInput("Your account has been suspended".into()));
+                return Err(AppError::AccountSuspended);
             }
 
             // Check if this is first login (email not verified yet)

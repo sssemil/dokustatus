@@ -4,9 +4,12 @@ import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
+type ErrorType = 'expired' | 'suspended' | 'generic';
+
 function MagicLinkHandler() {
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const [errorMessage, setErrorMessage] = useState('');
+  const [errorType, setErrorType] = useState<ErrorType>('generic');
   const router = useRouter();
   const searchParams = useSearchParams();
 
@@ -37,7 +40,11 @@ function MagicLinkHandler() {
           setTimeout(() => {
             // Check if user is on waitlist
             if (data.waitlist_position) {
-              router.push('/waitlist');
+              if (isMainApp) {
+                window.location.href = 'https://reauth.reauth.dev/waitlist';
+              } else {
+                router.push('/waitlist');
+              }
             } else if (isMainApp) {
               router.push('/dashboard');
             } else if (data.redirect_url) {
@@ -48,15 +55,24 @@ function MagicLinkHandler() {
           }, 1000);
         } else if (res.status === 401) {
           setStatus('error');
+          setErrorType('expired');
           setErrorMessage('This link has expired or already been used. Please request a new one.');
         } else {
           // Try to get error message from response
           try {
             const errorData = await res.json();
             setStatus('error');
-            setErrorMessage(errorData.message || 'Something went wrong. Please try again.');
+            // Check if this is a suspended account error
+            if (errorData.code === 'ACCOUNT_SUSPENDED' || errorData.error_code === 'ACCOUNT_SUSPENDED' || errorData.message?.toLowerCase().includes('suspended')) {
+              setErrorType('suspended');
+              setErrorMessage('Your account has been suspended. Please contact support if you believe this is an error.');
+            } else {
+              setErrorType('generic');
+              setErrorMessage(errorData.message || 'Something went wrong. Please try again.');
+            }
           } catch {
             setStatus('error');
+            setErrorType('generic');
             setErrorMessage('Something went wrong. Please try again.');
           }
         }
@@ -95,19 +111,29 @@ function MagicLinkHandler() {
         {status === 'error' && (
           <>
             <div style={{ marginBottom: 'var(--spacing-lg)' }}>
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-red)" strokeWidth="2" style={{ margin: '0 auto' }}>
-                <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-              </svg>
+              {errorType === 'suspended' ? (
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-red)" strokeWidth="2" style={{ margin: '0 auto' }}>
+                  <path d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
+                </svg>
+              ) : (
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-red)" strokeWidth="2" style={{ margin: '0 auto' }}>
+                  <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              )}
             </div>
-            <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>Link expired</h2>
+            <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>
+              {errorType === 'suspended' ? 'Account suspended' : errorType === 'expired' ? 'Link expired' : 'Something went wrong'}
+            </h2>
             <p className="text-muted">{errorMessage}</p>
-            <button
-              onClick={() => router.push('/')}
-              className="primary"
-              style={{ marginTop: 'var(--spacing-md)' }}
-            >
-              Try again
-            </button>
+            {errorType !== 'suspended' && (
+              <button
+                onClick={() => router.push('/')}
+                className="primary"
+                style={{ marginTop: 'var(--spacing-md)' }}
+              >
+                Try again
+              </button>
+            )}
           </>
         )}
       </div>
