@@ -57,6 +57,8 @@ struct SessionResponse {
     end_user_id: Option<String>,
     email: Option<String>,
     roles: Option<Vec<String>>,
+    waitlist_position: Option<i64>,
+    error: Option<String>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -272,6 +274,7 @@ async fn verify_magic_link(
 
 /// GET /api/public/domain/{domain}/auth/session
 /// Checks if the end-user session is valid (checks access token first, then refresh)
+/// Also checks real-time frozen/whitelist status from database
 /// The {domain} param is the hostname (e.g., "reauth.example.com")
 async fn check_session(
     State(app_state): State<AppState>,
@@ -285,11 +288,69 @@ async fn check_session(
     if let Some(access_token) = cookies.get("end_user_access_token") {
         if let Ok(claims) = jwt::verify_domain_end_user(access_token.value(), &app_state.config.jwt_secret) {
             if claims.domain == root_domain {
+                // Parse user ID and check real-time status from database
+                if let Ok(user_id) = uuid::Uuid::parse_str(&claims.sub) {
+                    // Check user's current status
+                    if let Ok(Some(user)) = app_state.domain_auth_use_cases.get_end_user_by_id(user_id).await {
+                        // Check if frozen
+                        if user.is_frozen {
+                            return Ok(Json(SessionResponse {
+                                valid: false,
+                                end_user_id: Some(claims.sub.clone()),
+                                email: Some(user.email),
+                                roles: None,
+                                waitlist_position: None,
+                                error: Some("Your account has been suspended".to_string()),
+                            }));
+                        }
+
+                        // Check whitelist status
+                        let config = app_state
+                            .domain_auth_use_cases
+                            .get_auth_config_for_domain(&root_domain)
+                            .await
+                            .ok();
+
+                        let whitelist_enabled = config.as_ref().map(|c| c.whitelist_enabled).unwrap_or(false);
+
+                        if whitelist_enabled && !user.is_whitelisted {
+                            // User is on waitlist
+                            let waitlist_position = app_state
+                                .domain_auth_use_cases
+                                .get_waitlist_position(user.domain_id, user.id)
+                                .await
+                                .ok();
+
+                            return Ok(Json(SessionResponse {
+                                valid: true,
+                                end_user_id: Some(claims.sub.clone()),
+                                email: Some(user.email),
+                                roles: Some(claims.roles),
+                                waitlist_position,
+                                error: None,
+                            }));
+                        }
+
+                        // User is fully authorized
+                        return Ok(Json(SessionResponse {
+                            valid: true,
+                            end_user_id: Some(claims.sub.clone()),
+                            email: Some(user.email),
+                            roles: Some(claims.roles),
+                            waitlist_position: None,
+                            error: None,
+                        }));
+                    }
+                }
+
+                // Fallback if user lookup fails - trust the token
                 return Ok(Json(SessionResponse {
                     valid: true,
                     end_user_id: Some(claims.sub.clone()),
                     email: cookies.get("end_user_email").map(|c| c.value().to_string()),
                     roles: Some(claims.roles),
+                    waitlist_position: None,
+                    error: None,
                 }));
             }
         }
@@ -305,6 +366,8 @@ async fn check_session(
                     end_user_id: None,
                     email: None,
                     roles: None,
+                    waitlist_position: None,
+                    error: None,
                 }));
             }
         }
@@ -315,11 +378,14 @@ async fn check_session(
         end_user_id: None,
         email: None,
         roles: None,
+        waitlist_position: None,
+        error: None,
     }))
 }
 
 /// POST /api/public/domain/{domain}/auth/refresh
 /// Refreshes the access token using the refresh token
+/// Checks real-time frozen status before issuing new token
 /// The {domain} param is the hostname (e.g., "reauth.example.com")
 async fn refresh_token(
     State(app_state): State<AppState>,
@@ -340,6 +406,19 @@ async fn refresh_token(
         return Ok((StatusCode::UNAUTHORIZED, HeaderMap::new()));
     }
 
+    // Parse end_user_id from claims
+    let end_user_id = Uuid::parse_str(&claims.sub)
+        .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
+    let domain_id = Uuid::parse_str(&claims.domain_id)
+        .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
+
+    // Check user's current status from database before issuing new token
+    if let Ok(Some(user)) = app_state.domain_auth_use_cases.get_end_user_by_id(end_user_id).await {
+        if user.is_frozen {
+            return Err(crate::app_error::AppError::InvalidInput("Your account has been suspended".into()));
+        }
+    }
+
     // Get TTL config
     let config = app_state
         .domain_auth_use_cases
@@ -348,12 +427,6 @@ async fn refresh_token(
         .ok();
 
     let access_ttl_secs = config.as_ref().map(|c| c.access_token_ttl_secs).unwrap_or(86400);
-
-    // Parse end_user_id from claims
-    let end_user_id = Uuid::parse_str(&claims.sub)
-        .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
-    let domain_id = Uuid::parse_str(&claims.domain_id)
-        .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
 
     // Issue new access token
     let access_token = jwt::issue_domain_end_user(

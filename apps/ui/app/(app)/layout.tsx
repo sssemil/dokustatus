@@ -76,10 +76,26 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       }
       if (res.ok) {
         const data = await res.json();
+
+        // Check for error (e.g., account suspended)
+        if (data.error) {
+          // Logout and redirect
+          await fetch(`/api/public/domain/${hostname}/auth/logout`, { method: 'POST', credentials: 'include' });
+          router.push('/');
+          return;
+        }
+
         if (!data.valid) {
           router.push('/');
           return;
         }
+
+        // Check if user is on waitlist
+        if (data.waitlist_position) {
+          router.push(`/waitlist?position=${data.waitlist_position}`);
+          return;
+        }
+
         setUser({ email: data.email || '', id: data.end_user_id || '', roles: data.roles || [] });
       }
     } catch {

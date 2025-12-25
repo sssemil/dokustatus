@@ -31,7 +31,26 @@ export default function Home() {
         const res = await fetch(`/api/public/domain/${apiDomain}/auth/session`, { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
+
+          // Check for error (e.g., account suspended)
+          if (data.error) {
+            // Logout and show login
+            await fetch(`/api/public/domain/${apiDomain}/auth/logout`, { method: 'POST', credentials: 'include' });
+            if (isMainApp) {
+              window.location.href = 'https://reauth.reauth.dev/';
+            } else {
+              setStatus('idle');
+            }
+            return;
+          }
+
           if (data.valid) {
+            // Check if user is on waitlist
+            if (data.waitlist_position) {
+              router.push(`/waitlist?position=${data.waitlist_position}`);
+              return;
+            }
+
             if (isMainApp) {
               // On reauth.dev, go to dashboard
               router.push('/dashboard');

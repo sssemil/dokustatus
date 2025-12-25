@@ -634,6 +634,12 @@ impl DomainAuthUseCases {
     pub async fn count_users_by_domain_ids(&self, domain_ids: &[Uuid]) -> AppResult<i64> {
         self.end_user_repo.count_by_domain_ids(domain_ids).await
     }
+
+    /// Get end-user by ID (for session validation, no ownership check)
+    #[instrument(skip(self))]
+    pub async fn get_end_user_by_id(&self, user_id: Uuid) -> AppResult<Option<DomainEndUserProfile>> {
+        self.end_user_repo.get_by_id(user_id).await
+    }
 }
 
 // ============================================================================
