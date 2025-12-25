@@ -290,6 +290,23 @@ impl DomainAuthUseCases {
         let token_hash = hash_domain_token(raw_token, session_id, domain_name);
 
         if let Some(data) = self.magic_link_store.consume(&token_hash).await? {
+            // Get the end user first to check access
+            let end_user = self.end_user_repo.get_by_id(data.end_user_id).await?
+                .ok_or(AppError::NotFound)?;
+
+            // Check if user is frozen
+            if end_user.is_frozen {
+                return Err(AppError::InvalidInput("Your account has been suspended".into()));
+            }
+
+            // Check whitelist if enabled
+            let auth_config = self.auth_config_repo.get_by_domain_id(data.domain_id).await?;
+            if let Some(config) = auth_config {
+                if config.whitelist_enabled && !end_user.is_whitelisted {
+                    return Err(AppError::InvalidInput("Your account is not whitelisted".into()));
+                }
+            }
+
             // Mark user as verified and update last login
             let end_user = self.end_user_repo.mark_verified(data.end_user_id).await?;
             return Ok(Some(end_user));
