@@ -50,8 +50,15 @@ function MagicLinkHandler() {
           setStatus('error');
           setErrorMessage('This link has expired or already been used. Please request a new one.');
         } else {
-          setStatus('error');
-          setErrorMessage('Something went wrong. Please try again.');
+          // Try to get error message from response
+          try {
+            const errorData = await res.json();
+            setStatus('error');
+            setErrorMessage(errorData.message || 'Something went wrong. Please try again.');
+          } catch {
+            setStatus('error');
+            setErrorMessage('Something went wrong. Please try again.');
+          }
         }
       } catch {
         setStatus('error');
