@@ -35,7 +35,10 @@ function MagicLinkHandler() {
           const data = await res.json();
           setStatus('success');
           setTimeout(() => {
-            if (isMainApp) {
+            // Check if user is on waitlist
+            if (data.waitlist_position) {
+              router.push(`/waitlist?position=${data.waitlist_position}`);
+            } else if (isMainApp) {
               router.push('/dashboard');
             } else if (data.redirect_url) {
               window.location.href = data.redirect_url;

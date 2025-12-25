@@ -56,6 +56,7 @@ pub trait DomainEndUserRepo: Send + Sync {
     async fn set_whitelisted(&self, id: Uuid, whitelisted: bool) -> AppResult<()>;
     async fn whitelist_all_in_domain(&self, domain_id: Uuid) -> AppResult<()>;
     async fn count_by_domain_ids(&self, domain_ids: &[Uuid]) -> AppResult<i64>;
+    async fn get_waitlist_position(&self, domain_id: Uuid, user_id: Uuid) -> AppResult<i64>;
 }
 
 #[async_trait]
@@ -280,6 +281,8 @@ impl DomainAuthUseCases {
     }
 
     /// Consume a magic link token and return end-user info
+    /// Returns the user even if not whitelisted (caller should handle waitlist logic)
+    /// Only blocks frozen users
     #[instrument(skip(self))]
     pub async fn consume_magic_link(
         &self,
@@ -299,20 +302,19 @@ impl DomainAuthUseCases {
                 return Err(AppError::InvalidInput("Your account has been suspended".into()));
             }
 
-            // Check whitelist if enabled
-            let auth_config = self.auth_config_repo.get_by_domain_id(data.domain_id).await?;
-            if let Some(config) = auth_config {
-                if config.whitelist_enabled && !end_user.is_whitelisted {
-                    return Err(AppError::InvalidInput("Your account is not whitelisted".into()));
-                }
-            }
-
             // Mark user as verified and update last login
             let end_user = self.end_user_repo.mark_verified(data.end_user_id).await?;
             return Ok(Some(end_user));
         }
 
         Ok(None)
+    }
+
+    /// Get waitlist position for a non-whitelisted user
+    /// Returns the count of non-whitelisted users created before this user + 1
+    #[instrument(skip(self))]
+    pub async fn get_waitlist_position(&self, domain_id: Uuid, user_id: Uuid) -> AppResult<i64> {
+        self.end_user_repo.get_waitlist_position(domain_id, user_id).await
     }
 
     // ========================================================================

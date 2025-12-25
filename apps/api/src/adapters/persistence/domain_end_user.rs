@@ -159,4 +159,33 @@ impl DomainEndUserRepo for PostgresPersistence {
         .map_err(AppError::from)?;
         Ok(row.0)
     }
+
+    async fn get_waitlist_position(&self, domain_id: Uuid, user_id: Uuid) -> AppResult<i64> {
+        // Get the user's created_at timestamp
+        let user_row: Option<(chrono::NaiveDateTime,)> = sqlx::query_as(
+            "SELECT created_at FROM domain_end_users WHERE id = $1 AND domain_id = $2",
+        )
+        .bind(user_id)
+        .bind(domain_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+
+        let Some((user_created_at,)) = user_row else {
+            return Err(AppError::NotFound);
+        };
+
+        // Count non-whitelisted users created before this user (their position is ahead)
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM domain_end_users WHERE domain_id = $1 AND is_whitelisted = false AND created_at < $2",
+        )
+        .bind(domain_id)
+        .bind(user_created_at)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+
+        // Position is count + 1 (1-indexed)
+        Ok(row.0 + 1)
+    }
 }

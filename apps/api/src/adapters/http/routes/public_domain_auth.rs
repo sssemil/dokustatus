@@ -48,6 +48,7 @@ struct VerifyMagicLinkResponse {
     redirect_url: Option<String>,
     end_user_id: Option<String>,
     email: Option<String>,
+    waitlist_position: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -144,6 +145,7 @@ async fn verify_magic_link(
                 redirect_url: None,
                 end_user_id: None,
                 email: None,
+                waitlist_position: None,
             }),
         ));
     };
@@ -163,9 +165,30 @@ async fn verify_magic_link(
                 .await
                 .ok();
 
-            let redirect_url = config.as_ref().and_then(|c| c.redirect_url.clone());
             let access_ttl_secs = config.as_ref().map(|c| c.access_token_ttl_secs).unwrap_or(86400);
             let refresh_ttl_days = config.as_ref().map(|c| c.refresh_token_ttl_days).unwrap_or(30);
+
+            // Check if user is on waitlist (whitelist enabled but user not whitelisted)
+            let whitelist_enabled = config.as_ref().map(|c| c.whitelist_enabled).unwrap_or(false);
+            let on_waitlist = whitelist_enabled && !user.is_whitelisted;
+
+            // Get waitlist position if on waitlist
+            let waitlist_position = if on_waitlist {
+                app_state
+                    .domain_auth_use_cases
+                    .get_waitlist_position(user.domain_id, user.id)
+                    .await
+                    .ok()
+            } else {
+                None
+            };
+
+            // Only provide redirect_url if user is whitelisted (or whitelist not enabled)
+            let redirect_url = if on_waitlist {
+                None
+            } else {
+                config.as_ref().and_then(|c| c.redirect_url.clone())
+            };
 
             // Issue access token (short-lived)
             let access_token = jwt::issue_domain_end_user(
@@ -229,6 +252,7 @@ async fn verify_magic_link(
                     redirect_url,
                     end_user_id: Some(user.id.to_string()),
                     email: Some(user.email),
+                    waitlist_position,
                 }),
             ))
         }
@@ -240,6 +264,7 @@ async fn verify_magic_link(
                 redirect_url: None,
                 end_user_id: None,
                 email: None,
+                waitlist_position: None,
             }),
         )),
     }
