@@ -17,6 +17,68 @@ pub fn primary_button(url: &str, label: &str) -> String {
     )
 }
 
+pub fn account_created_email(app_origin: &str, domain: &str) -> (String, String) {
+    let subject = format!("Welcome to {}", domain);
+    let headline = "Your account has been created";
+    let lead = format!(
+        "You've successfully signed in to <strong>{}</strong>. Your account is now active.",
+        domain
+    );
+    let body = "<p style=\"margin:12px 0 0;color:#374151;\">You can sign in anytime using your email address. We'll send you a secure magic link each time.</p>";
+    let reason = format!("you signed up for {}", domain);
+
+    let html = wrap_email(app_origin, headline, &lead, body, &reason, None);
+    (subject, html)
+}
+
+pub fn account_whitelisted_email(app_origin: &str, domain: &str, login_url: &str) -> (String, String) {
+    let subject = format!("You're approved! Access {} now", domain);
+    let headline = "You've been approved!";
+    let lead = format!(
+        "Great news! Your account for <strong>{}</strong> has been approved. You now have full access.",
+        domain
+    );
+    let button = primary_button(login_url, "Sign in now");
+    let body = format!(
+        r#"{button}<p style="margin:12px 0 0;color:#374151;">Thank you for your patience. You can now sign in and start using all features.</p>"#
+    );
+    let reason = format!("you were on the waitlist for {}", domain);
+
+    let html = wrap_email(app_origin, headline, &lead, &body, &reason, None);
+    (subject, html)
+}
+
+pub fn account_frozen_email(app_origin: &str, domain: &str) -> (String, String) {
+    let subject = format!("Your {} account has been suspended", domain);
+    let headline = "Account suspended";
+    let lead = format!(
+        "Your account for <strong>{}</strong> has been suspended by an administrator.",
+        domain
+    );
+    let body = "<p style=\"margin:12px 0 0;color:#374151;\">If you believe this is a mistake, please contact the site administrator.</p>";
+    let reason = format!("your {} account status changed", domain);
+
+    let html = wrap_email(app_origin, headline, &lead, body, &reason, None);
+    (subject, html)
+}
+
+pub fn account_unfrozen_email(app_origin: &str, domain: &str, login_url: &str) -> (String, String) {
+    let subject = format!("Your {} account has been restored", domain);
+    let headline = "Account restored";
+    let lead = format!(
+        "Good news! Your account for <strong>{}</strong> has been restored. You can sign in again.",
+        domain
+    );
+    let button = primary_button(login_url, "Sign in now");
+    let body = format!(
+        r#"{button}<p style="margin:12px 0 0;color:#374151;">Your access has been fully restored.</p>"#
+    );
+    let reason = format!("your {} account status changed", domain);
+
+    let html = wrap_email(app_origin, headline, &lead, &body, &reason, None);
+    (subject, html)
+}
+
 pub fn domain_verification_failed_email(app_origin: &str, domain: &str) -> (String, String) {
     let subject = format!("Domain verification failed: {}", domain);
     let headline = "Domain verification failed";

@@ -8,7 +8,10 @@ use tracing::instrument;
 use uuid::Uuid;
 
 use crate::app_error::{AppError, AppResult};
-use crate::application::email_templates::{primary_button, wrap_email};
+use crate::application::email_templates::{
+    account_created_email, account_frozen_email, account_unfrozen_email,
+    account_whitelisted_email, primary_button, wrap_email,
+};
 use crate::application::use_cases::domain::DomainRepo;
 use crate::domain::entities::domain::DomainStatus;
 use crate::infra::crypto::ProcessCipher;
@@ -283,6 +286,7 @@ impl DomainAuthUseCases {
     /// Consume a magic link token and return end-user info
     /// Returns the user even if not whitelisted (caller should handle waitlist logic)
     /// Only blocks frozen users
+    /// Sends welcome email on first login (when email_verified_at was null)
     #[instrument(skip(self))]
     pub async fn consume_magic_link(
         &self,
@@ -302,8 +306,22 @@ impl DomainAuthUseCases {
                 return Err(AppError::InvalidInput("Your account has been suspended".into()));
             }
 
+            // Check if this is first login (email not verified yet)
+            let is_first_login = end_user.email_verified_at.is_none();
+
             // Mark user as verified and update last login
             let end_user = self.end_user_repo.mark_verified(data.end_user_id).await?;
+
+            // Send welcome email on first login
+            if is_first_login {
+                if let Ok((api_key, from_email)) = self.get_email_config(data.domain_id).await {
+                    let app_origin = format!("https://reauth.{}", domain_name);
+                    let (subject, html) = account_created_email(&app_origin, domain_name);
+                    // Fire and forget - don't fail login if email fails
+                    let _ = self.email_sender.send(&api_key, &from_email, &end_user.email, &subject, &html).await;
+                }
+            }
+
             return Ok(Some(end_user));
         }
 
@@ -484,6 +502,7 @@ impl DomainAuthUseCases {
     }
 
     /// Freeze an end-user account (domain owner only)
+    /// Sends suspension notification email
     #[instrument(skip(self))]
     pub async fn freeze_end_user(
         &self,
@@ -491,7 +510,7 @@ impl DomainAuthUseCases {
         domain_id: Uuid,
         user_id: Uuid,
     ) -> AppResult<()> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        let domain = self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
 
         let user = self
             .end_user_repo
@@ -503,10 +522,25 @@ impl DomainAuthUseCases {
             return Err(AppError::NotFound);
         }
 
-        self.end_user_repo.set_frozen(user_id, true).await
+        // Only send email if user wasn't already frozen
+        let was_not_frozen = !user.is_frozen;
+
+        self.end_user_repo.set_frozen(user_id, true).await?;
+
+        // Send suspension email
+        if was_not_frozen {
+            if let Ok((api_key, from_email)) = self.get_email_config(domain_id).await {
+                let app_origin = format!("https://reauth.{}", domain.domain);
+                let (subject, html) = account_frozen_email(&app_origin, &domain.domain);
+                let _ = self.email_sender.send(&api_key, &from_email, &user.email, &subject, &html).await;
+            }
+        }
+
+        Ok(())
     }
 
     /// Unfreeze an end-user account (domain owner only)
+    /// Sends restoration notification email
     #[instrument(skip(self))]
     pub async fn unfreeze_end_user(
         &self,
@@ -514,7 +548,7 @@ impl DomainAuthUseCases {
         domain_id: Uuid,
         user_id: Uuid,
     ) -> AppResult<()> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        let domain = self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
 
         let user = self
             .end_user_repo
@@ -526,10 +560,26 @@ impl DomainAuthUseCases {
             return Err(AppError::NotFound);
         }
 
-        self.end_user_repo.set_frozen(user_id, false).await
+        // Only send email if user was frozen
+        let was_frozen = user.is_frozen;
+
+        self.end_user_repo.set_frozen(user_id, false).await?;
+
+        // Send restoration email
+        if was_frozen {
+            if let Ok((api_key, from_email)) = self.get_email_config(domain_id).await {
+                let app_origin = format!("https://reauth.{}", domain.domain);
+                let login_url = format!("https://reauth.{}/", domain.domain);
+                let (subject, html) = account_unfrozen_email(&app_origin, &domain.domain, &login_url);
+                let _ = self.email_sender.send(&api_key, &from_email, &user.email, &subject, &html).await;
+            }
+        }
+
+        Ok(())
     }
 
     /// Whitelist an end-user (domain owner only)
+    /// Sends approval email to the user
     #[instrument(skip(self))]
     pub async fn whitelist_end_user(
         &self,
@@ -537,7 +587,7 @@ impl DomainAuthUseCases {
         domain_id: Uuid,
         user_id: Uuid,
     ) -> AppResult<()> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        let domain = self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
 
         let user = self
             .end_user_repo
@@ -549,7 +599,22 @@ impl DomainAuthUseCases {
             return Err(AppError::NotFound);
         }
 
-        self.end_user_repo.set_whitelisted(user_id, true).await
+        // Only send email if user wasn't already whitelisted
+        let was_not_whitelisted = !user.is_whitelisted;
+
+        self.end_user_repo.set_whitelisted(user_id, true).await?;
+
+        // Send approval email
+        if was_not_whitelisted {
+            if let Ok((api_key, from_email)) = self.get_email_config(domain_id).await {
+                let app_origin = format!("https://reauth.{}", domain.domain);
+                let login_url = format!("https://reauth.{}/", domain.domain);
+                let (subject, html) = account_whitelisted_email(&app_origin, &domain.domain, &login_url);
+                let _ = self.email_sender.send(&api_key, &from_email, &user.email, &subject, &html).await;
+            }
+        }
+
+        Ok(())
     }
 
     /// Remove end-user from whitelist (domain owner only)
@@ -602,6 +667,16 @@ impl DomainAuthUseCases {
 
     /// Verify that the end-user owns the specified domain
     async fn verify_domain_ownership(&self, owner_end_user_id: Uuid, domain_id: Uuid) -> AppResult<()> {
+        self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
+        Ok(())
+    }
+
+    /// Verify ownership and return the domain (for when we need domain info)
+    async fn verify_domain_ownership_get_domain(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<crate::application::use_cases::domain::DomainProfile> {
         let domain = self
             .domain_repo
             .get_by_id(domain_id)
@@ -612,7 +687,7 @@ impl DomainAuthUseCases {
             return Err(AppError::InvalidCredentials);
         }
 
-        Ok(())
+        Ok(domain)
     }
 
     /// Get email config: domain-specific if available, otherwise global
