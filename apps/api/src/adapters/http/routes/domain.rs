@@ -29,6 +29,7 @@ pub fn router() -> Router<AppState> {
         .route("/{domain_id}/auth-config", get(get_auth_config))
         .route("/{domain_id}/auth-config", patch(update_auth_config))
         .route("/{domain_id}/end-users", get(list_end_users))
+        .route("/{domain_id}/end-users/invite", post(invite_end_user))
         .route("/{domain_id}/end-users/{user_id}", get(get_end_user))
         .route("/{domain_id}/end-users/{user_id}", delete(delete_end_user))
         .route("/{domain_id}/end-users/{user_id}/freeze", post(freeze_end_user))
@@ -399,6 +400,44 @@ async fn list_end_users(
         .collect();
 
     Ok(Json(response))
+}
+
+#[derive(Deserialize)]
+struct InviteEndUserPayload {
+    email: String,
+    pre_whitelist: Option<bool>,
+}
+
+async fn invite_end_user(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<InviteEndUserPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let user = app_state
+        .domain_auth_use_cases
+        .invite_end_user(
+            owner_id,
+            domain_id,
+            &payload.email,
+            payload.pre_whitelist.unwrap_or(false),
+        )
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(EndUserResponse {
+            id: user.id,
+            email: user.email,
+            email_verified_at: user.email_verified_at,
+            last_login_at: user.last_login_at,
+            is_frozen: user.is_frozen,
+            is_whitelisted: user.is_whitelisted,
+            created_at: user.created_at,
+        }),
+    ))
 }
 
 #[derive(Deserialize)]

@@ -79,6 +79,23 @@ pub fn account_unfrozen_email(app_origin: &str, domain: &str, login_url: &str) -
     (subject, html)
 }
 
+pub fn account_invited_email(app_origin: &str, domain: &str, login_url: &str) -> (String, String) {
+    let subject = format!("You've been invited to {}", domain);
+    let headline = "You're invited!";
+    let lead = format!(
+        "You've been invited to join <strong>{}</strong>. Click the button below to sign in and get started.",
+        domain
+    );
+    let button = primary_button(login_url, "Accept invitation");
+    let body = format!(
+        r#"{button}<p style="margin:12px 0 0;color:#374151;">Simply click the button above and we'll send you a secure sign-in link.</p>"#
+    );
+    let reason = format!("an administrator invited you to {}", domain);
+
+    let html = wrap_email(app_origin, headline, &lead, &body, &reason, None);
+    (subject, html)
+}
+
 pub fn domain_verification_failed_email(app_origin: &str, domain: &str) -> (String, String) {
     let subject = format!("Domain verification failed: {}", domain);
     let headline = "Domain verification failed";

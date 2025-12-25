@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::app_error::{AppError, AppResult};
 use crate::application::email_templates::{
-    account_created_email, account_frozen_email, account_unfrozen_email,
-    account_whitelisted_email, primary_button, wrap_email,
+    account_created_email, account_frozen_email, account_invited_email,
+    account_unfrozen_email, account_whitelisted_email, primary_button, wrap_email,
 };
 use crate::application::use_cases::domain::DomainRepo;
 use crate::domain::entities::domain::DomainStatus;
@@ -638,6 +638,48 @@ impl DomainAuthUseCases {
         }
 
         self.end_user_repo.set_whitelisted(user_id, false).await
+    }
+
+    /// Invite a user to the domain (domain owner only)
+    /// Creates the user if they don't exist, optionally pre-whitelists them
+    /// Sends an invitation email
+    #[instrument(skip(self))]
+    pub async fn invite_end_user(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+        email: &str,
+        pre_whitelist: bool,
+    ) -> AppResult<DomainEndUserProfile> {
+        let domain = self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
+
+        // Check if user already exists
+        let existing = self.end_user_repo.get_by_domain_and_email(domain_id, email).await?;
+        if existing.is_some() {
+            return Err(AppError::InvalidInput("User already exists".into()));
+        }
+
+        // Create the user
+        let user = self.end_user_repo.upsert(domain_id, email).await?;
+
+        // Pre-whitelist if requested
+        if pre_whitelist {
+            self.end_user_repo.set_whitelisted(user.id, true).await?;
+        }
+
+        // Send invitation email
+        if let Ok((api_key, from_email)) = self.get_email_config(domain_id).await {
+            let app_origin = format!("https://reauth.{}", domain.domain);
+            let login_url = format!("https://reauth.{}/", domain.domain);
+            let (subject, html) = account_invited_email(&app_origin, &domain.domain, &login_url);
+            let _ = self.email_sender.send(&api_key, &from_email, email, &subject, &html).await;
+        }
+
+        // Return user with updated whitelist status
+        self.end_user_repo
+            .get_by_id(user.id)
+            .await?
+            .ok_or(AppError::NotFound)
     }
 
     /// Delete own account (for self-service account deletion)

@@ -60,6 +60,11 @@ export default function DomainDetailPage() {
   const [showDeleteDomainConfirm, setShowDeleteDomainConfirm] = useState(false);
   const [deleteUserConfirmId, setDeleteUserConfirmId] = useState<string | null>(null);
   const [showWhitelistModal, setShowWhitelistModal] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [invitePreWhitelist, setInvitePreWhitelist] = useState(false);
+  const [inviting, setInviting] = useState(false);
+  const [inviteError, setInviteError] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Auth config form state
@@ -316,6 +321,41 @@ export default function DomainDetailPage() {
       }
     } catch {
       setError('Network error. Please try again.');
+    }
+  };
+
+  const handleInviteUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!inviteEmail.trim()) return;
+
+    setInviting(true);
+    setInviteError('');
+
+    try {
+      const res = await fetch(`/api/domains/${domainId}/end-users/invite`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: inviteEmail.trim(),
+          pre_whitelist: invitePreWhitelist,
+        }),
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        setShowInviteModal(false);
+        setInviteEmail('');
+        setInvitePreWhitelist(false);
+        setSuccess('Invitation sent successfully');
+        fetchEndUsers();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setInviteError(errData.message || 'Failed to invite user');
+      }
+    } catch {
+      setInviteError('Network error. Please try again.');
+    } finally {
+      setInviting(false);
     }
   };
 
@@ -773,15 +813,18 @@ export default function DomainDetailPage() {
       {/* Users Tab */}
       {activeTab === 'users' && domain.status === 'verified' && (
             <>
-              {/* Search Input */}
-              <div style={{ marginBottom: 'var(--spacing-md)' }}>
+              {/* Search and Invite */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--spacing-md)', gap: 'var(--spacing-md)' }}>
                 <input
                   type="text"
                   value={userSearch}
                   onChange={(e) => setUserSearch(e.target.value)}
                   placeholder="Search by email..."
-                  style={{ width: '100%', maxWidth: '400px' }}
+                  style={{ flex: 1, maxWidth: '400px' }}
                 />
+                <button className="primary" onClick={() => setShowInviteModal(true)}>
+                  Invite User
+                </button>
               </div>
 
               {loadingUsers ? (
@@ -1081,6 +1124,136 @@ export default function DomainDetailPage() {
                 Whitelist All
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Invite User Modal */}
+      {showInviteModal && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={() => {
+            setShowInviteModal(false);
+            setInviteEmail('');
+            setInvitePreWhitelist(false);
+            setInviteError('');
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--bg-secondary)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-primary)',
+              boxShadow: 'var(--shadow-lg)',
+              maxWidth: '450px',
+              width: '90%',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: 'var(--spacing-md)',
+                borderBottom: '1px solid var(--border-primary)',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Invite User</h3>
+              <button
+                onClick={() => {
+                  setShowInviteModal(false);
+                  setInviteEmail('');
+                  setInvitePreWhitelist(false);
+                  setInviteError('');
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  color: 'var(--text-secondary)',
+                  fontSize: '18px',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleInviteUser}>
+              <div style={{ padding: 'var(--spacing-lg) var(--spacing-md)' }}>
+                <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                  <label htmlFor="inviteEmail" style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: 'var(--spacing-xs)', display: 'block' }}>
+                    Email address
+                  </label>
+                  <input
+                    id="inviteEmail"
+                    type="email"
+                    value={inviteEmail}
+                    onChange={(e) => setInviteEmail(e.target.value)}
+                    placeholder="user@example.com"
+                    required
+                    autoFocus
+                  />
+                </div>
+
+                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={invitePreWhitelist}
+                    onChange={(e) => setInvitePreWhitelist(e.target.checked)}
+                    style={{ width: 16, height: 16 }}
+                  />
+                  <span style={{ fontSize: '14px' }}>Pre-approve (add to whitelist)</span>
+                </label>
+                <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)', marginLeft: '24px' }}>
+                  If whitelist mode is enabled, this user will be able to sign in immediately.
+                </p>
+
+                {inviteError && (
+                  <div className="message error" style={{ marginTop: 'var(--spacing-md)' }}>
+                    {inviteError}
+                  </div>
+                )}
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: 'var(--spacing-sm)',
+                  padding: 'var(--spacing-md)',
+                  borderTop: '1px solid var(--border-primary)',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setInviteEmail('');
+                    setInvitePreWhitelist(false);
+                    setInviteError('');
+                  }}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="primary" disabled={inviting || !inviteEmail.trim()}>
+                  {inviting ? 'Sending...' : 'Send Invitation'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
