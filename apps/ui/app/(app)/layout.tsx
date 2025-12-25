@@ -92,7 +92,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
         // Check if user is on waitlist
         if (data.waitlist_position) {
-          router.push(`/waitlist?position=${data.waitlist_position}`);
+          router.push('/waitlist');
           return;
         }
 
