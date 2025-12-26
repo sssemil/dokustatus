@@ -1,0 +1,204 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")"
+
+# Load environment from apps/api/.env if it exists
+if [[ -f apps/api/.env ]]; then
+    set -a
+    source apps/api/.env
+    set +a
+fi
+
+# Default environment variables for local development
+export DATABASE_URL="${DATABASE_URL:-postgres://user:password@localhost:5432/reauth}"
+export REDIS_URL="${REDIS_URL:-redis://localhost:6379}"
+
+# ============================================================================
+# Infrastructure commands
+# ============================================================================
+
+cmd_infra() {
+    echo "Starting postgres and redis..."
+    docker compose up -d postgres redis
+    docker compose ps
+}
+
+cmd_infra_stop() {
+    echo "Stopping containers..."
+    docker compose down
+}
+
+cmd_infra_logs() {
+    docker compose logs -f "$@"
+}
+
+# ============================================================================
+# Database commands
+# ============================================================================
+
+cmd_db_migrate() {
+    echo "Running migrations..."
+    cd apps/api
+    cargo sqlx migrate run
+}
+
+cmd_db_prepare() {
+    echo "Preparing SQLx offline data..."
+    cd apps/api
+    cargo sqlx prepare -- --bin reauth-api
+}
+
+# ============================================================================
+# API commands (Rust backend)
+# ============================================================================
+
+cmd_api() {
+    echo "Starting API..."
+    cd apps/api
+    cargo run "$@"
+}
+
+cmd_api_fmt() {
+    echo "Formatting Rust code..."
+    cd apps/api
+    cargo fmt "$@"
+}
+
+cmd_api_lint() {
+    echo "Running clippy..."
+    cd apps/api
+    cargo clippy --all-targets --all-features "$@"
+}
+
+cmd_api_test() {
+    echo "Running API tests..."
+    cd apps/api
+    cargo test "$@"
+}
+
+cmd_api_build() {
+    echo "Building API for production (offline mode)..."
+    cd apps/api
+    SQLX_OFFLINE=true cargo build --release "$@"
+}
+
+# ============================================================================
+# UI commands (Next.js frontend)
+# ============================================================================
+
+cmd_ui() {
+    echo "Starting UI dev server..."
+    cd apps/ui
+    npm run dev
+}
+
+cmd_ui_install() {
+    echo "Installing UI dependencies..."
+    cd apps/ui
+    npm install "$@"
+}
+
+cmd_ui_build() {
+    echo "Building UI for production..."
+    cd apps/ui
+    npm run build
+}
+
+# ============================================================================
+# SDK commands (TypeScript SDK)
+# ============================================================================
+
+cmd_sdk() {
+    echo "Starting SDK in watch mode..."
+    cd libs/reauth-sdk-ts
+    npm run dev
+}
+
+cmd_sdk_build() {
+    echo "Building SDK..."
+    cd libs/reauth-sdk-ts
+    npm run build
+}
+
+# ============================================================================
+# Docker commands
+# ============================================================================
+
+cmd_build() {
+    echo "Building Docker images..."
+    ./build-images.sh "$@"
+}
+
+# ============================================================================
+# Help
+# ============================================================================
+
+cmd_help() {
+    cat <<EOF
+Usage: ./run <command>
+
+Infrastructure:
+  infra          Start postgres and redis containers
+  infra:stop     Stop all containers
+  infra:logs     Tail container logs (pass service names to filter)
+
+Database:
+  db:migrate     Run SQLx migrations
+  db:prepare     Refresh SQLx offline data for CI/Docker builds
+
+API (Rust backend):
+  api            Run the API locally
+  api:fmt        Format Rust code
+  api:lint       Run clippy lints
+  api:test       Run backend tests
+  api:build      Production build with SQLX_OFFLINE=true
+
+UI (Next.js frontend):
+  ui             Run the UI dev server
+  ui:install     Install npm dependencies
+  ui:build       Production build
+
+SDK (TypeScript):
+  sdk            Run SDK in watch/dev mode
+  sdk:build      Build the TypeScript SDK
+
+Docker:
+  build          Build Docker images via build-images.sh
+
+Other:
+  help           Show this help message
+
+Examples:
+  ./run infra              # Start local services
+  ./run db:migrate         # Apply database migrations
+  ./run api                # Start the API
+  ./run ui                 # Start the UI dev server
+  ./run api:test -- -v     # Run tests with verbose output
+EOF
+}
+
+# ============================================================================
+# Main router
+# ============================================================================
+
+case "${1:-help}" in
+    infra)        cmd_infra ;;
+    infra:stop)   cmd_infra_stop ;;
+    infra:logs)   shift; cmd_infra_logs "$@" ;;
+    db:migrate)   cmd_db_migrate ;;
+    db:prepare)   cmd_db_prepare ;;
+    api)          shift; cmd_api "$@" ;;
+    api:fmt)      shift; cmd_api_fmt "$@" ;;
+    api:lint)     shift; cmd_api_lint "$@" ;;
+    api:test)     shift; cmd_api_test "$@" ;;
+    api:build)    shift; cmd_api_build "$@" ;;
+    ui)           cmd_ui ;;
+    ui:install)   shift; cmd_ui_install "$@" ;;
+    ui:build)     cmd_ui_build ;;
+    sdk)          cmd_sdk ;;
+    sdk:build)    cmd_sdk_build ;;
+    build)        shift; cmd_build "$@" ;;
+    help)         cmd_help ;;
+    *)            echo "Unknown command: $1"; echo; cmd_help; exit 1 ;;
+esac
