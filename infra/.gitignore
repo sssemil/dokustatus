@@ -3,3 +3,4 @@
 secrets/*
 !secrets/.gitkeep
 images/
+images.*/
