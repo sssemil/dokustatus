@@ -126,9 +126,14 @@ export default function TodosPage() {
           <h1 style={styles.title}>My Todos</h1>
           <p style={styles.email}>{user.email}</p>
         </div>
-        <button onClick={handleLogout} style={styles.logoutButton}>
-          Sign out
-        </button>
+        <div style={styles.headerButtons}>
+          <a href={`https://reauth.${DOMAIN}/profile`} style={styles.profileLink}>
+            Profile
+          </a>
+          <button onClick={handleLogout} style={styles.logoutButton}>
+            Sign out
+          </button>
+        </div>
       </header>
 
       <form onSubmit={addTodo} style={styles.form}>
@@ -198,6 +203,18 @@ const styles: Record<string, React.CSSProperties> = {
   email: {
     margin: 0,
     color: '#666',
+    fontSize: '14px',
+  },
+  headerButtons: {
+    display: 'flex',
+    gap: '10px',
+    alignItems: 'center',
+  },
+  profileLink: {
+    color: '#0070f3',
+    textDecoration: 'none',
+    padding: '8px 16px',
+    borderRadius: '4px',
     fontSize: '14px',
   },
   logoutButton: {
