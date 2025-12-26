@@ -1,0 +1,25 @@
+$ORIGIN test.
+$TTL 3600
+
+@       IN SOA  ns.test. admin.test. (
+            2024010101 ; serial
+            3600       ; refresh
+            600        ; retry
+            604800     ; expire
+            3600       ; minimum
+        )
+
+@               IN NS   ns
+ns              IN A    127.0.0.1
+
+; Ingress point for reauth.test domain
+ingress.reauth  IN A    127.0.0.1
+reauth.reauth   IN A    127.0.0.1
+reauth          IN A    127.0.0.1
+
+; Legacy local.test ingress (optional)
+ingress.local   IN A    127.0.0.1
+
+; Example domain setup (add more with ./run dns:add)
+; reauth.example      IN CNAME ingress.reauth.test.
+; _reauth.example     IN TXT   "project=<domain-uuid>"

@@ -46,11 +46,14 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let magic_link_config_repo_arc = postgres_arc.clone() as Arc<dyn DomainAuthMagicLinkRepo>;
     let end_user_repo_arc = postgres_arc.clone() as Arc<dyn DomainEndUserRepo>;
 
-    let dns_verifier = Arc::new(HickoryDnsVerifier::new());
+    let dns_verifier = Arc::new(match config.dns_server {
+        Some(addr) => HickoryDnsVerifier::with_nameserver(addr),
+        None => HickoryDnsVerifier::new(),
+    });
     let domain_use_cases = DomainUseCases::new(
         domain_repo_arc.clone(),
         dns_verifier,
-        "ingress.reauth.dev".to_string(),
+        config.ingress_domain.clone(),
     );
 
     // Initialize cipher for domain auth

@@ -28,5 +28,31 @@ services:
       timeout: 5s
       retries: 5
 
+  coredns:
+    image: coredns/coredns:latest
+    container_name: reauth-coredns
+    command: ["-conf", "/etc/coredns/Corefile"]
+    ports:
+      - "5354:53/udp"
+      - "5354:53/tcp"
+    volumes:
+      - ./local_infra/coredns:/etc/coredns:ro
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: reauth-caddy
+    ports:
+      - "443:443"
+      - "80:80"
+    volumes:
+      - ./local_infra/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./local_infra/certs:/etc/caddy/certs:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   postgres_data:
+  caddy_data:
+  caddy_config:

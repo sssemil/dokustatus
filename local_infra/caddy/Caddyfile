@@ -1,0 +1,38 @@
+{
+    on_demand_tls {
+        ask http://host.docker.internal:3001/api/domains/check-allowed
+    }
+}
+
+# Wildcard for *.reauth.test (reauth.reauth.test, ingress.reauth.test, etc.)
+*.reauth.test {
+    tls /etc/caddy/certs/wildcard.test.pem /etc/caddy/certs/wildcard.test-key.pem
+
+    handle /api/* {
+        reverse_proxy host.docker.internal:3001
+    }
+
+    reverse_proxy host.docker.internal:3000
+}
+
+# Wildcard for all .test domains
+*.test {
+    tls /etc/caddy/certs/wildcard.test.pem /etc/caddy/certs/wildcard.test-key.pem
+
+    handle /api/* {
+        reverse_proxy host.docker.internal:3001
+    }
+
+    reverse_proxy host.docker.internal:3000
+}
+
+# Localhost for dashboard access
+localhost {
+    tls /etc/caddy/certs/localhost.pem /etc/caddy/certs/localhost-key.pem
+
+    handle /api/* {
+        reverse_proxy host.docker.internal:3001
+    }
+
+    reverse_proxy host.docker.internal:3000
+}

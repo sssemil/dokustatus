@@ -24,6 +24,17 @@ cmd_infra() {
     docker compose ps
 }
 
+cmd_infra_full() {
+    # Check if certs exist
+    if [[ ! -f local_infra/certs/localhost.pem ]]; then
+        echo "Error: TLS certificates not found. Run './run certs' first."
+        exit 1
+    fi
+    echo "Starting postgres, redis, coredns, and caddy..."
+    docker compose up -d postgres redis coredns caddy
+    docker compose ps
+}
+
 cmd_infra_stop() {
     echo "Stopping containers..."
     docker compose down
@@ -47,6 +58,18 @@ cmd_db_prepare() {
     echo "Preparing SQLx offline data..."
     cd apps/api
     cargo sqlx prepare -- --bin reauth-api
+}
+
+cmd_dev_seed() {
+    echo "Replacing reauth.dev with reauth.test for local development..."
+    psql "$DATABASE_URL" <<'EOF'
+-- Rename reauth.dev to reauth.test (keeps owner, config, everything)
+UPDATE domains SET domain = 'reauth.test' WHERE domain = 'reauth.dev';
+EOF
+    echo "Done! reauth.dev is now reauth.test"
+    echo ""
+    echo "Ensure /etc/hosts has:"
+    echo "  127.0.0.1 reauth.test reauth.reauth.test ingress.reauth.test"
 }
 
 # ============================================================================
@@ -131,6 +154,48 @@ cmd_build() {
 }
 
 # ============================================================================
+# Local TLS/DNS commands
+# ============================================================================
+
+cmd_certs() {
+    echo "Generating local TLS certificates with mkcert..."
+    ./local_infra/setup-certs.sh
+}
+
+cmd_dns_add() {
+    local domain="$1"
+    local domain_id="$2"
+
+    if [[ -z "$domain" || -z "$domain_id" ]]; then
+        echo "Usage: ./run dns:add <domain> <domain_id>"
+        echo "Example: ./run dns:add example.test abc123-uuid"
+        exit 1
+    fi
+
+    local zone_file="local_infra/coredns/db.test"
+
+    # Append CNAME and TXT records
+    echo "" >> "$zone_file"
+    echo "; Domain: $domain (added $(date +%Y-%m-%d))" >> "$zone_file"
+    echo "reauth.$domain    IN CNAME ingress.local.test." >> "$zone_file"
+    echo "_reauth.$domain   IN TXT   \"project=$domain_id\"" >> "$zone_file"
+
+    echo "Added DNS records for $domain:"
+    echo "  CNAME: reauth.$domain -> ingress.local.test"
+    echo "  TXT:   _reauth.$domain -> project=$domain_id"
+
+    # Reload CoreDNS if running
+    if docker ps --format '{{.Names}}' | grep -q reauth-coredns; then
+        echo "Reloading CoreDNS..."
+        docker exec reauth-coredns kill -SIGUSR1 1 2>/dev/null || true
+    fi
+
+    echo ""
+    echo "Don't forget to add to /etc/hosts:"
+    echo "  echo \"127.0.0.1 reauth.$domain\" | sudo tee -a /etc/hosts"
+}
+
+# ============================================================================
 # Help
 # ============================================================================
 
@@ -139,13 +204,15 @@ cmd_help() {
 Usage: ./run <command>
 
 Infrastructure:
-  infra          Start postgres and redis containers
+  infra          Start postgres and redis (basic dev)
+  infra:full     Start postgres, redis, coredns, and caddy (TLS dev)
   infra:stop     Stop all containers
   infra:logs     Tail container logs (pass service names to filter)
 
 Database:
   db:migrate     Run SQLx migrations
   db:prepare     Refresh SQLx offline data for CI/Docker builds
+  dev:seed       Rename reauth.dev to reauth.test for local dev
 
 API (Rust backend):
   api            Run the API locally
@@ -166,15 +233,20 @@ SDK (TypeScript):
 Docker:
   build          Build Docker images via build-images.sh
 
+Local TLS/DNS:
+  certs          Generate local TLS certificates with mkcert
+  dns:add        Add CNAME/TXT records for a domain (dns:add <domain> <uuid>)
+
 Other:
   help           Show this help message
 
 Examples:
-  ./run infra              # Start local services
-  ./run db:migrate         # Apply database migrations
-  ./run api                # Start the API
-  ./run ui                 # Start the UI dev server
-  ./run api:test -- -v     # Run tests with verbose output
+  ./run infra                           # Start all local services
+  ./run db:migrate                      # Apply database migrations
+  ./run api                             # Start the API
+  ./run ui                              # Start the UI dev server
+  ./run certs                           # Generate mkcert certificates (one-time)
+  ./run dns:add example.test abc-uuid   # Add DNS records for a test domain
 EOF
 }
 
@@ -184,10 +256,12 @@ EOF
 
 case "${1:-help}" in
     infra)        cmd_infra ;;
+    infra:full)   cmd_infra_full ;;
     infra:stop)   cmd_infra_stop ;;
     infra:logs)   shift; cmd_infra_logs "$@" ;;
     db:migrate)   cmd_db_migrate ;;
     db:prepare)   cmd_db_prepare ;;
+    dev:seed)     cmd_dev_seed ;;
     api)          shift; cmd_api "$@" ;;
     api:fmt)      shift; cmd_api_fmt "$@" ;;
     api:lint)     shift; cmd_api_lint "$@" ;;
@@ -199,6 +273,8 @@ case "${1:-help}" in
     sdk)          cmd_sdk ;;
     sdk:build)    cmd_sdk_build ;;
     build)        shift; cmd_build "$@" ;;
+    certs)        cmd_certs ;;
+    dns:add)      shift; cmd_dns_add "$@" ;;
     help)         cmd_help ;;
     *)            echo "Unknown command: $1"; echo; cmd_help; exit 1 ;;
 esac

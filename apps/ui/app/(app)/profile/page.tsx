@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useAppContext } from '../layout';
+import { getRootDomain } from '@/lib/domain-utils';
 
 export default function ProfilePage() {
   const { user, displayDomain } = useAppContext();
@@ -36,8 +37,8 @@ export default function ProfilePage() {
   const hasEmailChanged = email !== originalEmail;
 
   const handleLogout = async () => {
-    const hostname = window.location.hostname;
-    await fetch(`/api/public/domain/${hostname}/auth/logout`, {
+    const apiDomain = getRootDomain(window.location.hostname);
+    await fetch(`/api/public/domain/${apiDomain}/auth/logout`, {
       method: 'POST',
       credentials: 'include',
     });
@@ -51,10 +52,10 @@ export default function ProfilePage() {
     }
 
     setDeleteStatus('loading');
-    const hostname = window.location.hostname;
+    const apiDomain = getRootDomain(window.location.hostname);
 
     try {
-      const res = await fetch(`/api/public/domain/${hostname}/auth/account`, {
+      const res = await fetch(`/api/public/domain/${apiDomain}/auth/account`, {
         method: 'DELETE',
         credentials: 'include',
       });

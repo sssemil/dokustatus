@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Suspense } from 'react';
+import { isMainApp as checkIsMainApp, getRootDomain } from '@/lib/domain-utils';
 
 function WaitlistContent() {
   const router = useRouter();
@@ -14,10 +15,11 @@ function WaitlistContent() {
   useEffect(() => {
     const checkStatus = async () => {
       const hostname = window.location.hostname;
-      const isMainApp = hostname === 'reauth.dev' || hostname === 'www.reauth.dev';
+      const isMainApp = checkIsMainApp(hostname);
+      const apiDomain = getRootDomain(hostname);
 
       try {
-        const res = await fetch(`/api/public/domain/${hostname}/auth/session`, {
+        const res = await fetch(`/api/public/domain/${apiDomain}/auth/session`, {
           credentials: 'include',
         });
 
@@ -34,7 +36,7 @@ function WaitlistContent() {
           setStatus('error');
           setErrorMessage(data.error);
           // Log them out
-          await fetch(`/api/public/domain/${hostname}/auth/logout`, {
+          await fetch(`/api/public/domain/${apiDomain}/auth/logout`, {
             method: 'POST',
             credentials: 'include',
           });
@@ -58,7 +60,7 @@ function WaitlistContent() {
           } else {
             // Fetch redirect URL for custom domains
             try {
-              const configRes = await fetch(`/api/public/domain/${hostname}/config`);
+              const configRes = await fetch(`/api/public/domain/${apiDomain}/config`);
               if (configRes.ok) {
                 const config = await configRes.json();
                 if (config.redirect_url) {
@@ -79,8 +81,8 @@ function WaitlistContent() {
   }, [router]);
 
   const handleLogout = async () => {
-    const hostname = window.location.hostname;
-    await fetch(`/api/public/domain/${hostname}/auth/logout`, {
+    const apiDomain = getRootDomain(window.location.hostname);
+    await fetch(`/api/public/domain/${apiDomain}/auth/logout`, {
       method: 'POST',
       credentials: 'include',
     });

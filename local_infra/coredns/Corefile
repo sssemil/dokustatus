@@ -1,0 +1,6 @@
+. {
+    file /etc/coredns/db.test test
+    forward . /etc/resolv.conf
+    log
+    errors
+}

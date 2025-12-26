@@ -1,12 +1,16 @@
 /**
- * Domain utilities for handling reauth.dev routing
+ * Domain utilities for handling reauth routing
+ * Configurable via NEXT_PUBLIC_MAIN_DOMAIN env var for local dev
  */
 
-/** Main app domains that show the dashboard */
-export const MAIN_DOMAINS = ['reauth.dev', 'www.reauth.dev'];
+/** Get the main domain from env or default to reauth.dev */
+const MAIN_DOMAIN = process.env.NEXT_PUBLIC_MAIN_DOMAIN || 'reauth.dev';
 
-/** The auth ingress for the main app (where users log in to reauth.dev) */
-export const AUTH_INGRESS = 'reauth.reauth.dev';
+/** Main app domains that show the dashboard */
+export const MAIN_DOMAINS = [MAIN_DOMAIN, `www.${MAIN_DOMAIN}`];
+
+/** The auth ingress for the main app (where users log in) */
+export const AUTH_INGRESS = `reauth.${MAIN_DOMAIN}`;
 
 /** Full URLs for common redirects */
 export const URLS = {
@@ -32,10 +36,10 @@ export function isAuthIngress(hostname: string): boolean {
 /**
  * Extract the root domain from a reauth.* hostname
  * e.g., "reauth.example.com" -> "example.com"
- * Special case: "reauth.dev" stays as "reauth.dev"
+ * Special case: main domain stays as-is
  */
 export function getRootDomain(hostname: string): string {
-  if (hostname.startsWith('reauth.') && hostname !== 'reauth.dev') {
+  if (hostname.startsWith('reauth.') && !isMainApp(hostname)) {
     return hostname.slice('reauth.'.length);
   }
   return hostname;

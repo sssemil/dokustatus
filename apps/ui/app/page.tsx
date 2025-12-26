@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { isMainApp as checkIsMainApp, getRootDomain, URLS } from '@/lib/domain-utils';
 
 export default function Home() {
   const [email, setEmail] = useState('');
@@ -12,19 +13,11 @@ export default function Home() {
 
   useEffect(() => {
     const hostname = window.location.hostname;
+    const isMainApp = checkIsMainApp(hostname);
 
-    // Determine if we're on an auth ingress (reauth.* subdomain) or main app (reauth.dev)
-    const isMainApp = hostname === 'reauth.dev' || hostname === 'www.reauth.dev';
-    const isLocalhost = hostname === 'localhost';
-
-    // For API calls, use the current hostname (ingress handles its own domain)
-    const apiDomain = hostname;
-
-    // Display domain: strip "reauth." prefix for ingress subdomains
-    const rootDomain = hostname.startsWith('reauth.') && hostname !== 'reauth.dev'
-      ? hostname.slice(7)
-      : hostname;
-    setDisplayDomain(rootDomain);
+    // For API calls, use the root domain (strip reauth. prefix)
+    const apiDomain = getRootDomain(hostname);
+    setDisplayDomain(apiDomain);
 
     const checkAuth = async () => {
       try {
@@ -37,7 +30,7 @@ export default function Home() {
             // Logout and show login
             await fetch(`/api/public/domain/${apiDomain}/auth/logout`, { method: 'POST', credentials: 'include' });
             if (isMainApp) {
-              window.location.href = 'https://reauth.reauth.dev/';
+              window.location.href = URLS.authIngress;
             } else {
               setStatus('idle');
             }
@@ -48,7 +41,7 @@ export default function Home() {
             // Check if user is on waitlist
             if (data.waitlist_position) {
               if (isMainApp) {
-                window.location.href = 'https://reauth.reauth.dev/waitlist';
+                window.location.href = URLS.waitlist;
               } else {
                 router.push('/waitlist');
               }
@@ -56,7 +49,7 @@ export default function Home() {
             }
 
             if (isMainApp) {
-              // On reauth.dev, go to dashboard
+              // On main app, go to dashboard
               router.push('/dashboard');
             } else {
               // On ingress, fetch redirect URL and redirect there
@@ -81,8 +74,8 @@ export default function Home() {
       }
 
       if (isMainApp) {
-        // On reauth.dev, redirect to auth ingress for login
-        window.location.href = 'https://reauth.reauth.dev/';
+        // On main app, redirect to auth ingress for login
+        window.location.href = URLS.authIngress;
       } else {
         // On auth ingress, show login form
         setStatus('idle');
@@ -96,10 +89,10 @@ export default function Home() {
     setStatus('loading');
     setErrorMessage('');
 
-    const hostname = window.location.hostname;
+    const apiDomain = getRootDomain(window.location.hostname);
 
     try {
-      const res = await fetch(`/api/public/domain/${hostname}/auth/request-magic-link`, {
+      const res = await fetch(`/api/public/domain/${apiDomain}/auth/request-magic-link`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email }),

@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
+import { isMainApp as checkIsMainApp, getRootDomain, URLS } from '@/lib/domain-utils';
 
 type ErrorType = 'expired' | 'suspended' | 'generic';
 
@@ -24,10 +25,11 @@ function MagicLinkHandler() {
 
     const consumeToken = async () => {
       const hostname = window.location.hostname;
-      const isMainApp = hostname === 'reauth.dev' || hostname === 'www.reauth.dev';
+      const isMainApp = checkIsMainApp(hostname);
+      const apiDomain = getRootDomain(hostname);
 
       try {
-        const res = await fetch(`/api/public/domain/${hostname}/auth/verify-magic-link`, {
+        const res = await fetch(`/api/public/domain/${apiDomain}/auth/verify-magic-link`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ token }),
@@ -41,7 +43,7 @@ function MagicLinkHandler() {
             // Check if user is on waitlist
             if (data.waitlist_position) {
               if (isMainApp) {
-                window.location.href = 'https://reauth.reauth.dev/waitlist';
+                window.location.href = URLS.waitlist;
               } else {
                 router.push('/waitlist');
               }

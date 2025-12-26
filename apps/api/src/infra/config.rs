@@ -24,6 +24,12 @@ pub struct AppConfig {
     /// Whether to trust X-Forwarded-For headers. Set to true when behind a reverse proxy (Caddy, nginx).
     /// SECURITY: Only enable this when the API is not directly exposed to the internet.
     pub trust_proxy: bool,
+    /// The ingress domain that custom domains should CNAME to (e.g., "ingress.reauth.dev").
+    pub ingress_domain: String,
+    /// Optional DNS server address for lookups (e.g., "127.0.0.1:5353" for local CoreDNS).
+    pub dns_server: Option<SocketAddr>,
+    /// The main reauth domain (e.g., "reauth.dev" in prod, "reauth.test" for local dev).
+    pub main_domain: String,
 }
 
 impl AppConfig {
@@ -52,6 +58,13 @@ impl AppConfig {
         let database_url: String = get_env("DATABASE_URL");
         // Default to false for security - must explicitly enable when behind a trusted proxy
         let trust_proxy: bool = get_env_default("TRUST_PROXY", false);
+        let ingress_domain: String =
+            get_env_default("INGRESS_DOMAIN", "ingress.reauth.dev".to_string());
+        let dns_server: Option<SocketAddr> = std::env::var("DNS_SERVER")
+            .ok()
+            .and_then(|s| s.parse().ok());
+        let main_domain: String =
+            get_env_default("MAIN_DOMAIN", "reauth.dev".to_string());
 
         Self {
             jwt_secret,
@@ -69,6 +82,9 @@ impl AppConfig {
             rate_limit_per_email,
             database_url,
             trust_proxy,
+            ingress_domain,
+            dns_server,
+            main_domain,
         }
     }
 }

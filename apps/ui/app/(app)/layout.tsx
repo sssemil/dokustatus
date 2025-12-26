@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, createContext, useContext, ReactNode } fro
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { useTheme } from '../components/ThemeContext';
+import { isMainApp as checkIsMainApp, getRootDomain, URLS } from '@/lib/domain-utils';
 
 type User = {
   email: string;
@@ -42,31 +43,27 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const hostname = window.location.hostname;
-    const isMainApp = hostname === 'reauth.dev' || hostname === 'www.reauth.dev';
+    const isMainApp = checkIsMainApp(hostname);
     setIsIngress(!isMainApp && hostname !== 'localhost');
     setApiDomain(hostname);
-
-    // Display domain: strip "reauth." prefix for ingress subdomains
-    const rootDomain = hostname.startsWith('reauth.') && hostname !== 'reauth.dev'
-      ? hostname.slice(7)
-      : hostname;
-    setDisplayDomain(rootDomain);
+    setDisplayDomain(getRootDomain(hostname));
   }, []);
 
   const fetchUser = async () => {
     const hostname = window.location.hostname;
+    const apiDomain = getRootDomain(hostname);
     try {
-      let res = await fetch(`/api/public/domain/${hostname}/auth/session`, { credentials: 'include' });
+      let res = await fetch(`/api/public/domain/${apiDomain}/auth/session`, { credentials: 'include' });
 
       // If session check fails with 401, try to refresh the token
       if (res.status === 401) {
-        const refreshRes = await fetch(`/api/public/domain/${hostname}/auth/refresh`, {
+        const refreshRes = await fetch(`/api/public/domain/${apiDomain}/auth/refresh`, {
           method: 'POST',
           credentials: 'include',
         });
         if (refreshRes.ok) {
           // Retry session check after refresh
-          res = await fetch(`/api/public/domain/${hostname}/auth/session`, { credentials: 'include' });
+          res = await fetch(`/api/public/domain/${apiDomain}/auth/session`, { credentials: 'include' });
         }
       }
 
@@ -80,7 +77,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         // Check for error (e.g., account suspended)
         if (data.error) {
           // Logout and redirect
-          await fetch(`/api/public/domain/${hostname}/auth/logout`, { method: 'POST', credentials: 'include' });
+          await fetch(`/api/public/domain/${apiDomain}/auth/logout`, { method: 'POST', credentials: 'include' });
           router.push('/');
           return;
         }
@@ -93,9 +90,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         // Check if user is on waitlist
         if (data.waitlist_position) {
           const hostname = window.location.hostname;
-          const isMainApp = hostname === 'reauth.dev' || hostname === 'www.reauth.dev';
-          if (isMainApp) {
-            window.location.href = 'https://reauth.reauth.dev/waitlist';
+          if (checkIsMainApp(hostname)) {
+            window.location.href = URLS.waitlist;
           } else {
             router.push('/waitlist');
           }
@@ -126,8 +122,8 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   }, []);
 
   const handleLogout = async () => {
-    const hostname = window.location.hostname;
-    await fetch(`/api/public/domain/${hostname}/auth/logout`, { method: 'POST', credentials: 'include' });
+    const apiDomain = getRootDomain(window.location.hostname);
+    await fetch(`/api/public/domain/${apiDomain}/auth/logout`, { method: 'POST', credentials: 'include' });
     // Full page reload to clear state
     window.location.href = '/';
   };
@@ -282,7 +278,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 zIndex: 100,
               }}>
                 <button
-                  onClick={() => { setMenuOpen(false); window.location.href = 'https://reauth.reauth.dev/profile'; }}
+                  onClick={() => { setMenuOpen(false); window.location.href = URLS.profile; }}
                   style={{
                     width: '100%',
                     padding: 'var(--spacing-sm) var(--spacing-md)',

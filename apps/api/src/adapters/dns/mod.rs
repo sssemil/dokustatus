@@ -1,5 +1,10 @@
+use std::net::SocketAddr;
+
 use async_trait::async_trait;
+use hickory_resolver::config::{NameServerConfig, ResolverConfig};
+use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::proto::rr::RecordType;
+use hickory_resolver::proto::xfer::Protocol;
 use hickory_resolver::TokioResolver;
 use tracing::{debug, warn};
 
@@ -11,8 +16,19 @@ pub struct HickoryDnsVerifier {
 }
 
 impl HickoryDnsVerifier {
+    /// Create resolver using system DNS configuration.
     pub fn new() -> Self {
         let resolver = TokioResolver::builder_tokio().unwrap().build();
+        Self { resolver }
+    }
+
+    /// Create resolver pointing to a specific DNS server (for local dev with CoreDNS).
+    pub fn with_nameserver(addr: SocketAddr) -> Self {
+        let mut config = ResolverConfig::new();
+        config.add_name_server(NameServerConfig::new(addr, Protocol::Udp));
+
+        let resolver =
+            TokioResolver::builder_with_config(config, TokioConnectionProvider::default()).build();
         Self { resolver }
     }
 }
