@@ -10,8 +10,17 @@ RUN npm ci
 FROM node-base AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
+
+# Production defaults for build-time env vars
+ARG NEXT_PUBLIC_MAIN_DOMAIN=reauth.dev
+ENV NEXT_PUBLIC_MAIN_DOMAIN=${NEXT_PUBLIC_MAIN_DOMAIN}
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY apps/ui/ .
+
+# Remove local dev env file if it exists
+RUN rm -f .env.local
+
 RUN npm run build
 
 FROM node-base AS runner

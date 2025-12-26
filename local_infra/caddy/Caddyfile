@@ -15,6 +15,26 @@
     reverse_proxy host.docker.internal:3000
 }
 
+# Demo app (demo.test and *.demo.test)
+demo.test, *.demo.test {
+    tls /etc/caddy/certs/wildcard.test.pem /etc/caddy/certs/wildcard.test-key.pem
+
+    # Auth subdomain (reauth.demo.test) -> reauth API
+    @auth host reauth.demo.test
+    handle @auth {
+        handle /api/* {
+            reverse_proxy host.docker.internal:3001
+        }
+        reverse_proxy host.docker.internal:3000
+    }
+
+    # Demo app
+    handle /api/* {
+        reverse_proxy host.docker.internal:3003
+    }
+    reverse_proxy host.docker.internal:3002
+}
+
 # Wildcard for all .test domains
 *.test {
     tls /etc/caddy/certs/wildcard.test.pem /etc/caddy/certs/wildcard.test-key.pem

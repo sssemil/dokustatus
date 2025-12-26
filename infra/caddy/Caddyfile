@@ -17,6 +17,17 @@ reauth.dev, www.reauth.dev {
     reverse_proxy 127.0.0.1:3000
 }
 
+# Demo todo app - anypost.xyz
+anypost.xyz, www.anypost.xyz {
+    # Demo API routes
+    handle /api/* {
+        reverse_proxy 127.0.0.1:3003
+    }
+
+    # Demo UI
+    reverse_proxy 127.0.0.1:3002
+}
+
 # Catch-all for custom domains including reauth.reauth.dev (on-demand TLS)
 # This handles any domain that CNAMEs to ingress.reauth.dev
 :443 {

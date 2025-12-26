@@ -145,6 +145,75 @@ cmd_sdk_build() {
 }
 
 # ============================================================================
+# Demo app commands
+# ============================================================================
+
+cmd_demo() {
+    echo "Starting demo UI and API..."
+    echo "Demo UI: http://localhost:3002 (or https://demo.test via Caddy)"
+    echo "Demo API: http://localhost:3003"
+    echo ""
+
+    # Run both in parallel
+    (cd apps/demo_api && npm run dev) &
+    (cd apps/demo_ui && npm run dev) &
+    wait
+}
+
+cmd_demo_api() {
+    echo "Starting demo API..."
+    cd apps/demo_api
+    npm run dev
+}
+
+cmd_demo_ui() {
+    echo "Starting demo UI..."
+    cd apps/demo_ui
+    npm run dev
+}
+
+cmd_demo_install() {
+    echo "Installing demo dependencies..."
+
+    # Build SDK first
+    echo "Building SDK..."
+    (cd libs/reauth-sdk-ts && npm install && npm run build)
+
+    echo "Installing demo API dependencies..."
+    (cd apps/demo_api && npm install)
+
+    echo "Installing demo UI dependencies..."
+    (cd apps/demo_ui && npm install)
+
+    echo "Done!"
+}
+
+cmd_demo_setup() {
+    echo "Setting up demo.test domain..."
+
+    # Get owner ID from reauth.test domain
+    local owner_id
+    owner_id=$(psql "$DATABASE_URL" -t -c "SELECT owner_id FROM domains WHERE domain = 'reauth.test'" | tr -d ' ')
+
+    if [[ -z "$owner_id" ]]; then
+        echo "Error: reauth.test not found. Run './run dev:seed' first."
+        exit 1
+    fi
+
+    psql "$DATABASE_URL" <<EOF
+-- Create demo.test domain with same owner as reauth.test
+INSERT INTO domains (domain, owner_id)
+VALUES ('demo.test', '$owner_id')
+ON CONFLICT (domain) DO NOTHING;
+EOF
+
+    echo "Done! demo.test domain created."
+    echo ""
+    echo "Ensure /etc/hosts has:"
+    echo "  127.0.0.1 demo.test reauth.demo.test"
+}
+
+# ============================================================================
 # Docker commands
 # ============================================================================
 
@@ -230,6 +299,13 @@ SDK (TypeScript):
   sdk            Run SDK in watch/dev mode
   sdk:build      Build the TypeScript SDK
 
+Demo app:
+  demo           Start both demo UI and API
+  demo:api       Start demo API only
+  demo:ui        Start demo UI only
+  demo:install   Install demo dependencies (builds SDK first)
+  demo:setup     Create demo.test domain in database
+
 Docker:
   build          Build Docker images via build-images.sh
 
@@ -272,6 +348,11 @@ case "${1:-help}" in
     ui:build)     cmd_ui_build ;;
     sdk)          cmd_sdk ;;
     sdk:build)    cmd_sdk_build ;;
+    demo)         cmd_demo ;;
+    demo:api)     cmd_demo_api ;;
+    demo:ui)      cmd_demo_ui ;;
+    demo:install) cmd_demo_install ;;
+    demo:setup)   cmd_demo_setup ;;
     build)        shift; cmd_build "$@" ;;
     certs)        cmd_certs ;;
     dns:add)      shift; cmd_dns_add "$@" ;;

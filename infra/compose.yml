@@ -140,6 +140,47 @@ services:
     networks:
       - reauth-net
 
+  demo-api:
+    image: demo-api:latest
+    <<: *default-env
+    environment:
+      NODE_ENV: production
+      PORT: ${DEMO_API_PORT:-3003}
+      REDIS_HOST: ${REDIS_HOST:-redis}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      DOMAIN: ${DEMO_DOMAIN:-anypost.xyz}
+    ports:
+      - "127.0.0.1:${DEMO_API_PORT:-3003}:${DEMO_API_PORT:-3003}"
+    depends_on:
+      - redis
+    secrets:
+      - redis_password
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        REDIS_PASSWORD_RAW="$$(cat /run/secrets/redis_password)"
+        export REDIS_URL="redis://default:$$REDIS_PASSWORD_RAW@${REDIS_HOST:-redis}:${REDIS_PORT:-6379}"
+        exec node dist/index.js
+    restart: unless-stopped
+    networks:
+      - reauth-net
+
+  demo-ui:
+    image: demo-ui:latest
+    <<: *default-env
+    environment:
+      NODE_ENV: production
+      PORT: ${DEMO_UI_PORT:-3002}
+      NEXT_PUBLIC_DOMAIN: ${DEMO_DOMAIN:-anypost.xyz}
+    ports:
+      - "127.0.0.1:${DEMO_UI_PORT:-3002}:${DEMO_UI_PORT:-3002}"
+    depends_on:
+      - demo-api
+    restart: unless-stopped
+    networks:
+      - reauth-net
+
   caddy:
     image: caddy:2-alpine
     network_mode: host
@@ -151,6 +192,8 @@ services:
     depends_on:
       - ui
       - api
+      - demo-ui
+      - demo-api
     restart: unless-stopped
 
 volumes:

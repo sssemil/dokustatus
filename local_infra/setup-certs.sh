@@ -30,7 +30,7 @@ mkcert -cert-file "$CERT_DIR/localhost.pem" \
 # Generate wildcard cert for .test TLD
 mkcert -cert-file "$CERT_DIR/wildcard.test.pem" \
        -key-file "$CERT_DIR/wildcard.test-key.pem" \
-       "*.test" "*.reauth.test" "*.local.test" "*.example.test" localhost.test
+       "*.test" "*.reauth.test" "*.demo.test" "*.local.test" "*.example.test" localhost.test
 
 echo ""
 echo "Certificates generated in $CERT_DIR:"

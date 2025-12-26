@@ -15,6 +15,8 @@ SSH_OPTS="${SSH_OPTS:-}"
 
 API_IMAGE="reauth-api:latest"
 UI_IMAGE="reauth-ui:latest"
+DEMO_API_IMAGE="demo-api:latest"
+DEMO_UI_IMAGE="demo-ui:latest"
 
 usage() {
   cat <<EOF
@@ -45,6 +47,8 @@ trap 'rm -rf "$IMAGES_DIR"' EXIT
 
 docker save "$API_IMAGE" > "${IMAGES_DIR}/reauth-api.tar"
 docker save "$UI_IMAGE" > "${IMAGES_DIR}/reauth-ui.tar"
+docker save "$DEMO_API_IMAGE" > "${IMAGES_DIR}/demo-api.tar"
+docker save "$DEMO_UI_IMAGE" > "${IMAGES_DIR}/demo-ui.tar"
 
 echo "Syncing artifacts to ${DEPLOY_USER}@${DEPLOY_HOST}:${REMOTE_DIR}"
 ssh $SSH_OPTS "${DEPLOY_USER}@${DEPLOY_HOST}" "sudo mkdir -p ${REMOTE_DIR}/images ${REMOTE_DIR}/caddy/ingress ${REMOTE_DIR}/secrets && sudo chown -R ${DEPLOY_USER}:${DEPLOY_USER} ${REMOTE_DIR}" || true
@@ -65,6 +69,8 @@ CADDY_CHANGED="$1"
 cd "${REMOTE_DIR:-/opt/reauth}"
 docker load -i images/reauth-api.tar
 docker load -i images/reauth-ui.tar
+docker load -i images/demo-api.tar
+docker load -i images/demo-ui.tar
 
 # Helper function for docker compose
 dc() {
