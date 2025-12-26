@@ -82,6 +82,13 @@ if [ "$CADDY_CHANGED" -gt 0 ]; then
   echo "Caddy config changed, restarting caddy..."
   dc restart caddy
 fi
+
+# Clean up old containers and dangling images from our app
+echo "Cleaning up old containers and images..."
+# Remove stopped containers from this compose project
+docker container prune -f --filter "label=com.docker.compose.project=reauth" 2>/dev/null || true
+# Remove dangling images (old untagged images after loading new ones with same tag)
+docker image prune -f 2>/dev/null || true
 EOF
 
 echo "Deployment finished."

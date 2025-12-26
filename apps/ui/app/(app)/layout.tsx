@@ -176,7 +176,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <AppContext.Provider value={{ user, refetchUser: fetchUser, isIngress, displayDomain }}>
-      <div style={{ display: 'flex', minHeight: '100vh' }}>
+      <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
         {/* Sidebar */}
         <aside style={{
           width: '240px',
@@ -339,7 +339,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         {/* Main content */}
         <main style={{
           flex: 1,
-          padding: 'var(--spacing-xl)',
           overflow: 'auto',
         }}>
           <div style={{
@@ -350,8 +349,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             marginRight: 'auto',
             width: '100%',
             maxWidth: '72rem',
-            paddingLeft: 'var(--spacing-lg)',
-            paddingRight: 'var(--spacing-lg)',
+            padding: 'var(--spacing-xl)',
           }}>
             {children}
           </div>
