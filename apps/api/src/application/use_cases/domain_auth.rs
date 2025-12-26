@@ -196,12 +196,18 @@ impl DomainAuthUseCases {
 
         let auth_config = self.auth_config_repo.get_by_domain_id(domain.id).await?;
 
+        // Default redirect URL to https://{domain} if not configured
+        let redirect_url = auth_config
+            .as_ref()
+            .and_then(|c| c.redirect_url.clone())
+            .unwrap_or_else(|| format!("https://{}", domain.domain));
+
         Ok(PublicDomainConfig {
             domain_id: domain.id,
             domain: domain.domain,
             magic_link_enabled: auth_config.as_ref().map(|c| c.magic_link_enabled).unwrap_or(false),
             google_oauth_enabled: auth_config.as_ref().map(|c| c.google_oauth_enabled).unwrap_or(false),
-            redirect_url: auth_config.and_then(|c| c.redirect_url),
+            redirect_url: Some(redirect_url),
         })
     }
 

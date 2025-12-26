@@ -202,10 +202,16 @@ async fn verify_magic_link(
             };
 
             // Only provide redirect_url if user is whitelisted (or whitelist not enabled)
+            // Default to https://{domain} if not configured
             let redirect_url = if on_waitlist {
                 None
             } else {
-                config.as_ref().and_then(|c| c.redirect_url.clone())
+                Some(
+                    config
+                        .as_ref()
+                        .and_then(|c| c.redirect_url.clone())
+                        .unwrap_or_else(|| format!("https://{}", root_domain)),
+                )
             };
 
             // Issue access token (short-lived)
