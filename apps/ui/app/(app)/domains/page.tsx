@@ -16,6 +16,7 @@ type Domain = {
   };
   verified_at: string | null;
   created_at: string | null;
+  has_auth_methods: boolean;
 };
 
 type WizardStep = 'closed' | 'input' | 'records';
@@ -446,7 +447,23 @@ export default function DomainsPage() {
                   </span>
                 </div>
               )}
-              {getStatusBadge(domain.status)}
+              <div style={{ display: 'flex', gap: 'var(--spacing-xs)', alignItems: 'center', flexWrap: 'wrap' }}>
+                {getStatusBadge(domain.status)}
+                {domain.status === 'verified' && !domain.has_auth_methods && (
+                  <span
+                    style={{
+                      padding: '4px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'rgba(204, 120, 50, 0.15)',
+                      color: '#cc7832',
+                      fontSize: '12px',
+                      fontWeight: 500,
+                    }}
+                  >
+                    No Login Methods
+                  </span>
+                )}
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
               {domain.status === 'failed' && (

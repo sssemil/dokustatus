@@ -477,6 +477,13 @@ export default function DomainDetailPage() {
         </div>
       )}
 
+      {/* No Auth Methods Warning */}
+      {domain.status === 'verified' && !magicLinkEnabled && !authConfig?.google_oauth_enabled && (
+        <div className="message warning" style={{ marginBottom: 'var(--spacing-md)' }}>
+          No login methods are enabled. Go to the Configuration tab to enable Magic Link or Google OAuth.
+        </div>
+      )}
+
       {/* Verifying Banner */}
       {domain.status === 'verifying' && (
         <div

@@ -8,17 +8,34 @@ type UsageStats = {
   total_users: number;
 };
 
+type Domain = {
+  id: string;
+  domain: string;
+  status: string;
+  has_auth_methods: boolean;
+};
+
 export default function DashboardPage() {
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [domainsWithoutAuth, setDomainsWithoutAuth] = useState<Domain[]>([]);
 
   useEffect(() => {
-    const fetchStats = async () => {
+    const fetchData = async () => {
       try {
-        const res = await fetch('/api/domains/stats', { credentials: 'include' });
-        if (res.ok) {
-          const data = await res.json();
+        // Fetch stats
+        const statsRes = await fetch('/api/domains/stats', { credentials: 'include' });
+        if (statsRes.ok) {
+          const data = await statsRes.json();
           setStats(data);
+        }
+
+        // Fetch domains to check for auth methods
+        const domainsRes = await fetch('/api/domains', { credentials: 'include' });
+        if (domainsRes.ok) {
+          const domains: Domain[] = await domainsRes.json();
+          const withoutAuth = domains.filter(d => d.status === 'verified' && !d.has_auth_methods);
+          setDomainsWithoutAuth(withoutAuth);
         }
       } catch {
         // Ignore
@@ -26,12 +43,33 @@ export default function DashboardPage() {
         setLoading(false);
       }
     };
-    fetchStats();
+    fetchData();
   }, []);
 
   return (
     <>
       <h1>Dashboard</h1>
+
+      {/* No Auth Methods Warning */}
+      {domainsWithoutAuth.length > 0 && (
+        <div className="message warning" style={{ marginBottom: 'var(--spacing-md)' }}>
+          {domainsWithoutAuth.length === 1 ? (
+            <>
+              Domain <strong>{domainsWithoutAuth[0].domain}</strong> has no login methods enabled.{' '}
+              <Link href={`/domains/${domainsWithoutAuth[0].id}`} style={{ color: 'inherit', fontWeight: 500 }}>
+                Configure now
+              </Link>
+            </>
+          ) : (
+            <>
+              {domainsWithoutAuth.length} domains have no login methods enabled.{' '}
+              <Link href="/domains" style={{ color: 'inherit', fontWeight: 500 }}>
+                Configure now
+              </Link>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Usage Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--spacing-md)' }}>

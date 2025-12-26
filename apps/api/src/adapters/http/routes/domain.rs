@@ -94,6 +94,7 @@ struct DomainResponse {
     dns_records: Option<DnsRecordsResponse>,
     verified_at: Option<chrono::NaiveDateTime>,
     created_at: Option<chrono::NaiveDateTime>,
+    has_auth_methods: bool,
 }
 
 #[derive(Serialize)]
@@ -134,6 +135,7 @@ async fn create_domain(
             }),
             verified_at: domain.verified_at,
             created_at: domain.created_at,
+            has_auth_methods: true, // New domains don't need warning yet
         }),
     ))
 }
@@ -146,25 +148,42 @@ async fn list_domains(
 
     let domains = app_state.domain_use_cases.list_domains(user_id).await?;
 
-    let response: Vec<DomainResponse> = domains
-        .into_iter()
-        .map(|d| {
-            let dns_records = app_state.domain_use_cases.get_dns_records(&d.domain, d.id);
-            DomainResponse {
-                id: d.id,
-                domain: d.domain,
-                status: d.status.as_str().to_string(),
-                dns_records: Some(DnsRecordsResponse {
-                    cname_name: dns_records.cname_name,
-                    cname_value: dns_records.cname_value,
-                    txt_name: dns_records.txt_name,
-                    txt_value: dns_records.txt_value,
-                }),
-                verified_at: d.verified_at,
-                created_at: d.created_at,
+    let mut response: Vec<DomainResponse> = Vec::with_capacity(domains.len());
+
+    for d in domains {
+        let dns_records = app_state.domain_use_cases.get_dns_records(&d.domain, d.id);
+
+        // Check if domain has any auth methods enabled (only matters for verified domains)
+        let has_auth_methods = if d.status == DomainStatus::Verified {
+            if let Ok(Some(config)) = app_state
+                .domain_auth_use_cases
+                .get_auth_config(user_id, d.id)
+                .await
+                .map(|(cfg, _)| Some(cfg))
+            {
+                config.magic_link_enabled || config.google_oauth_enabled
+            } else {
+                false
             }
-        })
-        .collect();
+        } else {
+            true // Non-verified domains don't need this warning
+        };
+
+        response.push(DomainResponse {
+            id: d.id,
+            domain: d.domain,
+            status: d.status.as_str().to_string(),
+            dns_records: Some(DnsRecordsResponse {
+                cname_name: dns_records.cname_name,
+                cname_value: dns_records.cname_value,
+                txt_name: dns_records.txt_name,
+                txt_value: dns_records.txt_value,
+            }),
+            verified_at: d.verified_at,
+            created_at: d.created_at,
+            has_auth_methods,
+        });
+    }
 
     Ok(Json(response))
 }
@@ -185,6 +204,21 @@ async fn get_domain(
         .domain_use_cases
         .get_dns_records(&domain.domain, domain.id);
 
+    // Check if domain has any auth methods enabled
+    let has_auth_methods = if domain.status == DomainStatus::Verified {
+        if let Ok((config, _)) = app_state
+            .domain_auth_use_cases
+            .get_auth_config(user_id, domain_id)
+            .await
+        {
+            config.magic_link_enabled || config.google_oauth_enabled
+        } else {
+            false
+        }
+    } else {
+        true
+    };
+
     Ok(Json(DomainResponse {
         id: domain.id,
         domain: domain.domain,
@@ -197,6 +231,7 @@ async fn get_domain(
         }),
         verified_at: domain.verified_at,
         created_at: domain.created_at,
+        has_auth_methods,
     }))
 }
 
@@ -219,6 +254,7 @@ async fn start_verification(
         dns_records: None,
         verified_at: domain.verified_at,
         created_at: domain.created_at,
+        has_auth_methods: true, // Verifying domains don't need this warning
     }))
 }
 
