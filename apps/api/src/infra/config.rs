@@ -21,6 +21,9 @@ pub struct AppConfig {
     pub rate_limit_per_ip: u64,
     pub rate_limit_per_email: u64,
     pub database_url: String,
+    /// Whether to trust X-Forwarded-For headers. Set to true when behind a reverse proxy (Caddy, nginx).
+    /// SECURITY: Only enable this when the API is not directly exposed to the internet.
+    pub trust_proxy: bool,
 }
 
 impl AppConfig {
@@ -47,6 +50,8 @@ impl AppConfig {
         let rate_limit_per_ip: u64 = get_env_default("RATE_LIMIT_PER_IP", 60);
         let rate_limit_per_email: u64 = get_env_default("RATE_LIMIT_PER_EMAIL", 30);
         let database_url: String = get_env("DATABASE_URL");
+        // Default to false for security - must explicitly enable when behind a trusted proxy
+        let trust_proxy: bool = get_env_default("TRUST_PROXY", false);
 
         Self {
             jwt_secret,
@@ -63,6 +68,7 @@ impl AppConfig {
             rate_limit_per_ip,
             rate_limit_per_email,
             database_url,
+            trust_proxy,
         }
     }
 }

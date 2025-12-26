@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
 };
@@ -12,12 +12,21 @@ use uuid::Uuid;
 
 use crate::{
     adapters::http::app_state::AppState,
-    app_error::AppResult,
+    app_error::{AppError, AppResult},
     application::{
         jwt,
         use_cases::domain::extract_root_from_reauth_hostname,
+        validators::is_valid_email,
     },
 };
+
+/// Appends a cookie to the headers, handling parse errors gracefully
+fn append_cookie(headers: &mut HeaderMap, cookie: Cookie<'_>) -> Result<(), AppError> {
+    let value = HeaderValue::from_str(&cookie.to_string())
+        .map_err(|_| AppError::Internal("Failed to build cookie header".into()))?;
+    headers.append("set-cookie", value);
+    Ok(())
+}
 
 #[derive(Serialize)]
 struct PublicConfigResponse {
@@ -109,6 +118,12 @@ async fn request_magic_link(
     jar: CookieJar,
     Json(payload): Json<RequestMagicLinkPayload>,
 ) -> AppResult<impl IntoResponse> {
+    // Validate email format
+    let email = payload.email.trim();
+    if !is_valid_email(email) {
+        return Err(AppError::InvalidInput("Invalid email format".into()));
+    }
+
     // Extract root domain from reauth.* hostname
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
@@ -118,7 +133,7 @@ async fn request_magic_link(
         .domain_auth_use_cases
         .request_magic_link(
             &root_domain,
-            &payload.email,
+            email,
             &session_id,
             app_state.config.magic_link_ttl_minutes,
         )
@@ -243,9 +258,9 @@ async fn verify_magic_link(
                 .max_age(time::Duration::days(refresh_ttl_days as i64))
                 .build();
 
-            headers.append("set-cookie", access_cookie.to_string().parse().unwrap());
-            headers.append("set-cookie", refresh_cookie.to_string().parse().unwrap());
-            headers.append("set-cookie", email_cookie.to_string().parse().unwrap());
+            append_cookie(&mut headers, access_cookie)?;
+            append_cookie(&mut headers, refresh_cookie)?;
+            append_cookie(&mut headers, email_cookie)?;
 
             Ok((
                 StatusCode::OK,
@@ -347,15 +362,15 @@ async fn check_session(
                     }
                 }
 
-                // Fallback if user lookup fails - trust the token
+                // User lookup failed - don't trust the token, require re-authentication
                 return Ok(Json(SessionResponse {
-                    valid: true,
-                    end_user_id: Some(claims.sub.clone()),
-                    email: cookies.get("end_user_email").map(|c| c.value().to_string()),
-                    roles: Some(claims.roles),
+                    valid: false,
+                    end_user_id: None,
+                    email: None,
+                    roles: None,
                     waitlist_position: None,
-                    error: None,
-                    error_code: None,
+                    error: Some("Session verification failed".to_string()),
+                    error_code: Some("SESSION_VERIFICATION_FAILED".to_string()),
                 }));
             }
         }
@@ -456,7 +471,7 @@ async fn refresh_token(
         .max_age(time::Duration::seconds(access_ttl_secs as i64))
         .build();
 
-    headers.append("set-cookie", access_cookie.to_string().parse().unwrap());
+    append_cookie(&mut headers, access_cookie)?;
 
     Ok((StatusCode::OK, headers))
 }
@@ -464,7 +479,7 @@ async fn refresh_token(
 /// POST /api/public/domain/{domain}/auth/logout
 /// Clears the end-user session
 /// The {domain} param is the hostname (e.g., "reauth.example.com")
-async fn logout(Path(hostname): Path<String>) -> impl IntoResponse {
+async fn logout(Path(hostname): Path<String>) -> AppResult<impl IntoResponse> {
     // Extract root domain from reauth.* hostname
     let root_domain = extract_root_from_reauth_hostname(&hostname);
     let mut headers = HeaderMap::new();
@@ -496,11 +511,11 @@ async fn logout(Path(hostname): Path<String>) -> impl IntoResponse {
         .max_age(time::Duration::seconds(0))
         .build();
 
-    headers.append("set-cookie", access_cookie.to_string().parse().unwrap());
-    headers.append("set-cookie", refresh_cookie.to_string().parse().unwrap());
-    headers.append("set-cookie", email_cookie.to_string().parse().unwrap());
+    append_cookie(&mut headers, access_cookie)?;
+    append_cookie(&mut headers, refresh_cookie)?;
+    append_cookie(&mut headers, email_cookie)?;
 
-    (StatusCode::OK, headers)
+    Ok((StatusCode::OK, headers))
 }
 
 /// DELETE /api/public/domain/{domain}/auth/account
@@ -579,9 +594,9 @@ async fn delete_account(
         .max_age(time::Duration::seconds(0))
         .build();
 
-    headers.append("set-cookie", access_cookie.to_string().parse().unwrap());
-    headers.append("set-cookie", refresh_cookie.to_string().parse().unwrap());
-    headers.append("set-cookie", email_cookie.to_string().parse().unwrap());
+    append_cookie(&mut headers, access_cookie)?;
+    append_cookie(&mut headers, refresh_cookie)?;
+    append_cookie(&mut headers, email_cookie)?;
 
     Ok((StatusCode::OK, headers))
 }

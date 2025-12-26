@@ -71,7 +71,7 @@ pub fn issue_domain_end_user(
     let exp = now + ttl.whole_seconds();
 
     // Use root domain in claim
-    let root_domain = crate::application::use_cases::domain_auth::get_root_domain(domain);
+    let root_domain = crate::application::helpers::domain_parsing::get_root_domain(domain);
 
     let claims = DomainEndUserClaims {
         sub: end_user_id.to_string(),

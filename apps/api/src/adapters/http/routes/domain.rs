@@ -11,8 +11,8 @@ use uuid::Uuid;
 
 use crate::{
     adapters::http::app_state::AppState,
-    app_error::AppResult,
-    application::jwt,
+    app_error::{AppError, AppResult},
+    application::{jwt, validators::is_valid_email},
     domain::entities::domain::DomainStatus,
 };
 
@@ -414,6 +414,12 @@ async fn invite_end_user(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<InviteEndUserPayload>,
 ) -> AppResult<impl IntoResponse> {
+    // Validate email format
+    let email = payload.email.trim();
+    if !is_valid_email(email) {
+        return Err(AppError::InvalidInput("Invalid email format".into()));
+    }
+
     let (_, owner_id) = current_user(&jar, &app_state)?;
 
     let user = app_state
@@ -421,7 +427,7 @@ async fn invite_end_user(
         .invite_end_user(
             owner_id,
             domain_id,
-            &payload.email,
+            email,
             payload.pre_whitelist.unwrap_or(false),
         )
         .await?;

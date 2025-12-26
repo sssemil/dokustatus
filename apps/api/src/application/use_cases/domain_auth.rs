@@ -794,47 +794,9 @@ fn is_valid_redirect_url(url: &str, domain: &str) -> bool {
     host == domain || host.ends_with(&format!(".{}", domain))
 }
 
-/// Extract root domain from hostname for cookie scoping
-/// e.g., "login.example.com" -> "example.com"
-/// e.g., "app.staging.example.co.uk" -> "example.co.uk"
-pub fn get_root_domain(hostname: &str) -> String {
-    let parts: Vec<&str> = hostname.split('.').collect();
-
-    // Handle common multi-part TLDs
-    let multi_part_tlds = ["co.uk", "com.au", "co.nz", "com.br", "co.jp"];
-    let hostname_lower = hostname.to_lowercase();
-    for tld in &multi_part_tlds {
-        if hostname_lower.ends_with(tld) {
-            // For multi-part TLDs, we need 3 parts minimum (domain + tld)
-            if parts.len() >= 3 {
-                let tld_parts: Vec<&str> = tld.split('.').collect();
-                let domain_start = parts.len() - tld_parts.len() - 1;
-                return parts[domain_start..].join(".");
-            }
-        }
-    }
-
-    // Standard TLDs: take last 2 parts
-    if parts.len() >= 2 {
-        return parts[parts.len() - 2..].join(".");
-    }
-
-    // Fallback: return as-is
-    hostname.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_get_root_domain() {
-        assert_eq!(get_root_domain("login.example.com"), "example.com");
-        assert_eq!(get_root_domain("app.staging.example.com"), "example.com");
-        assert_eq!(get_root_domain("example.com"), "example.com");
-        assert_eq!(get_root_domain("login.example.co.uk"), "example.co.uk");
-        assert_eq!(get_root_domain("app.example.co.uk"), "example.co.uk");
-    }
 
     #[test]
     fn test_is_valid_redirect_url() {
