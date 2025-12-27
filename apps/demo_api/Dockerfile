@@ -21,7 +21,11 @@ COPY --from=sdk-builder /sdk ./node_modules/@reauth/sdk
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY apps/demo_api/ .
+
+# Copy source files (excluding node_modules)
+COPY apps/demo_api/src ./src
+COPY apps/demo_api/tsconfig.json ./
+COPY apps/demo_api/package.json ./
 
 # Build TypeScript
 RUN npm run build
