@@ -76,32 +76,12 @@ app.get('/api/health', (_req, res) => {
 
 // Get current user's full profile (requires API key)
 app.get('/api/me', authMiddleware, async (req, res) => {
-  if (!REAUTH_API_KEY) {
-    // Fall back to basic user info if no API key configured
-    res.json({
-      id: req.user!.id,
-      email: req.user!.email,
-      roles: req.user!.roles,
-    });
+  const userDetails = await reauth.getUserById(req.user!.id);
+  if (!userDetails) {
+    res.status(404).json({ error: 'User not found' });
     return;
   }
-
-  try {
-    const userDetails = await reauth.getUserById(req.user!.id);
-    if (!userDetails) {
-      res.status(404).json({ error: 'User not found' });
-      return;
-    }
-    res.json(userDetails);
-  } catch (err) {
-    console.error('Failed to get user details:', err);
-    // Fall back to basic user info
-    res.json({
-      id: req.user!.id,
-      email: req.user!.email,
-      roles: req.user!.roles,
-    });
-  }
+  res.json(userDetails);
 });
 
 // List todos
