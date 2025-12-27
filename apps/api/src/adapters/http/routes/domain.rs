@@ -266,6 +266,8 @@ async fn start_verification(
 struct VerificationStatusResponse {
     status: String,
     verified: bool,
+    cname_verified: bool,
+    txt_verified: bool,
 }
 
 async fn get_verification_status(
@@ -280,9 +282,25 @@ async fn get_verification_status(
         .get_domain(user_id, domain_id)
         .await?;
 
+    // Check individual DNS record status if domain is verifying
+    let (cname_verified, txt_verified) = if domain.status == DomainStatus::Verifying {
+        let dns_status = app_state
+            .domain_use_cases
+            .check_dns_records_status(domain_id)
+            .await
+            .unwrap_or_default();
+        (dns_status.cname_verified, dns_status.txt_verified)
+    } else if domain.status == DomainStatus::Verified {
+        (true, true)
+    } else {
+        (false, false)
+    };
+
     Ok(Json(VerificationStatusResponse {
         status: domain.status.as_str().to_string(),
         verified: domain.status == DomainStatus::Verified,
+        cname_verified,
+        txt_verified,
     }))
 }
 

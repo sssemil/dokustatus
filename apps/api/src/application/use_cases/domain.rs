@@ -92,6 +92,19 @@ impl DomainUseCases {
 
     #[instrument(skip(self))]
     pub async fn check_domain_dns(&self, domain_id: Uuid) -> AppResult<bool> {
+        let status = self.check_dns_records_status(domain_id).await?;
+
+        if status.cname_verified && status.txt_verified {
+            self.repo.set_verified(domain_id).await?;
+            return Ok(true);
+        }
+
+        Ok(false)
+    }
+
+    /// Check individual DNS record status without updating domain state
+    #[instrument(skip(self))]
+    pub async fn check_dns_records_status(&self, domain_id: Uuid) -> AppResult<DnsRecordsStatus> {
         let domain = self
             .repo
             .get_by_id(domain_id)
@@ -100,7 +113,7 @@ impl DomainUseCases {
 
         // Check CNAME for reauth.{domain} (not the root domain itself)
         let cname_record = format!("reauth.{}", domain.domain);
-        let cname_ok = self
+        let cname_verified = self
             .dns_verifier
             .check_cname(&cname_record, &self.ingress_domain)
             .await
@@ -109,18 +122,16 @@ impl DomainUseCases {
         // Check TXT for _reauth.{domain}
         let txt_record = format!("_reauth.{}", domain.domain);
         let expected_txt = format!("project={}", domain.id);
-        let txt_ok = self
+        let txt_verified = self
             .dns_verifier
             .check_txt(&txt_record, &expected_txt)
             .await
             .unwrap_or(false);
 
-        if cname_ok && txt_ok {
-            self.repo.set_verified(domain_id).await?;
-            return Ok(true);
-        }
-
-        Ok(false)
+        Ok(DnsRecordsStatus {
+            cname_verified,
+            txt_verified,
+        })
     }
 
     #[instrument(skip(self))]
@@ -186,4 +197,10 @@ pub struct DnsRecords {
     pub cname_value: String,
     pub txt_name: String,
     pub txt_value: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DnsRecordsStatus {
+    pub cname_verified: bool,
+    pub txt_verified: bool,
 }

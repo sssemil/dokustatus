@@ -85,6 +85,10 @@ export default function DomainDetailPage() {
   const [revokeKeyConfirmId, setRevokeKeyConfirmId] = useState<string | null>(null);
   const [revokingKey, setRevokingKey] = useState(false);
 
+  // DNS record verification status (for verifying domains)
+  const [cnameVerified, setCnameVerified] = useState(false);
+  const [txtVerified, setTxtVerified] = useState(false);
+
   // Auth config form state
   const [magicLinkEnabled, setMagicLinkEnabled] = useState(false);
   const [resendApiKey, setResendApiKey] = useState('');
@@ -186,11 +190,14 @@ export default function DomainDetailPage() {
   useEffect(() => {
     if (!domain || (domain.status !== 'verifying' && domain.status !== 'pending_dns')) return;
 
-    const interval = setInterval(async () => {
+    const checkStatus = async () => {
       try {
         const res = await fetch(`/api/domains/${domainId}/status`, { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
+          // Update individual record status
+          setCnameVerified(data.cname_verified);
+          setTxtVerified(data.txt_verified);
           if (data.status !== domain.status) {
             fetchData(); // Refetch all data when status changes
           }
@@ -198,7 +205,12 @@ export default function DomainDetailPage() {
       } catch {
         // Continue polling
       }
-    }, 5000);
+    };
+
+    // Check immediately on mount
+    checkStatus();
+
+    const interval = setInterval(checkStatus, 5000);
 
     return () => clearInterval(interval);
   }, [domain, domainId, fetchData]);
@@ -664,9 +676,31 @@ export default function DomainDetailPage() {
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
                   <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>CNAME Record</span>
-                  {domain.status === 'verified' && (
-                    <span style={{ color: 'var(--accent-green)', fontSize: '12px' }}>Verified</span>
-                  )}
+                  {(domain.status === 'verified' || cnameVerified) ? (
+                    <span style={{
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--accent-green)',
+                      color: '#000',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                    }}>Verified</span>
+                  ) : domain.status === 'verifying' ? (
+                    <span style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--accent-orange)',
+                      color: '#000',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                    }}>
+                      <span className="spinner" style={{ width: 10, height: 10 }} />
+                      Verifying
+                    </span>
+                  ) : null}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
                   <span className="text-muted">Name</span>
@@ -703,9 +737,31 @@ export default function DomainDetailPage() {
               >
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
                   <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>TXT Record</span>
-                  {domain.status === 'verified' && (
-                    <span style={{ color: 'var(--accent-green)', fontSize: '12px' }}>Verified</span>
-                  )}
+                  {(domain.status === 'verified' || txtVerified) ? (
+                    <span style={{
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--accent-green)',
+                      color: '#000',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                    }}>Verified</span>
+                  ) : domain.status === 'verifying' ? (
+                    <span style={{
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: '4px',
+                      padding: '2px 8px',
+                      borderRadius: 'var(--radius-sm)',
+                      backgroundColor: 'var(--accent-orange)',
+                      color: '#000',
+                      fontSize: '11px',
+                      fontWeight: 500,
+                    }}>
+                      <span className="spinner" style={{ width: 10, height: 10 }} />
+                      Verifying
+                    </span>
+                  ) : null}
                 </div>
                 <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
                   <span className="text-muted">Name</span>
@@ -1108,7 +1164,6 @@ export default function DomainDetailPage() {
                           </div>
                         )}
                       </div>
-                      <span className="text-muted" style={{ fontSize: '18px' }}>&rarr;</span>
                     </div>
                   </div>
                 ))
