@@ -10,7 +10,7 @@ use uuid::Uuid;
 use crate::{
     adapters::{
         self,
-        http::{app_state::AppState, middleware::rate_limit_middleware},
+        http::{app_state::AppState, middleware::{api_key_auth, rate_limit_middleware}},
     },
     infra::setup::init_tracing,
 };
@@ -106,8 +106,20 @@ pub fn create_app(app_state: AppState) -> Router {
         .nest("/domains", adapters::http::routes::domain::router())
         .layer(dashboard_cors);
 
+    // Developer API routes (server-to-server, API key authenticated)
+    // No CORS restrictions since these are called from developer backends
+    let developer_cors = CorsLayer::new()
+        .allow_origin(http::header::HeaderValue::from_static("*"))
+        .allow_methods([http::Method::GET, http::Method::POST])
+        .allow_headers([CONTENT_TYPE, AUTHORIZATION]);
+
+    let developer_routes = Router::new()
+        .nest("/developer", adapters::http::routes::developer::router())
+        .layer(middleware::from_fn_with_state(app_state.clone(), api_key_auth))
+        .layer(developer_cors);
+
     Router::new()
-        .nest("/api", public_routes.merge(dashboard_routes))
+        .nest("/api", public_routes.merge(dashboard_routes).merge(developer_routes))
         .with_state(app_state.clone())
         .layer(middleware::from_fn_with_state(
             app_state,

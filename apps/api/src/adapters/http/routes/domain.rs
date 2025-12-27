@@ -36,6 +36,10 @@ pub fn router() -> Router<AppState> {
         .route("/{domain_id}/end-users/{user_id}/freeze", delete(unfreeze_end_user))
         .route("/{domain_id}/end-users/{user_id}/whitelist", post(whitelist_end_user))
         .route("/{domain_id}/end-users/{user_id}/whitelist", delete(unwhitelist_end_user))
+        // API Keys
+        .route("/{domain_id}/api-keys", get(list_api_keys))
+        .route("/{domain_id}/api-keys", post(create_api_key))
+        .route("/{domain_id}/api-keys/{key_id}", delete(revoke_api_key))
 }
 
 #[derive(Deserialize)]
@@ -584,4 +588,107 @@ async fn unwhitelist_end_user(
         .await?;
 
     Ok(StatusCode::OK)
+}
+
+// ============================================================================
+// API Key Endpoints
+// ============================================================================
+
+#[derive(Serialize)]
+struct ApiKeyResponse {
+    id: Uuid,
+    key_prefix: String,
+    name: String,
+    last_used_at: Option<chrono::NaiveDateTime>,
+    revoked_at: Option<chrono::NaiveDateTime>,
+    created_at: Option<chrono::NaiveDateTime>,
+}
+
+#[derive(Serialize)]
+struct CreateApiKeyResponse {
+    id: Uuid,
+    key: String, // Full key, shown only once
+    key_prefix: String,
+    name: String,
+    created_at: Option<chrono::NaiveDateTime>,
+}
+
+#[derive(Deserialize)]
+struct CreateApiKeyPayload {
+    name: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ApiKeyPathParams {
+    domain_id: Uuid,
+    key_id: Uuid,
+}
+
+async fn list_api_keys(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let keys = app_state
+        .api_key_use_cases
+        .list_api_keys(owner_id, domain_id)
+        .await?;
+
+    let response: Vec<ApiKeyResponse> = keys
+        .into_iter()
+        .map(|k| ApiKeyResponse {
+            id: k.id,
+            key_prefix: k.key_prefix,
+            name: k.name,
+            last_used_at: k.last_used_at,
+            revoked_at: k.revoked_at,
+            created_at: k.created_at,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+async fn create_api_key(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<CreateApiKeyPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let name = payload.name.as_deref().unwrap_or("Default");
+
+    let (profile, raw_key) = app_state
+        .api_key_use_cases
+        .create_api_key(owner_id, domain_id, name)
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateApiKeyResponse {
+            id: profile.id,
+            key: raw_key,
+            key_prefix: profile.key_prefix,
+            name: profile.name,
+            created_at: profile.created_at,
+        }),
+    ))
+}
+
+async fn revoke_api_key(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<ApiKeyPathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .api_key_use_cases
+        .revoke_api_key(owner_id, params.domain_id, params.key_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }

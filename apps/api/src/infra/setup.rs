@@ -1,5 +1,6 @@
 use crate::{
     adapters::{dns::HickoryDnsVerifier, http::app_state::AppState},
+    application::use_cases::api_key::{ApiKeyRepo, ApiKeyUseCases},
     application::use_cases::domain_auth::{
         DomainAuthConfigRepo, DomainAuthMagicLinkRepo, DomainAuthUseCases,
         DomainEndUserRepo,
@@ -45,6 +46,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let auth_config_repo_arc = postgres_arc.clone() as Arc<dyn DomainAuthConfigRepo>;
     let magic_link_config_repo_arc = postgres_arc.clone() as Arc<dyn DomainAuthMagicLinkRepo>;
     let end_user_repo_arc = postgres_arc.clone() as Arc<dyn DomainEndUserRepo>;
+    let api_key_repo_arc = postgres_arc.clone() as Arc<dyn ApiKeyRepo>;
 
     let dns_verifier = Arc::new(match config.dns_server {
         Some(addr) => HickoryDnsVerifier::with_nameserver(addr),
@@ -64,10 +66,10 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let global_from_email = Some(config.email_from.clone());
 
     let domain_auth_use_cases = DomainAuthUseCases::new(
-        domain_repo_arc,
+        domain_repo_arc.clone(),
         auth_config_repo_arc,
         magic_link_config_repo_arc,
-        end_user_repo_arc,
+        end_user_repo_arc.clone(),
         domain_magic_links,
         domain_email_sender,
         cipher,
@@ -75,10 +77,17 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         global_from_email,
     );
 
+    let api_key_use_cases = ApiKeyUseCases::new(
+        api_key_repo_arc,
+        domain_repo_arc,
+        end_user_repo_arc,
+    );
+
     Ok(AppState {
         config: Arc::new(config),
         domain_use_cases: Arc::new(domain_use_cases),
         domain_auth_use_cases: Arc::new(domain_auth_use_cases),
+        api_key_use_cases: Arc::new(api_key_use_cases),
         rate_limiter,
     })
 }

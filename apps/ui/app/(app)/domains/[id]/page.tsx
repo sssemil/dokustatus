@@ -39,7 +39,15 @@ type EndUser = {
   created_at: string | null;
 };
 
-type Tab = 'dns' | 'configuration' | 'users';
+type Tab = 'dns' | 'configuration' | 'users' | 'api-keys';
+
+type ApiKey = {
+  id: string;
+  key_prefix: string;
+  name: string;
+  last_used_at: string | null;
+  created_at: string | null;
+};
 
 export default function DomainDetailPage() {
   const params = useParams();
@@ -66,6 +74,16 @@ export default function DomainDetailPage() {
   const [inviting, setInviting] = useState(false);
   const [inviteError, setInviteError] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // API Keys state
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [loadingApiKeys, setLoadingApiKeys] = useState(false);
+  const [showCreateKeyModal, setShowCreateKeyModal] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
+  const [revokeKeyConfirmId, setRevokeKeyConfirmId] = useState<string | null>(null);
+  const [revokingKey, setRevokingKey] = useState(false);
 
   // Auth config form state
   const [magicLinkEnabled, setMagicLinkEnabled] = useState(false);
@@ -141,6 +159,28 @@ export default function DomainDetailPage() {
       fetchEndUsers();
     }
   }, [activeTab, domain, fetchEndUsers]);
+
+  const fetchApiKeys = useCallback(async () => {
+    if (!domain || domain.status !== 'verified') return;
+    setLoadingApiKeys(true);
+    try {
+      const res = await fetch(`/api/domains/${domainId}/api-keys`, { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setApiKeys(data);
+      }
+    } catch {
+      // Ignore
+    } finally {
+      setLoadingApiKeys(false);
+    }
+  }, [domainId, domain]);
+
+  useEffect(() => {
+    if (activeTab === 'api-keys' && domain?.status === 'verified') {
+      fetchApiKeys();
+    }
+  }, [activeTab, domain, fetchApiKeys]);
 
   // Poll for verification status when domain is verifying
   useEffect(() => {
@@ -359,6 +399,61 @@ export default function DomainDetailPage() {
     }
   };
 
+  const handleCreateApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreatingKey(true);
+    setError('');
+
+    try {
+      const res = await fetch(`/api/domains/${domainId}/api-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newKeyName.trim() || 'Default' }),
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setNewlyCreatedKey(data.key);
+        setNewKeyName('');
+        fetchApiKeys();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setError(errData.message || 'Failed to create API key');
+        setShowCreateKeyModal(false);
+      }
+    } catch {
+      setError('Network error. Please try again.');
+      setShowCreateKeyModal(false);
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const handleRevokeApiKey = async () => {
+    if (!revokeKeyConfirmId) return;
+    setRevokingKey(true);
+
+    try {
+      const res = await fetch(`/api/domains/${domainId}/api-keys/${revokeKeyConfirmId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        setSuccess('API key revoked successfully');
+        fetchApiKeys();
+      } else {
+        setError('Failed to revoke API key');
+      }
+    } catch {
+      setError('Network error. Please try again.');
+    } finally {
+      setRevokingKey(false);
+      setRevokeKeyConfirmId(null);
+    }
+  };
+
   const copyToClipboard = async (text: string, field: string) => {
     try {
       await navigator.clipboard.writeText(text);
@@ -518,6 +613,7 @@ export default function DomainDetailPage() {
           ...(domain.status === 'verified' ? [
             { id: 'configuration' as Tab, label: 'Configuration' },
             { id: 'users' as Tab, label: 'Users' },
+            { id: 'api-keys' as Tab, label: 'API Keys' },
           ] : []),
         ].map((tab) => (
           <button
@@ -1020,6 +1116,79 @@ export default function DomainDetailPage() {
             </>
           )}
 
+      {/* API Keys Tab */}
+      {activeTab === 'api-keys' && domain.status === 'verified' && (
+        <>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--spacing-md)' }}>
+            <div>
+              <p className="text-muted" style={{ margin: 0, fontSize: '14px' }}>
+                Use API keys to authenticate server-to-server requests from your backend.
+              </p>
+            </div>
+            <button className="primary" onClick={() => setShowCreateKeyModal(true)}>
+              Create API Key
+            </button>
+          </div>
+
+          {loadingApiKeys ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
+              <span className="spinner" />
+            </div>
+          ) : apiKeys.length === 0 ? (
+            <div className="card" style={{ textAlign: 'center' }}>
+              <p className="text-muted">No API keys created yet.</p>
+            </div>
+          ) : (
+            apiKeys.map((apiKey) => (
+              <div
+                key={apiKey.id}
+                className="card"
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 'var(--spacing-sm)',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-xs)' }}>
+                    <span style={{ fontWeight: 600 }}>{apiKey.name}</span>
+                    <code style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      padding: '2px 6px',
+                      borderRadius: '4px',
+                      fontSize: '12px',
+                      color: 'var(--text-muted)',
+                    }}>
+                      {apiKey.key_prefix}...
+                    </code>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)' }}>
+                    {apiKey.created_at && (
+                      <span className="text-muted" style={{ fontSize: '12px' }}>
+                        Created {formatDate(apiKey.created_at)}
+                      </span>
+                    )}
+                    {apiKey.last_used_at && (
+                      <span className="text-muted" style={{ fontSize: '12px' }}>
+                        Last used {formatDate(apiKey.last_used_at)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  className="danger"
+                  onClick={() => setRevokeKeyConfirmId(apiKey.id)}
+                  style={{ fontSize: '13px', padding: '6px 12px' }}
+                >
+                  Revoke
+                </button>
+              </div>
+            ))
+          )}
+        </>
+      )}
+
       {/* Delete Domain Confirmation Modal */}
       <ConfirmModal
         isOpen={showDeleteDomainConfirm}
@@ -1264,6 +1433,214 @@ export default function DomainDetailPage() {
           </div>
         </div>
       )}
+
+      {/* Create API Key Modal */}
+      {showCreateKeyModal && !newlyCreatedKey && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={() => {
+            setShowCreateKeyModal(false);
+            setNewKeyName('');
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--bg-secondary)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-primary)',
+              boxShadow: 'var(--shadow-lg)',
+              maxWidth: '450px',
+              width: '90%',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: 'var(--spacing-md)',
+                borderBottom: '1px solid var(--border-primary)',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Create API Key</h3>
+              <button
+                onClick={() => {
+                  setShowCreateKeyModal(false);
+                  setNewKeyName('');
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  color: 'var(--text-secondary)',
+                  fontSize: '18px',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateApiKey}>
+              <div style={{ padding: 'var(--spacing-lg) var(--spacing-md)' }}>
+                <div>
+                  <label htmlFor="keyName" style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: 'var(--spacing-xs)', display: 'block' }}>
+                    Key name (optional)
+                  </label>
+                  <input
+                    id="keyName"
+                    type="text"
+                    value={newKeyName}
+                    onChange={(e) => setNewKeyName(e.target.value)}
+                    placeholder="e.g., Production API"
+                    autoFocus
+                  />
+                  <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
+                    A name to help you identify this key.
+                  </p>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: 'var(--spacing-sm)',
+                  padding: 'var(--spacing-md)',
+                  borderTop: '1px solid var(--border-primary)',
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCreateKeyModal(false);
+                    setNewKeyName('');
+                  }}
+                >
+                  Cancel
+                </button>
+                <button type="submit" className="primary" disabled={creatingKey}>
+                  {creatingKey ? 'Creating...' : 'Create Key'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Show Newly Created Key Modal */}
+      {newlyCreatedKey && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--bg-secondary)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-primary)',
+              boxShadow: 'var(--shadow-lg)',
+              maxWidth: '550px',
+              width: '90%',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: 'var(--spacing-md)',
+                borderBottom: '1px solid var(--border-primary)',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>API Key Created</h3>
+            </div>
+
+            <div style={{ padding: 'var(--spacing-lg) var(--spacing-md)' }}>
+              <div className="message warning" style={{ marginBottom: 'var(--spacing-md)' }}>
+                Copy this key now. You won&apos;t be able to see it again!
+              </div>
+
+              <div
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 'var(--spacing-sm)',
+                  backgroundColor: 'var(--bg-tertiary)',
+                  padding: 'var(--spacing-sm) var(--spacing-md)',
+                  borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border-primary)',
+                }}
+              >
+                <code style={{ flex: 1, fontSize: '13px', wordBreak: 'break-all' }}>
+                  {newlyCreatedKey}
+                </code>
+                <button
+                  onClick={() => copyToClipboard(newlyCreatedKey, 'newKey')}
+                  style={{ padding: '6px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
+                >
+                  {copiedField === 'newKey' ? 'Copied!' : 'Copy'}
+                </button>
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                padding: 'var(--spacing-md)',
+                borderTop: '1px solid var(--border-primary)',
+              }}
+            >
+              <button
+                className="primary"
+                onClick={() => {
+                  setNewlyCreatedKey(null);
+                  setShowCreateKeyModal(false);
+                }}
+              >
+                Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Revoke API Key Confirmation Modal */}
+      <ConfirmModal
+        isOpen={revokeKeyConfirmId !== null}
+        title="Revoke API Key"
+        message="Are you sure you want to revoke this API key? Any applications using this key will immediately lose access."
+        confirmLabel={revokingKey ? 'Revoking...' : 'Revoke'}
+        cancelLabel="Cancel"
+        variant="danger"
+        onConfirm={handleRevokeApiKey}
+        onCancel={() => setRevokeKeyConfirmId(null)}
+      />
     </>
   );
 }

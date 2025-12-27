@@ -17,6 +17,9 @@ impl IntoResponse for AppError {
             AppError::InvalidCredentials => {
                 error_resp(StatusCode::UNAUTHORIZED, ErrorCode::InvalidCredentials, None)
             }
+            AppError::InvalidApiKey => {
+                error_resp(StatusCode::UNAUTHORIZED, ErrorCode::InvalidApiKey, Some("Invalid or missing API key".to_string()))
+            }
             AppError::RateLimited => {
                 error_resp(StatusCode::TOO_MANY_REQUESTS, ErrorCode::RateLimited, None)
             }

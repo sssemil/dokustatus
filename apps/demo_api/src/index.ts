@@ -25,17 +25,49 @@ interface Todo {
 const PORT = process.env.PORT || 3003;
 const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 const DOMAIN = process.env.DOMAIN || 'demo.test';
+const REAUTH_API_KEY = process.env.REAUTH_API_KEY;
 
 // Clients
 const redis = new Redis(REDIS_URL);
-const reauth = createServerClient({ domain: DOMAIN });
+const reauth = createServerClient({
+  domain: DOMAIN,
+  apiKey: REAUTH_API_KEY,
+});
 
 // App
 const app = express();
 app.use(express.json());
 
 // Auth middleware
+// Supports two authentication methods:
+// 1. Cookie-based: Forward cookies to reauth for session validation
+// 2. Token-based: Bearer token in Authorization header, verified via API key
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
+  // Try Authorization header first (JWT token)
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+
+    // Only use verifyToken if API key is configured
+    if (REAUTH_API_KEY) {
+      try {
+        const result = await reauth.verifyToken(token);
+        if (result.valid && result.user) {
+          req.user = {
+            id: result.user.id,
+            email: result.user.email,
+            roles: result.user.roles,
+          };
+          next();
+          return;
+        }
+      } catch {
+        // Token verification failed, fall through to cookie auth
+      }
+    }
+  }
+
+  // Fall back to cookie-based authentication
   const cookies = req.headers.cookie || '';
   const user = await reauth.getUser(cookies);
 

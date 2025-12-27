@@ -11,6 +11,9 @@ pub enum AppError {
     #[error("Invalid credentials")]
     InvalidCredentials,
 
+    #[error("Invalid API key")]
+    InvalidApiKey,
+
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
@@ -34,6 +37,7 @@ pub enum AppError {
 pub enum ErrorCode {
     DatabaseError,
     InvalidCredentials,
+    InvalidApiKey,
     RateLimited,
     InvalidInput,
     AccountSuspended,
@@ -48,6 +52,7 @@ impl ErrorCode {
         match self {
             ErrorCode::DatabaseError => "DATABASE_ERROR",
             ErrorCode::InvalidCredentials => "INVALID_CREDENTIALS",
+            ErrorCode::InvalidApiKey => "INVALID_API_KEY",
             ErrorCode::RateLimited => "RATE_LIMITED",
             ErrorCode::InvalidInput => "INVALID_INPUT",
             ErrorCode::AccountSuspended => "ACCOUNT_SUSPENDED",

@@ -2,6 +2,7 @@ use sqlx::PgPool;
 
 use crate::app_error::AppError;
 
+pub mod api_key;
 pub mod domain;
 pub mod domain_auth_config;
 pub mod domain_auth_magic_link;

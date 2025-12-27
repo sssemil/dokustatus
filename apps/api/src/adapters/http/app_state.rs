@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
+    application::use_cases::api_key::ApiKeyUseCases,
     application::use_cases::domain_auth::DomainAuthUseCases,
     infra::config::AppConfig,
     infra::rate_limit::RateLimiter,
@@ -12,5 +13,6 @@ pub struct AppState {
     pub config: Arc<AppConfig>,
     pub domain_use_cases: Arc<DomainUseCases>,
     pub domain_auth_use_cases: Arc<DomainAuthUseCases>,
+    pub api_key_use_cases: Arc<ApiKeyUseCases>,
     pub rate_limiter: Arc<RateLimiter>,
 }
