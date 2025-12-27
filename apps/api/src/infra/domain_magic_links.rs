@@ -17,6 +17,7 @@ pub struct DomainMagicLinkStore {
 struct StoredData {
     end_user_id: Uuid,
     domain_id: Uuid,
+    session_id: String,
 }
 
 impl DomainMagicLinkStore {
@@ -31,12 +32,12 @@ impl DomainMagicLinkStore {
 
 #[async_trait]
 impl DomainMagicLinkStoreTrait for DomainMagicLinkStore {
-    async fn save(&self, token_hash: &str, end_user_id: Uuid, domain_id: Uuid, ttl_minutes: i64) -> AppResult<()> {
+    async fn save(&self, token_hash: &str, end_user_id: Uuid, domain_id: Uuid, session_id: &str, ttl_minutes: i64) -> AppResult<()> {
         let mut conn = self.manager.clone();
         let key = Self::key(token_hash);
         let ttl_secs: u64 = (ttl_minutes.max(1) * 60) as u64;
 
-        let data = StoredData { end_user_id, domain_id };
+        let data = StoredData { end_user_id, domain_id, session_id: session_id.to_string() };
         let json = serde_json::to_string(&data)
             .map_err(|e| AppError::Internal(format!("Failed to serialize magic link data: {e}")))?;
 
@@ -48,24 +49,39 @@ impl DomainMagicLinkStoreTrait for DomainMagicLinkStore {
         Ok(())
     }
 
-    async fn consume(&self, token_hash: &str) -> AppResult<Option<DomainMagicLinkData>> {
+    async fn consume(&self, token_hash: &str, session_id: &str) -> AppResult<Option<DomainMagicLinkData>> {
         let mut conn = self.manager.clone();
         let key = Self::key(token_hash);
 
-        let raw: Option<String> = redis::cmd("GETDEL")
-            .arg(&key)
-            .query_async(&mut conn)
+        // First GET to check if exists and verify session (don't delete yet)
+        let raw: Option<String> = conn
+            .get(&key)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
 
-        raw.map(|value| {
-            let data: StoredData = serde_json::from_str(&value)
-                .map_err(|e| AppError::Internal(format!("Failed to parse magic link data: {e}")))?;
-            Ok(DomainMagicLinkData {
-                end_user_id: data.end_user_id,
-                domain_id: data.domain_id,
-            })
-        })
-        .transpose()
+        match raw {
+            Some(value) => {
+                let data: StoredData = serde_json::from_str(&value)
+                    .map_err(|e| AppError::Internal(format!("Failed to parse magic link data: {e}")))?;
+
+                // Check if session matches
+                if data.session_id != session_id {
+                    // Token exists but different browser/device - don't consume, return error
+                    return Err(AppError::SessionMismatch);
+                }
+
+                // Session matches, now delete the token
+                let _: () = conn
+                    .del(&key)
+                    .await
+                    .map_err(|e| AppError::Internal(e.to_string()))?;
+
+                Ok(Some(DomainMagicLinkData {
+                    end_user_id: data.end_user_id,
+                    domain_id: data.domain_id,
+                }))
+            }
+            None => Ok(None), // Token not found (expired or never existed)
+        }
     }
 }

@@ -32,6 +32,9 @@ impl IntoResponse for AppError {
             AppError::NotFound => {
                 error_resp(StatusCode::NOT_FOUND, ErrorCode::NotFound, None)
             }
+            AppError::SessionMismatch => {
+                error_resp(StatusCode::UNAUTHORIZED, ErrorCode::SessionMismatch, Some("Please use the same browser or device where you requested the login link".to_string()))
+            }
             AppError::Internal(_) => {
                 error_resp(StatusCode::INTERNAL_SERVER_ERROR, ErrorCode::InternalError, None)
             }

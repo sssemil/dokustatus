@@ -23,6 +23,9 @@ pub enum AppError {
     #[error("Not found")]
     NotFound,
 
+    #[error("Session mismatch - please use the same browser/device where you requested the link")]
+    SessionMismatch,
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -36,6 +39,7 @@ pub enum ErrorCode {
     AccountSuspended,
     TooManyDocuments,
     NotFound,
+    SessionMismatch,
     InternalError,
 }
 
@@ -49,6 +53,7 @@ impl ErrorCode {
             ErrorCode::AccountSuspended => "ACCOUNT_SUSPENDED",
             ErrorCode::TooManyDocuments => "TOO_MANY_DOCUMENTS",
             ErrorCode::NotFound => "NOT_FOUND",
+            ErrorCode::SessionMismatch => "SESSION_MISMATCH",
             ErrorCode::InternalError => "INTERNAL_ERROR",
         }
     }

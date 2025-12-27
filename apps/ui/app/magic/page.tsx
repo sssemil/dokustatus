@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { isMainApp as checkIsMainApp, getRootDomain, URLS } from '@/lib/domain-utils';
 
-type ErrorType = 'expired' | 'suspended' | 'generic';
+type ErrorType = 'expired' | 'suspended' | 'session_mismatch' | 'generic';
 
 function MagicLinkHandler() {
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
@@ -56,9 +56,22 @@ function MagicLinkHandler() {
             }
           }, 1000);
         } else if (res.status === 401) {
-          setStatus('error');
-          setErrorType('expired');
-          setErrorMessage('This link has expired or already been used. Please request a new one.');
+          // Check if this is a session mismatch error
+          try {
+            const errorData = await res.json();
+            setStatus('error');
+            if (errorData.code === 'SESSION_MISMATCH') {
+              setErrorType('session_mismatch');
+              setErrorMessage('Please use the same browser or device where you requested the login link.');
+            } else {
+              setErrorType('expired');
+              setErrorMessage('This link has expired or already been used. Please request a new one.');
+            }
+          } catch {
+            setStatus('error');
+            setErrorType('expired');
+            setErrorMessage('This link has expired or already been used. Please request a new one.');
+          }
         } else {
           // Try to get error message from response
           try {
@@ -124,7 +137,7 @@ function MagicLinkHandler() {
               )}
             </div>
             <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>
-              {errorType === 'suspended' ? 'Account suspended' : errorType === 'expired' ? 'Link expired' : 'Something went wrong'}
+              {errorType === 'suspended' ? 'Account suspended' : errorType === 'expired' ? 'Link expired' : errorType === 'session_mismatch' ? 'Wrong browser' : 'Something went wrong'}
             </h2>
             <p className="text-muted">{errorMessage}</p>
             {errorType !== 'suspended' && (

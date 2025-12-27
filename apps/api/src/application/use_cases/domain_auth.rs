@@ -64,8 +64,9 @@ pub trait DomainEndUserRepo: Send + Sync {
 
 #[async_trait]
 pub trait DomainMagicLinkStore: Send + Sync {
-    async fn save(&self, token_hash: &str, end_user_id: Uuid, domain_id: Uuid, ttl_minutes: i64) -> AppResult<()>;
-    async fn consume(&self, token_hash: &str) -> AppResult<Option<DomainMagicLinkData>>;
+    async fn save(&self, token_hash: &str, end_user_id: Uuid, domain_id: Uuid, session_id: &str, ttl_minutes: i64) -> AppResult<()>;
+    /// Consume a magic link. Returns the data if session matches, or SessionMismatch error if different browser/device.
+    async fn consume(&self, token_hash: &str, session_id: &str) -> AppResult<Option<DomainMagicLinkData>>;
 }
 
 #[async_trait]
@@ -248,13 +249,13 @@ impl DomainAuthUseCases {
         // Create or get end-user
         let end_user = self.end_user_repo.upsert(domain.id, email).await?;
 
-        // Generate token (bound to domain)
+        // Generate token (bound to domain only, session stored separately for verification)
         let raw = generate_token();
-        let token_hash = hash_domain_token(&raw, session_id, domain_name);
+        let token_hash = hash_domain_token(&raw, domain_name);
 
-        // Save to Redis
+        // Save to Redis with session_id for browser verification
         self.magic_link_store
-            .save(&token_hash, end_user.id, domain.id, ttl_minutes)
+            .save(&token_hash, end_user.id, domain.id, session_id, ttl_minutes)
             .await?;
 
         // Build magic link URL (uses reauth.{domain} for the login page)
@@ -300,9 +301,9 @@ impl DomainAuthUseCases {
         raw_token: &str,
         session_id: &str,
     ) -> AppResult<Option<DomainEndUserProfile>> {
-        let token_hash = hash_domain_token(raw_token, session_id, domain_name);
+        let token_hash = hash_domain_token(raw_token, domain_name);
 
-        if let Some(data) = self.magic_link_store.consume(&token_hash).await? {
+        if let Some(data) = self.magic_link_store.consume(&token_hash, session_id).await? {
             // Get the end user first to check access
             let end_user = self.end_user_repo.get_by_id(data.end_user_id).await?
                 .ok_or(AppError::NotFound)?;
@@ -777,10 +778,10 @@ fn generate_token() -> String {
 }
 
 /// Hash token bound to domain to prevent cross-domain reuse
-fn hash_domain_token(raw: &str, session_id: &str, domain: &str) -> String {
+/// Note: session_id is stored separately in Redis for verification, not in the hash
+fn hash_domain_token(raw: &str, domain: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
-    hasher.update(session_id.as_bytes());
     hasher.update(domain.as_bytes());
     let out = hasher.finalize();
     hex::encode(out)
