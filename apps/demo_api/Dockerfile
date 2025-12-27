@@ -15,7 +15,9 @@ COPY --from=sdk-builder /sdk ./libs/reauth-sdk-ts
 COPY apps/demo_api/package*.json ./
 
 # Update SDK path for Docker context and install
+# Remove lock file to avoid path conflicts, then install
 RUN sed -i 's|file:../../libs/reauth-sdk-ts|file:./libs/reauth-sdk-ts|' package.json && \
+    rm -f package-lock.json && \
     npm install
 
 FROM node:20-alpine AS builder
