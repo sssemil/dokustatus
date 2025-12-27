@@ -155,12 +155,14 @@ services:
       - redis
     secrets:
       - redis_password
+      - anypost_api_key
     entrypoint:
       - /bin/sh
       - -c
       - |
         REDIS_PASSWORD_RAW="$$(cat /run/secrets/redis_password)"
         export REDIS_URL="redis://default:$$REDIS_PASSWORD_RAW@${REDIS_HOST:-redis}:${REDIS_PORT:-6379}"
+        export REAUTH_API_KEY="$$(cat /run/secrets/anypost_api_key)"
         exec node dist/index.js
     restart: unless-stopped
     networks:
@@ -213,6 +215,11 @@ secrets:
     file: ./secrets/redis_password
   process_number_key:
     file: ./secrets/process_number_key
+  # Developer API keys for server-to-server authentication
+  reauth_dev_api_key:
+    file: ./secrets/reauth_dev_api_key
+  anypost_api_key:
+    file: ./secrets/anypost_api_key
 
 networks:
   reauth-net:
