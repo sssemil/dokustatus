@@ -533,7 +533,6 @@ export default function DomainsPage() {
                   </div>
                 )}
               </div>
-              <span className="text-muted" style={{ fontSize: '18px' }}>&rarr;</span>
             </div>
           </div>
         ))
