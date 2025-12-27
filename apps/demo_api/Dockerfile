@@ -1,11 +1,11 @@
-FROM node:22-alpine AS sdk-builder
+FROM node:20-alpine AS sdk-builder
 WORKDIR /sdk
 COPY libs/reauth-sdk-ts/package*.json ./
 RUN npm install
 COPY libs/reauth-sdk-ts/ .
 RUN npm run build
 
-FROM node:22-alpine AS deps
+FROM node:20-alpine AS deps
 WORKDIR /app
 
 # Copy built SDK
@@ -14,12 +14,11 @@ COPY --from=sdk-builder /sdk ./libs/reauth-sdk-ts
 # Copy demo API package files
 COPY apps/demo_api/package*.json ./
 
-# Remove SDK from package.json deps, install other deps, then add SDK back
-RUN sed -i '/"@reauth\/sdk"/d' package.json && \
-    npm install && \
-    npm install ./libs/reauth-sdk-ts
+# Update SDK path for Docker context and install
+RUN sed -i 's|file:../../libs/reauth-sdk-ts|file:./libs/reauth-sdk-ts|' package.json && \
+    npm install
 
-FROM node:22-alpine AS builder
+FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/libs ./libs
@@ -28,7 +27,7 @@ COPY apps/demo_api/ .
 # Build TypeScript
 RUN npm run build
 
-FROM node:22-alpine AS runner
+FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
