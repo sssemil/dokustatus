@@ -154,20 +154,14 @@ async fn verify_magic_link(
     // Extract root domain from reauth.* hostname
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
-    let Some(session_cookie) = jar.get("login_session") else {
-        return Ok((
-            StatusCode::UNAUTHORIZED,
-            HeaderMap::new(),
-            Json(VerifyMagicLinkResponse {
-                success: false,
-                redirect_url: None,
-                end_user_id: None,
-                email: None,
-                waitlist_position: None,
-            }),
-        ));
+    // Get session ID from cookie - if missing, user is on a different browser/device
+    let session_id = match jar.get("login_session") {
+        Some(cookie) => cookie.value().to_owned(),
+        None => {
+            // No session cookie = different browser/device than where link was requested
+            return Err(AppError::SessionMismatch);
+        }
     };
-    let session_id = session_cookie.value().to_owned();
 
     let end_user = app_state
         .domain_auth_use_cases
