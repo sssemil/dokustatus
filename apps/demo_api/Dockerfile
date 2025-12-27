@@ -15,7 +15,10 @@ COPY --from=sdk-builder /sdk ./libs/reauth-sdk-ts
 COPY apps/demo_api/package*.json ./
 
 # Update SDK path for Docker context and install
-RUN sed -i 's|file:../../libs/reauth-sdk-ts|file:./libs/reauth-sdk-ts|' package.json && npm install
+# Use npm@10 to avoid "extraneous" bug in npm@11
+RUN npm install -g npm@10 && \
+    sed -i 's|file:../../libs/reauth-sdk-ts|file:./libs/reauth-sdk-ts|' package.json && \
+    npm install
 
 FROM node:22-alpine AS builder
 WORKDIR /app
