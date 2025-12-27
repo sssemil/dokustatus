@@ -127,9 +127,9 @@ export default function TodosPage() {
           <p style={styles.email}>{user.email}</p>
         </div>
         <div style={styles.headerButtons}>
-          <a href={`https://reauth.${DOMAIN}/profile`} style={styles.profileLink}>
-            Profile
-          </a>
+          <button onClick={() => router.push('/account')} style={styles.accountButton}>
+            Account
+          </button>
           <button onClick={handleLogout} style={styles.logoutButton}>
             Sign out
           </button>
@@ -210,12 +210,14 @@ const styles: Record<string, React.CSSProperties> = {
     gap: '10px',
     alignItems: 'center',
   },
-  profileLink: {
-    color: '#0070f3',
-    textDecoration: 'none',
+  accountButton: {
+    backgroundColor: '#0070f3',
+    color: 'white',
+    border: 'none',
     padding: '8px 16px',
     borderRadius: '4px',
     fontSize: '14px',
+    cursor: 'pointer',
   },
   logoutButton: {
     backgroundColor: 'transparent',

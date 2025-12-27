@@ -38,36 +38,8 @@ const reauth = createServerClient({
 const app = express();
 app.use(express.json());
 
-// Auth middleware
-// Supports two authentication methods:
-// 1. Cookie-based: Forward cookies to reauth for session validation
-// 2. Token-based: Bearer token in Authorization header, verified via API key
+// Auth middleware - cookie-based authentication
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
-  // Try Authorization header first (JWT token)
-  const authHeader = req.headers.authorization;
-  if (authHeader?.startsWith('Bearer ')) {
-    const token = authHeader.slice(7);
-
-    // Only use verifyToken if API key is configured
-    if (REAUTH_API_KEY) {
-      try {
-        const result = await reauth.verifyToken(token);
-        if (result.valid && result.user) {
-          req.user = {
-            id: result.user.id,
-            email: result.user.email,
-            roles: result.user.roles,
-          };
-          next();
-          return;
-        }
-      } catch {
-        // Token verification failed, fall through to cookie auth
-      }
-    }
-  }
-
-  // Fall back to cookie-based authentication
   const cookies = req.headers.cookie || '';
   const user = await reauth.getUser(cookies);
 
@@ -100,6 +72,36 @@ async function setTodos(userId: string, todos: Todo[]): Promise<void> {
 // Health check (public)
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+// Get current user's full profile (requires API key)
+app.get('/api/me', authMiddleware, async (req, res) => {
+  if (!REAUTH_API_KEY) {
+    // Fall back to basic user info if no API key configured
+    res.json({
+      id: req.user!.id,
+      email: req.user!.email,
+      roles: req.user!.roles,
+    });
+    return;
+  }
+
+  try {
+    const userDetails = await reauth.getUserById(req.user!.id);
+    if (!userDetails) {
+      res.status(404).json({ error: 'User not found' });
+      return;
+    }
+    res.json(userDetails);
+  } catch (err) {
+    console.error('Failed to get user details:', err);
+    // Fall back to basic user info
+    res.json({
+      id: req.user!.id,
+      email: req.user!.email,
+      roles: req.user!.roles,
+    });
+  }
 });
 
 // List todos
