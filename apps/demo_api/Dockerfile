@@ -8,22 +8,19 @@ RUN npm run build
 FROM node:20-alpine AS deps
 WORKDIR /app
 
-# Copy built SDK
-COPY --from=sdk-builder /sdk ./libs/reauth-sdk-ts
+# Copy demo API package files (without lock file)
+COPY apps/demo_api/package.json ./
 
-# Copy demo API package files
-COPY apps/demo_api/package*.json ./
-
-# Update SDK path for Docker context and install
-# Remove lock file to avoid path conflicts, then install
-RUN sed -i 's|file:../../libs/reauth-sdk-ts|file:./libs/reauth-sdk-ts|' package.json && \
-    rm -f package-lock.json && \
+# Remove SDK from dependencies and install other deps
+RUN sed -i '/"@reauth\/sdk"/d' package.json && \
     npm install
+
+# Copy built SDK directly to node_modules
+COPY --from=sdk-builder /sdk ./node_modules/@reauth/sdk
 
 FROM node:20-alpine AS builder
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/libs ./libs
 COPY apps/demo_api/ .
 
 # Build TypeScript
@@ -36,7 +33,6 @@ ENV NODE_ENV=production
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package*.json ./
 COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/libs ./libs
 
 EXPOSE 3003
 CMD ["node", "dist/index.js"]
