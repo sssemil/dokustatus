@@ -333,30 +333,23 @@ export default function AppLayout({ children }: { children: ReactNode }) {
         </aside>
 
         {/* Main content */}
-        <main style={{
+        <div style={{
           flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          overflow: 'hidden',
+          overflow: 'auto',
         }}>
-          <div style={{
-            flex: 1,
-            overflow: 'auto',
+          <main style={{
             display: 'flex',
-            justifyContent: 'center',
+            flexDirection: 'column',
+            gap: 'var(--spacing-lg)',
+            width: '100%',
+            maxWidth: '72rem',
+            marginLeft: 'auto',
+            marginRight: 'auto',
+            padding: 'var(--spacing-xl)',
           }}>
-            <div style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: 'var(--spacing-lg)',
-              width: '100%',
-              maxWidth: '72rem',
-              padding: 'var(--spacing-xl)',
-            }}>
-              {children}
-            </div>
-          </div>
-        </main>
+            {children}
+          </main>
+        </div>
       </div>
     </AppContext.Provider>
   );
