@@ -2,16 +2,23 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import ConfirmModal from '@/components/ConfirmModal';
+import HoldToConfirmButton from '@/components/HoldToConfirmButton';
 
 type EndUser = {
   id: string;
   email: string;
+  roles: string[];
   email_verified_at: string | null;
   last_login_at: string | null;
   is_frozen: boolean;
   is_whitelisted: boolean;
   created_at: string | null;
+};
+
+type Role = {
+  id: string;
+  name: string;
+  user_count: number;
 };
 
 export default function UserDetailPage() {
@@ -23,8 +30,13 @@ export default function UserDetailPage() {
   const [user, setUser] = useState<EndUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
-  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  // Roles state
+  const [availableRoles, setAvailableRoles] = useState<Role[]>([]);
+  const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
+  const [savingRoles, setSavingRoles] = useState(false);
 
   const fetchUser = useCallback(async () => {
     try {
@@ -32,6 +44,7 @@ export default function UserDetailPage() {
       if (res.ok) {
         const data = await res.json();
         setUser(data);
+        setSelectedRoles(data.roles || []);
       } else {
         setError('User not found');
       }
@@ -42,15 +55,25 @@ export default function UserDetailPage() {
     }
   }, [domainId, userId]);
 
+  const fetchRoles = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/domains/${domainId}/roles`, { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setAvailableRoles(data);
+      }
+    } catch {
+      // Ignore
+    }
+  }, [domainId]);
+
   useEffect(() => {
     fetchUser();
-  }, [fetchUser]);
+    fetchRoles();
+  }, [fetchUser, fetchRoles]);
 
   const handleAction = async (action: 'freeze' | 'unfreeze' | 'whitelist' | 'unwhitelist' | 'delete') => {
     setActionLoading(true);
-    if (action === 'delete') {
-      setShowDeleteConfirm(false);
-    }
     const methodMap = {
       freeze: 'POST',
       unfreeze: 'DELETE',
@@ -88,6 +111,43 @@ export default function UserDetailPage() {
       setActionLoading(false);
     }
   };
+
+  const handleRoleToggle = (roleName: string) => {
+    setSelectedRoles((prev) =>
+      prev.includes(roleName)
+        ? prev.filter((r) => r !== roleName)
+        : [...prev, roleName]
+    );
+  };
+
+  const handleSaveRoles = async () => {
+    setSavingRoles(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const res = await fetch(`/api/domains/${domainId}/end-users/${userId}/roles`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roles: selectedRoles }),
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        setSuccess('Roles updated successfully');
+        fetchUser();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setError(errData.message || 'Failed to update roles');
+      }
+    } catch {
+      setError('Network error. Please try again.');
+    } finally {
+      setSavingRoles(false);
+    }
+  };
+
+  const rolesChanged = user ? JSON.stringify([...selectedRoles].sort()) !== JSON.stringify([...(user.roles || [])].sort()) : false;
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Never';
@@ -175,16 +235,41 @@ export default function UserDetailPage() {
                 Verified
               </span>
             )}
+            {user.roles && user.roles.map((role) => (
+              <span
+                key={role}
+                style={{
+                  padding: '4px 8px',
+                  borderRadius: 'var(--radius-sm)',
+                  backgroundColor: 'var(--bg-tertiary)',
+                  color: 'var(--text-secondary)',
+                  fontSize: '12px',
+                  fontWeight: 500,
+                }}
+              >
+                {role}
+              </span>
+            ))}
           </div>
         </div>
-        <button className="danger" onClick={() => setShowDeleteConfirm(true)} disabled={actionLoading}>
-          Delete
-        </button>
+        <HoldToConfirmButton
+          label="Delete"
+          holdingLabel="Hold to delete..."
+          onConfirm={() => handleAction('delete')}
+          variant="danger"
+          disabled={actionLoading}
+        />
       </div>
 
       {error && (
         <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
           {error}
+        </div>
+      )}
+
+      {success && (
+        <div className="message success" style={{ marginBottom: 'var(--spacing-md)' }}>
+          {success}
         </div>
       )}
 
@@ -209,6 +294,51 @@ export default function UserDetailPage() {
             <span>{formatDate(user.created_at)}</span>
           </div>
         </div>
+      </div>
+
+      {/* Roles */}
+      <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+        <h2 style={{ marginBottom: 'var(--spacing-md)' }}>Roles</h2>
+        {availableRoles.length === 0 ? (
+          <p className="text-muted" style={{ margin: 0 }}>
+            No roles available. Create roles in the Roles tab of the domain page.
+          </p>
+        ) : (
+          <>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-md)' }}>
+              {availableRoles.map((role) => {
+                const isSelected = selectedRoles.includes(role.name);
+                return (
+                  <button
+                    key={role.id}
+                    onClick={() => handleRoleToggle(role.name)}
+                    style={{
+                      padding: '6px 12px',
+                      borderRadius: 'var(--radius-sm)',
+                      border: isSelected ? '2px solid var(--accent-blue)' : '2px solid var(--border-primary)',
+                      backgroundColor: isSelected ? 'var(--accent-blue)' : 'var(--bg-tertiary)',
+                      color: isSelected ? '#000' : 'var(--text-primary)',
+                      cursor: 'pointer',
+                      fontSize: '13px',
+                      fontWeight: 500,
+                      transition: 'all 0.15s ease',
+                    }}
+                  >
+                    {role.name}
+                  </button>
+                );
+              })}
+            </div>
+            <button
+              className="primary"
+              onClick={handleSaveRoles}
+              disabled={!rolesChanged || savingRoles}
+              style={{ opacity: rolesChanged ? 1 : 0.5 }}
+            >
+              {savingRoles ? 'Saving...' : 'Save Roles'}
+            </button>
+          </>
+        )}
       </div>
 
       {/* Actions */}
@@ -258,17 +388,6 @@ export default function UserDetailPage() {
           </div>
         </div>
       </div>
-
-      <ConfirmModal
-        isOpen={showDeleteConfirm}
-        title="Delete User"
-        message="Are you sure you want to delete this user? This cannot be undone."
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
-        variant="danger"
-        onConfirm={() => handleAction('delete')}
-        onCancel={() => setShowDeleteConfirm(false)}
-      />
     </>
   );
 }

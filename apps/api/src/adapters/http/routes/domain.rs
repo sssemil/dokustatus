@@ -3,7 +3,7 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
-    routing::{delete, get, patch, post},
+    routing::{delete, get, patch, post, put},
 };
 use axum_extra::extract::cookie::CookieJar;
 use serde::{Deserialize, Serialize};
@@ -36,10 +36,16 @@ pub fn router() -> Router<AppState> {
         .route("/{domain_id}/end-users/{user_id}/freeze", delete(unfreeze_end_user))
         .route("/{domain_id}/end-users/{user_id}/whitelist", post(whitelist_end_user))
         .route("/{domain_id}/end-users/{user_id}/whitelist", delete(unwhitelist_end_user))
+        .route("/{domain_id}/end-users/{user_id}/roles", put(set_user_roles))
         // API Keys
         .route("/{domain_id}/api-keys", get(list_api_keys))
         .route("/{domain_id}/api-keys", post(create_api_key))
         .route("/{domain_id}/api-keys/{key_id}", delete(revoke_api_key))
+        // Roles
+        .route("/{domain_id}/roles", get(list_roles))
+        .route("/{domain_id}/roles", post(create_role))
+        .route("/{domain_id}/roles/{role_name}", delete(delete_role))
+        .route("/{domain_id}/roles/{role_name}/user-count", get(get_role_user_count))
 }
 
 #[derive(Deserialize)]
@@ -425,6 +431,7 @@ async fn update_auth_config(
 struct EndUserResponse {
     id: Uuid,
     email: String,
+    roles: Vec<String>,
     email_verified_at: Option<chrono::NaiveDateTime>,
     last_login_at: Option<chrono::NaiveDateTime>,
     is_frozen: bool,
@@ -449,6 +456,7 @@ async fn list_end_users(
         .map(|u| EndUserResponse {
             id: u.id,
             email: u.email,
+            roles: u.roles,
             email_verified_at: u.email_verified_at,
             last_login_at: u.last_login_at,
             is_frozen: u.is_frozen,
@@ -495,6 +503,7 @@ async fn invite_end_user(
         Json(EndUserResponse {
             id: user.id,
             email: user.email,
+            roles: user.roles,
             email_verified_at: user.email_verified_at,
             last_login_at: user.last_login_at,
             is_frozen: user.is_frozen,
@@ -525,6 +534,7 @@ async fn get_end_user(
     Ok(Json(EndUserResponse {
         id: user.id,
         email: user.email,
+        roles: user.roles,
         email_verified_at: user.email_verified_at,
         last_login_at: user.last_login_at,
         is_frozen: user.is_frozen,
@@ -709,4 +719,132 @@ async fn revoke_api_key(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ============================================================================
+// Role Endpoints
+// ============================================================================
+
+#[derive(Serialize)]
+struct RoleResponse {
+    id: Uuid,
+    name: String,
+    user_count: i64,
+    created_at: Option<chrono::NaiveDateTime>,
+}
+
+#[derive(Deserialize)]
+struct CreateRolePayload {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct RolePathParams {
+    domain_id: Uuid,
+    role_name: String,
+}
+
+#[derive(Serialize)]
+struct RoleUserCountResponse {
+    user_count: i64,
+}
+
+#[derive(Deserialize)]
+struct SetUserRolesPayload {
+    roles: Vec<String>,
+}
+
+async fn list_roles(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let roles = app_state
+        .domain_roles_use_cases
+        .list_roles(owner_id, domain_id)
+        .await?;
+
+    let response: Vec<RoleResponse> = roles
+        .into_iter()
+        .map(|r| RoleResponse {
+            id: r.id,
+            name: r.name,
+            user_count: r.user_count,
+            created_at: r.created_at,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+async fn create_role(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<CreateRolePayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let role = app_state
+        .domain_roles_use_cases
+        .create_role(owner_id, domain_id, &payload.name)
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(RoleResponse {
+            id: role.id,
+            name: role.name,
+            user_count: 0,
+            created_at: role.created_at,
+        }),
+    ))
+}
+
+async fn delete_role(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<RolePathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .domain_roles_use_cases
+        .delete_role(owner_id, params.domain_id, &params.role_name)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_role_user_count(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<RolePathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let user_count = app_state
+        .domain_roles_use_cases
+        .count_users_with_role(owner_id, params.domain_id, &params.role_name)
+        .await?;
+
+    Ok(Json(RoleUserCountResponse { user_count }))
+}
+
+async fn set_user_roles(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<EndUserPathParams>,
+    Json(payload): Json<SetUserRolesPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .domain_roles_use_cases
+        .set_user_roles(owner_id, params.domain_id, params.user_id, payload.roles)
+        .await?;
+
+    Ok(StatusCode::OK)
 }

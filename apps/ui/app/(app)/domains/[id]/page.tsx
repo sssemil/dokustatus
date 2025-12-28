@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import ConfirmModal from '@/components/ConfirmModal';
+import HoldToConfirmButton from '@/components/HoldToConfirmButton';
 
 type Domain = {
   id: string;
@@ -32,6 +33,7 @@ type AuthConfig = {
 type EndUser = {
   id: string;
   email: string;
+  roles: string[];
   email_verified_at: string | null;
   last_login_at: string | null;
   is_frozen: boolean;
@@ -39,7 +41,14 @@ type EndUser = {
   created_at: string | null;
 };
 
-type Tab = 'dns' | 'configuration' | 'users' | 'api-keys';
+type Tab = 'dns' | 'configuration' | 'roles' | 'users' | 'api-keys';
+
+type Role = {
+  id: string;
+  name: string;
+  user_count: number;
+  created_at: string | null;
+};
 
 type ApiKey = {
   id: string;
@@ -65,7 +74,6 @@ export default function DomainDetailPage() {
   const [endUsers, setEndUsers] = useState<EndUser[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const [showDeleteDomainConfirm, setShowDeleteDomainConfirm] = useState(false);
   const [deleteUserConfirmId, setDeleteUserConfirmId] = useState<string | null>(null);
   const [showWhitelistModal, setShowWhitelistModal] = useState(false);
   const [showInviteModal, setShowInviteModal] = useState(false);
@@ -82,8 +90,13 @@ export default function DomainDetailPage() {
   const [newKeyName, setNewKeyName] = useState('');
   const [creatingKey, setCreatingKey] = useState(false);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
-  const [revokeKeyConfirmId, setRevokeKeyConfirmId] = useState<string | null>(null);
-  const [revokingKey, setRevokingKey] = useState(false);
+
+  // Roles state
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [loadingRoles, setLoadingRoles] = useState(false);
+  const [newRoleName, setNewRoleName] = useState('');
+  const [creatingRole, setCreatingRole] = useState(false);
+  const [roleError, setRoleError] = useState('');
 
   // DNS record verification status (for verifying domains)
   const [cnameVerified, setCnameVerified] = useState(false);
@@ -185,6 +198,28 @@ export default function DomainDetailPage() {
       fetchApiKeys();
     }
   }, [activeTab, domain, fetchApiKeys]);
+
+  const fetchRoles = useCallback(async () => {
+    if (!domain || domain.status !== 'verified') return;
+    setLoadingRoles(true);
+    try {
+      const res = await fetch(`/api/domains/${domainId}/roles`, { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setRoles(data);
+      }
+    } catch {
+      // Ignore
+    } finally {
+      setLoadingRoles(false);
+    }
+  }, [domainId, domain]);
+
+  useEffect(() => {
+    if (activeTab === 'roles' && domain?.status === 'verified') {
+      fetchRoles();
+    }
+  }, [activeTab, domain, fetchRoles]);
 
   // Poll for verification status when domain is verifying
   useEffect(() => {
@@ -321,7 +356,6 @@ export default function DomainDetailPage() {
   };
 
   const handleDeleteDomain = async () => {
-    setShowDeleteDomainConfirm(false);
     try {
       const res = await fetch(`/api/domains/${domainId}`, {
         method: 'DELETE',
@@ -442,12 +476,9 @@ export default function DomainDetailPage() {
     }
   };
 
-  const handleRevokeApiKey = async () => {
-    if (!revokeKeyConfirmId) return;
-    setRevokingKey(true);
-
+  const handleRevokeApiKeyDirect = async (keyId: string) => {
     try {
-      const res = await fetch(`/api/domains/${domainId}/api-keys/${revokeKeyConfirmId}`, {
+      const res = await fetch(`/api/domains/${domainId}/api-keys/${keyId}`, {
         method: 'DELETE',
         credentials: 'include',
       });
@@ -460,9 +491,54 @@ export default function DomainDetailPage() {
       }
     } catch {
       setError('Network error. Please try again.');
+    }
+  };
+
+  const handleCreateRole = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newRoleName.trim()) return;
+
+    setCreatingRole(true);
+    setRoleError('');
+
+    try {
+      const res = await fetch(`/api/domains/${domainId}/roles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newRoleName.trim().toLowerCase() }),
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        setNewRoleName('');
+        fetchRoles();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setRoleError(errData.message || 'Failed to create role');
+      }
+    } catch {
+      setRoleError('Network error. Please try again.');
     } finally {
-      setRevokingKey(false);
-      setRevokeKeyConfirmId(null);
+      setCreatingRole(false);
+    }
+  };
+
+  const handleDeleteRole = async (roleName: string) => {
+    try {
+      const res = await fetch(`/api/domains/${domainId}/roles/${encodeURIComponent(roleName)}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        setSuccess(`Role "${roleName}" deleted`);
+        fetchRoles();
+        fetchEndUsers(); // Refresh users to update their roles
+      } else {
+        setError('Failed to delete role');
+      }
+    } catch {
+      setError('Network error. Please try again.');
     }
   };
 
@@ -567,9 +643,13 @@ export default function DomainDetailPage() {
             {getStatusBadge(domain.status)}
           </div>
         </div>
-        <button className="danger" onClick={() => setShowDeleteDomainConfirm(true)}>
-          Delete
-        </button>
+        <HoldToConfirmButton
+          label="Delete Domain"
+          holdingLabel="Hold to delete..."
+          onConfirm={handleDeleteDomain}
+          variant="danger"
+          duration={3000}
+        />
       </div>
 
       {error && (
@@ -624,6 +704,7 @@ export default function DomainDetailPage() {
           { id: 'dns' as Tab, label: 'DNS Records' },
           ...(domain.status === 'verified' ? [
             { id: 'configuration' as Tab, label: 'Configuration' },
+            { id: 'roles' as Tab, label: 'Roles' },
             { id: 'users' as Tab, label: 'Users' },
             { id: 'api-keys' as Tab, label: 'API Keys' },
           ] : []),
@@ -969,6 +1050,88 @@ export default function DomainDetailPage() {
             </>
           )}
 
+      {/* Roles Tab */}
+      {activeTab === 'roles' && domain.status === 'verified' && (
+        <>
+          <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
+            <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Create Role</h2>
+            <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
+              Roles can be assigned to users and accessed via the SDK.
+            </p>
+            <form onSubmit={handleCreateRole} style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'flex-start' }}>
+              <div style={{ flex: 1 }}>
+                <input
+                  type="text"
+                  value={newRoleName}
+                  onChange={(e) => setNewRoleName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                  placeholder="e.g., admin, editor, viewer"
+                  style={{ width: '100%' }}
+                />
+                <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
+                  Lowercase letters, numbers, and hyphens only.
+                </p>
+              </div>
+              <button type="submit" className="primary" disabled={creatingRole || !newRoleName.trim()}>
+                {creatingRole ? 'Creating...' : 'Create'}
+              </button>
+            </form>
+            {roleError && (
+              <div className="message error" style={{ marginTop: 'var(--spacing-sm)' }}>
+                {roleError}
+              </div>
+            )}
+          </div>
+
+          {loadingRoles ? (
+            <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
+              <span className="spinner" />
+            </div>
+          ) : roles.length === 0 ? (
+            <div className="card" style={{ textAlign: 'center' }}>
+              <p className="text-muted">No roles created yet. Create a role above to get started.</p>
+            </div>
+          ) : (
+            roles.map((role) => (
+              <div
+                key={role.id}
+                className="card"
+                style={{
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  marginBottom: 'var(--spacing-sm)',
+                }}
+              >
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-xs)' }}>
+                    <code style={{
+                      backgroundColor: 'var(--bg-tertiary)',
+                      padding: '4px 8px',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                      fontWeight: 600,
+                    }}>
+                      {role.name}
+                    </code>
+                  </div>
+                  <span className="text-muted" style={{ fontSize: '12px' }}>
+                    {role.user_count} {role.user_count === 1 ? 'user' : 'users'}
+                  </span>
+                </div>
+                <HoldToConfirmButton
+                  label="Delete"
+                  holdingLabel={`Deleting... (${role.user_count} users)`}
+                  onConfirm={() => handleDeleteRole(role.name)}
+                  variant="danger"
+                  duration={3000}
+                  style={{ fontSize: '13px', padding: '6px 12px' }}
+                />
+              </div>
+            ))
+          )}
+        </>
+      )}
+
       {/* Users Tab */}
       {activeTab === 'users' && domain.status === 'verified' && (
             <>
@@ -1049,6 +1212,21 @@ export default function DomainDetailPage() {
                             Whitelisted
                           </span>
                         )}
+                        {user.roles && user.roles.map((role) => (
+                          <span
+                            key={role}
+                            style={{
+                              padding: '2px 6px',
+                              borderRadius: 'var(--radius-sm)',
+                              backgroundColor: 'var(--bg-tertiary)',
+                              color: 'var(--text-secondary)',
+                              fontSize: '11px',
+                              fontWeight: 500,
+                            }}
+                          >
+                            {role}
+                          </span>
+                        ))}
                       </div>
                     </div>
                     <div style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
@@ -1231,31 +1409,20 @@ export default function DomainDetailPage() {
                     )}
                   </div>
                 </div>
-                <button
-                  className="danger"
-                  onClick={() => setRevokeKeyConfirmId(apiKey.id)}
+                <HoldToConfirmButton
+                  label="Revoke"
+                  holdingLabel="Hold to revoke..."
+                  onConfirm={() => handleRevokeApiKeyDirect(apiKey.id)}
+                  variant="danger"
+                  duration={3000}
                   style={{ fontSize: '13px', padding: '6px 12px' }}
-                >
-                  Revoke
-                </button>
+                />
               </div>
             ))
           )}
         </>
       )}
 
-      {/* Delete Domain Confirmation Modal */}
-      <ConfirmModal
-        isOpen={showDeleteDomainConfirm}
-        title="Delete Domain"
-        message="Are you sure you want to delete this domain? This cannot be undone."
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
-        variant="danger"
-        confirmText={domain?.domain}
-        onConfirm={handleDeleteDomain}
-        onCancel={() => setShowDeleteDomainConfirm(false)}
-      />
 
       {/* Delete User Confirmation Modal */}
       <ConfirmModal
@@ -1685,17 +1852,6 @@ export default function DomainDetailPage() {
         </div>
       )}
 
-      {/* Revoke API Key Confirmation Modal */}
-      <ConfirmModal
-        isOpen={revokeKeyConfirmId !== null}
-        title="Revoke API Key"
-        message="Are you sure you want to revoke this API key? Any applications using this key will immediately lose access."
-        confirmLabel={revokingKey ? 'Revoking...' : 'Revoke'}
-        cancelLabel="Cancel"
-        variant="danger"
-        onConfirm={handleRevokeApiKey}
-        onCancel={() => setRevokeKeyConfirmId(null)}
-      />
     </>
   );
 }

@@ -60,6 +60,9 @@ pub trait DomainEndUserRepo: Send + Sync {
     async fn whitelist_all_in_domain(&self, domain_id: Uuid) -> AppResult<()>;
     async fn count_by_domain_ids(&self, domain_ids: &[Uuid]) -> AppResult<i64>;
     async fn get_waitlist_position(&self, domain_id: Uuid, user_id: Uuid) -> AppResult<i64>;
+    async fn set_roles(&self, id: Uuid, roles: &[String]) -> AppResult<()>;
+    async fn remove_role_from_all_users(&self, domain_id: Uuid, role_name: &str) -> AppResult<()>;
+    async fn count_users_with_role(&self, domain_id: Uuid, role_name: &str) -> AppResult<i64>;
 }
 
 #[async_trait]

@@ -1,10 +1,15 @@
 use crate::{
-    adapters::{dns::HickoryDnsVerifier, http::app_state::AppState},
+    adapters::{
+        dns::HickoryDnsVerifier,
+        http::app_state::AppState,
+        persistence::domain_role::DomainRoleRepo,
+    },
     application::use_cases::api_key::{ApiKeyRepo, ApiKeyUseCases},
     application::use_cases::domain_auth::{
         DomainAuthConfigRepo, DomainAuthMagicLinkRepo, DomainAuthUseCases,
         DomainEndUserRepo,
     },
+    application::use_cases::domain_roles::DomainRolesUseCases,
     infra::{
         config::AppConfig,
         crypto::ProcessCipher,
@@ -47,6 +52,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let magic_link_config_repo_arc = postgres_arc.clone() as Arc<dyn DomainAuthMagicLinkRepo>;
     let end_user_repo_arc = postgres_arc.clone() as Arc<dyn DomainEndUserRepo>;
     let api_key_repo_arc = postgres_arc.clone() as Arc<dyn ApiKeyRepo>;
+    let role_repo_arc = postgres_arc.clone() as Arc<dyn DomainRoleRepo>;
 
     let dns_verifier = Arc::new(match config.dns_server {
         Some(addr) => HickoryDnsVerifier::with_nameserver(addr),
@@ -79,7 +85,13 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
 
     let api_key_use_cases = ApiKeyUseCases::new(
         api_key_repo_arc,
+        domain_repo_arc.clone(),
+        end_user_repo_arc.clone(),
+    );
+
+    let domain_roles_use_cases = DomainRolesUseCases::new(
         domain_repo_arc,
+        role_repo_arc,
         end_user_repo_arc,
     );
 
@@ -88,6 +100,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         domain_use_cases: Arc::new(domain_use_cases),
         domain_auth_use_cases: Arc::new(domain_auth_use_cases),
         api_key_use_cases: Arc::new(api_key_use_cases),
+        domain_roles_use_cases: Arc::new(domain_roles_use_cases),
         rate_limiter,
     })
 }

@@ -188,4 +188,44 @@ impl DomainEndUserRepo for PostgresPersistence {
         // Position is count + 1 (1-indexed)
         Ok(row.0 + 1)
     }
+
+    async fn set_roles(&self, id: Uuid, roles: &[String]) -> AppResult<()> {
+        let roles_json = serde_json::to_value(roles).unwrap_or_default();
+        sqlx::query("UPDATE domain_end_users SET roles = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
+            .bind(roles_json)
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(AppError::from)?;
+        Ok(())
+    }
+
+    async fn remove_role_from_all_users(&self, domain_id: Uuid, role_name: &str) -> AppResult<()> {
+        // Remove role from JSONB array for all users in domain
+        sqlx::query(
+            r#"
+            UPDATE domain_end_users
+            SET roles = roles - $1, updated_at = CURRENT_TIMESTAMP
+            WHERE domain_id = $2 AND roles @> to_jsonb($1::text)
+            "#,
+        )
+        .bind(role_name)
+        .bind(domain_id)
+        .execute(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+        Ok(())
+    }
+
+    async fn count_users_with_role(&self, domain_id: Uuid, role_name: &str) -> AppResult<i64> {
+        let row: (i64,) = sqlx::query_as(
+            "SELECT COUNT(*) FROM domain_end_users WHERE domain_id = $1 AND roles @> to_jsonb($2::text)",
+        )
+        .bind(domain_id)
+        .bind(role_name)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+        Ok(row.0)
+    }
 }
