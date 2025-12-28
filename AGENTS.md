@@ -80,7 +80,7 @@ Secrets are stored in `infra/secrets/` as individual files (one secret per file)
 
 DO NOT BE LAZY! Be proactive, and action biased. Commit frequently.
 
-## Planning Guideline
+## Co-op with Codex Guideline
 
 During planning, once you have a ready plan, before asking me to review it, always first ask codex for an opinion on your plan like more or less like this:
 
@@ -130,3 +130,5 @@ codex exec """
 ```
 
 And then validate and integrate the suggested changes into your plan.
+
+Additionally, use this pattern once you are ready to commit changes; ask codex to review the uncommited changes, and then again, review suggestions, and apply them if they are good and valid.
