@@ -51,7 +51,7 @@ pub fn verify(token: &str, secret: &secrecy::SecretString) -> AppResult<Claims> 
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DomainEndUserClaims {
-    pub sub: String,        // end_user_id
+    pub sub: String, // end_user_id
     pub domain_id: String,
     pub domain: String,     // root domain (e.g., "example.com")
     pub roles: Vec<String>, // user's roles (e.g., ["admin", "user"])
@@ -90,7 +90,10 @@ pub fn issue_domain_end_user(
     .map_err(|e| AppError::Internal(e.to_string()))
 }
 
-pub fn verify_domain_end_user(token: &str, secret: &secrecy::SecretString) -> AppResult<DomainEndUserClaims> {
+pub fn verify_domain_end_user(
+    token: &str,
+    secret: &secrecy::SecretString,
+) -> AppResult<DomainEndUserClaims> {
     let validation = Validation::new(Algorithm::HS256);
     decode::<DomainEndUserClaims>(
         token,

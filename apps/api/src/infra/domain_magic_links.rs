@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 use crate::{
     app_error::{AppError, AppResult},
-    application::use_cases::domain_auth::{DomainMagicLinkData, DomainMagicLinkStore as DomainMagicLinkStoreTrait},
+    application::use_cases::domain_auth::{
+        DomainMagicLinkData, DomainMagicLinkStore as DomainMagicLinkStoreTrait,
+    },
 };
 
 #[derive(Clone)]
@@ -32,12 +34,23 @@ impl DomainMagicLinkStore {
 
 #[async_trait]
 impl DomainMagicLinkStoreTrait for DomainMagicLinkStore {
-    async fn save(&self, token_hash: &str, end_user_id: Uuid, domain_id: Uuid, session_id: &str, ttl_minutes: i64) -> AppResult<()> {
+    async fn save(
+        &self,
+        token_hash: &str,
+        end_user_id: Uuid,
+        domain_id: Uuid,
+        session_id: &str,
+        ttl_minutes: i64,
+    ) -> AppResult<()> {
         let mut conn = self.manager.clone();
         let key = Self::key(token_hash);
         let ttl_secs: u64 = (ttl_minutes.max(1) * 60) as u64;
 
-        let data = StoredData { end_user_id, domain_id, session_id: session_id.to_string() };
+        let data = StoredData {
+            end_user_id,
+            domain_id,
+            session_id: session_id.to_string(),
+        };
         let json = serde_json::to_string(&data)
             .map_err(|e| AppError::Internal(format!("Failed to serialize magic link data: {e}")))?;
 
@@ -49,7 +62,11 @@ impl DomainMagicLinkStoreTrait for DomainMagicLinkStore {
         Ok(())
     }
 
-    async fn consume(&self, token_hash: &str, session_id: &str) -> AppResult<Option<DomainMagicLinkData>> {
+    async fn consume(
+        &self,
+        token_hash: &str,
+        session_id: &str,
+    ) -> AppResult<Option<DomainMagicLinkData>> {
         let mut conn = self.manager.clone();
         let key = Self::key(token_hash);
 
@@ -61,8 +78,9 @@ impl DomainMagicLinkStoreTrait for DomainMagicLinkStore {
 
         match raw {
             Some(value) => {
-                let data: StoredData = serde_json::from_str(&value)
-                    .map_err(|e| AppError::Internal(format!("Failed to parse magic link data: {e}")))?;
+                let data: StoredData = serde_json::from_str(&value).map_err(|e| {
+                    AppError::Internal(format!("Failed to parse magic link data: {e}"))
+                })?;
 
                 // Check if session matches
                 if data.session_id != session_id {

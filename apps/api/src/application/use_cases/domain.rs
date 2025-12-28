@@ -53,13 +53,17 @@ impl DomainUseCases {
     }
 
     #[instrument(skip(self))]
-    pub async fn add_domain(&self, owner_end_user_id: Uuid, domain: &str) -> AppResult<DomainProfile> {
+    pub async fn add_domain(
+        &self,
+        owner_end_user_id: Uuid,
+        domain: &str,
+    ) -> AppResult<DomainProfile> {
         let normalized = domain.to_lowercase().trim().to_string();
 
         // Validate that this is a root domain (not a subdomain)
         if !is_root_domain(&normalized) {
             return Err(AppError::InvalidInput(
-                "Please enter your root domain (e.g., example.com), not a subdomain".into()
+                "Please enter your root domain (e.g., example.com), not a subdomain".into(),
             ));
         }
 
@@ -72,7 +76,11 @@ impl DomainUseCases {
     }
 
     #[instrument(skip(self))]
-    pub async fn get_domain(&self, owner_end_user_id: Uuid, domain_id: Uuid) -> AppResult<DomainProfile> {
+    pub async fn get_domain(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<DomainProfile> {
         let domain = self
             .repo
             .get_by_id(domain_id)
@@ -85,7 +93,11 @@ impl DomainUseCases {
     }
 
     #[instrument(skip(self))]
-    pub async fn start_verification(&self, owner_end_user_id: Uuid, domain_id: Uuid) -> AppResult<DomainProfile> {
+    pub async fn start_verification(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<DomainProfile> {
         let domain = self.get_domain(owner_end_user_id, domain_id).await?;
         self.repo.set_verifying(domain.id).await
     }
@@ -145,7 +157,9 @@ impl DomainUseCases {
 
         // Prevent deletion of system domains (those without an owner)
         if domain.owner_end_user_id.is_none() {
-            return Err(AppError::InvalidInput("System domains cannot be deleted".into()));
+            return Err(AppError::InvalidInput(
+                "System domains cannot be deleted".into(),
+            ));
         }
 
         self.repo.delete(domain.id).await
@@ -177,7 +191,6 @@ impl DomainUseCases {
         }
     }
 }
-
 
 #[derive(Debug, Clone)]
 pub struct DomainProfile {

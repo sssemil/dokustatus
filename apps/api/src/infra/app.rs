@@ -10,7 +10,10 @@ use uuid::Uuid;
 use crate::{
     adapters::{
         self,
-        http::{app_state::AppState, middleware::{api_key_auth, rate_limit_middleware}},
+        http::{
+            app_state::AppState,
+            middleware::{api_key_auth, rate_limit_middleware},
+        },
     },
     infra::setup::init_tracing,
 };
@@ -87,17 +90,16 @@ pub fn create_app(app_state: AppState) -> Router {
     // This prevents evil.com from making requests to /api/public/domain/anypost.xyz/...
     let public_cors = CorsLayer::new()
         .allow_origin(AllowOrigin::predicate(validate_public_origin))
-        .allow_methods([
-            http::Method::GET,
-            http::Method::POST,
-            http::Method::DELETE,
-        ])
+        .allow_methods([http::Method::GET, http::Method::POST, http::Method::DELETE])
         .allow_headers([CONTENT_TYPE])
         .allow_credentials(true);
 
     // Public routes with domain-validated CORS (for SDK usage)
     let public_routes = Router::new()
-        .nest("/public/domain", adapters::http::routes::public_domain_auth::router())
+        .nest(
+            "/public/domain",
+            adapters::http::routes::public_domain_auth::router(),
+        )
         .layer(public_cors);
 
     // Dashboard routes with restrictive CORS
@@ -115,11 +117,19 @@ pub fn create_app(app_state: AppState) -> Router {
 
     let developer_routes = Router::new()
         .nest("/developer", adapters::http::routes::developer::router())
-        .layer(middleware::from_fn_with_state(app_state.clone(), api_key_auth))
+        .layer(middleware::from_fn_with_state(
+            app_state.clone(),
+            api_key_auth,
+        ))
         .layer(developer_cors);
 
     Router::new()
-        .nest("/api", public_routes.merge(dashboard_routes).merge(developer_routes))
+        .nest(
+            "/api",
+            public_routes
+                .merge(dashboard_routes)
+                .merge(developer_routes),
+        )
         .with_state(app_state.clone())
         .layer(middleware::from_fn_with_state(
             app_state,

@@ -28,6 +28,8 @@ type AuthConfig = {
     from_email: string;
     has_api_key: boolean;
   } | null;
+  using_fallback: boolean;
+  fallback_from_email: string | null;
 };
 
 type EndUser = {
@@ -325,6 +327,34 @@ export default function DomainDetailPage() {
       setError('Network error. Please try again.');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRemoveCustomConfig = async () => {
+    if (!confirm('Remove custom email configuration? The domain will use reauth\'s shared email service.')) {
+      return;
+    }
+
+    setError('');
+    setSuccess('');
+
+    try {
+      const res = await fetch(`/api/domains/${domainId}/auth-config/magic-link`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        setSuccess('Custom email configuration removed');
+        setResendApiKey('');
+        setFromEmail('');
+        fetchData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setError(errData.message || 'Failed to remove configuration');
+      }
+    } catch {
+      setError('Network error. Please try again.');
     }
   };
 
@@ -952,8 +982,70 @@ export default function DomainDetailPage() {
 
               {magicLinkEnabled && (
                 <div style={{ marginTop: 'var(--spacing-lg)', borderTop: '1px solid var(--border-primary)', paddingTop: 'var(--spacing-lg)' }}>
+                  {/* Show indicator for custom vs fallback config */}
+                  {authConfig?.magic_link_config?.has_api_key && (
+                    <div
+                      style={{
+                        marginBottom: 'var(--spacing-md)',
+                        padding: 'var(--spacing-sm) var(--spacing-md)',
+                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                        border: '1px solid rgba(34, 197, 94, 0.3)',
+                        borderRadius: 'var(--radius-sm)',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div>
+                          <span style={{ color: 'rgb(34, 197, 94)' }}>Using your custom email configuration</span>
+                          <span className="text-muted" style={{ marginLeft: 'var(--spacing-sm)' }}>
+                            ({authConfig.magic_link_config.from_email})
+                          </span>
+                        </div>
+                        {authConfig?.fallback_from_email && (
+                          <button
+                            type="button"
+                            onClick={handleRemoveCustomConfig}
+                            style={{
+                              background: 'none',
+                              border: 'none',
+                              color: 'var(--text-muted)',
+                              cursor: 'pointer',
+                              fontSize: '12px',
+                              textDecoration: 'underline',
+                            }}
+                          >
+                            Use shared service instead
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                  {!authConfig?.magic_link_config?.has_api_key && authConfig?.using_fallback && (
+                    <div
+                      style={{
+                        marginBottom: 'var(--spacing-md)',
+                        padding: 'var(--spacing-sm) var(--spacing-md)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                        borderRadius: 'var(--radius-sm)',
+                      }}
+                    >
+                      <div style={{ fontWeight: 500, marginBottom: 4 }}>Using reauth&apos;s shared email service</div>
+                      <div className="text-muted" style={{ fontSize: '13px' }}>
+                        Magic links will be sent from <code style={{ backgroundColor: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>{authConfig.fallback_from_email}</code>
+                      </div>
+                      <div className="text-muted" style={{ fontSize: '12px', marginTop: 4 }}>
+                        Add your own Resend API key below for custom branding.
+                      </div>
+                    </div>
+                  )}
+
                   <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                    <label htmlFor="resendApiKey">Resend API Key</label>
+                    <label htmlFor="resendApiKey">
+                      Resend API Key
+                      {authConfig?.using_fallback && !authConfig?.magic_link_config?.has_api_key && (
+                        <span className="text-muted" style={{ fontWeight: 'normal', marginLeft: 'var(--spacing-sm)' }}>(optional)</span>
+                      )}
+                    </label>
                     <input
                       id="resendApiKey"
                       type="password"
@@ -971,13 +1063,18 @@ export default function DomainDetailPage() {
                   </div>
 
                   <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                    <label htmlFor="fromEmail">From Email</label>
+                    <label htmlFor="fromEmail">
+                      From Email
+                      {authConfig?.using_fallback && !authConfig?.magic_link_config?.has_api_key && (
+                        <span className="text-muted" style={{ fontWeight: 'normal', marginLeft: 'var(--spacing-sm)' }}>(optional)</span>
+                      )}
+                    </label>
                     <input
                       id="fromEmail"
                       type="email"
                       value={fromEmail}
                       onChange={(e) => setFromEmail(e.target.value)}
-                      placeholder="noreply@yourdomain.com"
+                      placeholder={authConfig?.using_fallback ? authConfig.fallback_from_email || 'noreply@yourdomain.com' : 'noreply@yourdomain.com'}
                     />
                     <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
                       The email address magic links will be sent from. Must be verified in Resend.

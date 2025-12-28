@@ -24,14 +24,14 @@ struct MeResponse {
     roles: Vec<String>,
 }
 
-async fn get_me(
-    State(app_state): State<AppState>,
-    jar: CookieJar,
-) -> AppResult<impl IntoResponse> {
+async fn get_me(State(app_state): State<AppState>, jar: CookieJar) -> AppResult<impl IntoResponse> {
     let (_, claims) = current_user(&jar, &app_state)?;
 
     Ok(Json(MeResponse {
-        email: jar.get("end_user_email").map(|c| c.value().to_string()).unwrap_or_default(),
+        email: jar
+            .get("end_user_email")
+            .map(|c| c.value().to_string())
+            .unwrap_or_default(),
         roles: claims.roles,
     }))
 }
@@ -42,10 +42,13 @@ async fn delete_account(
 ) -> AppResult<(StatusCode, HeaderMap)> {
     let (_, claims) = current_user(&jar, &app_state)?;
 
-    let end_user_id = Uuid::parse_str(&claims.sub)
-        .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
+    let end_user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
 
-    app_state.domain_auth_use_cases.delete_own_account(end_user_id).await?;
+    app_state
+        .domain_auth_use_cases
+        .delete_own_account(end_user_id)
+        .await?;
 
     let mut headers = HeaderMap::new();
     for (name, value, http_only) in [
@@ -68,7 +71,10 @@ async fn delete_account(
 
 /// Extracts the current end-user from the session.
 /// Only allows access if the user is a main domain end-user (dashboard users).
-fn current_user(jar: &CookieJar, app_state: &AppState) -> AppResult<(CookieJar, jwt::DomainEndUserClaims)> {
+fn current_user(
+    jar: &CookieJar,
+    app_state: &AppState,
+) -> AppResult<(CookieJar, jwt::DomainEndUserClaims)> {
     let Some(access_cookie) = jar.get("end_user_access_token") else {
         return Err(crate::app_error::AppError::InvalidCredentials);
     };

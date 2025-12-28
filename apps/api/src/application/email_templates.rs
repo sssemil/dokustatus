@@ -31,7 +31,11 @@ pub fn account_created_email(app_origin: &str, domain: &str) -> (String, String)
     (subject, html)
 }
 
-pub fn account_whitelisted_email(app_origin: &str, domain: &str, login_url: &str) -> (String, String) {
+pub fn account_whitelisted_email(
+    app_origin: &str,
+    domain: &str,
+    login_url: &str,
+) -> (String, String) {
     let subject = format!("You're approved! Access {} now", domain);
     let headline = "You've been approved!";
     let lead = format!(

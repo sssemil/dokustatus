@@ -28,6 +28,10 @@ pub struct AppConfig {
     pub dns_server: Option<SocketAddr>,
     /// The main reauth domain (e.g., "reauth.dev" in prod, "reauth.test" for local dev).
     pub main_domain: String,
+    /// Fallback Resend API key for domains without custom email config.
+    pub fallback_resend_api_key: Option<String>,
+    /// Fallback email domain (e.g., "mail.reauth.dev"). Used with domain name to construct from email.
+    pub fallback_email_domain: Option<String>,
 }
 
 impl AppConfig {
@@ -58,8 +62,13 @@ impl AppConfig {
         let dns_server: Option<SocketAddr> = std::env::var("DNS_SERVER")
             .ok()
             .and_then(|s| s.parse().ok());
-        let main_domain: String =
-            get_env_default("MAIN_DOMAIN", "reauth.dev".to_string());
+        let main_domain: String = get_env_default("MAIN_DOMAIN", "reauth.dev".to_string());
+        let fallback_resend_api_key: Option<String> = std::env::var("FALLBACK_RESEND_API_KEY")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let fallback_email_domain: Option<String> = std::env::var("FALLBACK_EMAIL_DOMAIN")
+            .ok()
+            .filter(|s| !s.is_empty());
 
         Self {
             jwt_secret,
@@ -78,6 +87,8 @@ impl AppConfig {
             ingress_domain,
             dns_server,
             main_domain,
+            fallback_resend_api_key,
+            fallback_email_domain,
         }
     }
 }

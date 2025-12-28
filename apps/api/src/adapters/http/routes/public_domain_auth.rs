@@ -14,9 +14,7 @@ use crate::{
     adapters::http::app_state::AppState,
     app_error::{AppError, AppResult},
     application::{
-        jwt,
-        use_cases::domain::extract_root_from_reauth_hostname,
-        validators::is_valid_email,
+        jwt, use_cases::domain::extract_root_from_reauth_hostname, validators::is_valid_email,
     },
 };
 
@@ -74,7 +72,10 @@ struct SessionResponse {
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/{domain}/config", get(get_config))
-        .route("/{domain}/auth/request-magic-link", post(request_magic_link))
+        .route(
+            "/{domain}/auth/request-magic-link",
+            post(request_magic_link),
+        )
         .route("/{domain}/auth/verify-magic-link", post(verify_magic_link))
         .route("/{domain}/auth/session", get(check_session))
         .route("/{domain}/auth/refresh", post(refresh_token))
@@ -127,7 +128,8 @@ async fn request_magic_link(
     // Extract root domain from reauth.* hostname
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
-    let (jar, session_id) = ensure_login_session(jar, &root_domain, app_state.config.magic_link_ttl_minutes);
+    let (jar, session_id) =
+        ensure_login_session(jar, &root_domain, app_state.config.magic_link_ttl_minutes);
 
     app_state
         .domain_auth_use_cases
@@ -177,11 +179,20 @@ async fn verify_magic_link(
                 .await
                 .ok();
 
-            let access_ttl_secs = config.as_ref().map(|c| c.access_token_ttl_secs).unwrap_or(86400);
-            let refresh_ttl_days = config.as_ref().map(|c| c.refresh_token_ttl_days).unwrap_or(30);
+            let access_ttl_secs = config
+                .as_ref()
+                .map(|c| c.access_token_ttl_secs)
+                .unwrap_or(86400);
+            let refresh_ttl_days = config
+                .as_ref()
+                .map(|c| c.refresh_token_ttl_days)
+                .unwrap_or(30);
 
             // Check if user is on waitlist (whitelist enabled but user not whitelisted)
-            let whitelist_enabled = config.as_ref().map(|c| c.whitelist_enabled).unwrap_or(false);
+            let whitelist_enabled = config
+                .as_ref()
+                .map(|c| c.whitelist_enabled)
+                .unwrap_or(false);
             let on_waitlist = whitelist_enabled && !user.is_whitelisted;
 
             // Get waitlist position if on waitlist
@@ -302,12 +313,18 @@ async fn check_session(
 
     // Check access token first
     if let Some(access_token) = cookies.get("end_user_access_token") {
-        if let Ok(claims) = jwt::verify_domain_end_user(access_token.value(), &app_state.config.jwt_secret) {
+        if let Ok(claims) =
+            jwt::verify_domain_end_user(access_token.value(), &app_state.config.jwt_secret)
+        {
             if claims.domain == root_domain {
                 // Parse user ID and check real-time status from database
                 if let Ok(user_id) = uuid::Uuid::parse_str(&claims.sub) {
                     // Check user's current status
-                    if let Ok(Some(user)) = app_state.domain_auth_use_cases.get_end_user_by_id(user_id).await {
+                    if let Ok(Some(user)) = app_state
+                        .domain_auth_use_cases
+                        .get_end_user_by_id(user_id)
+                        .await
+                    {
                         // Check if frozen
                         if user.is_frozen {
                             return Ok(Json(SessionResponse {
@@ -328,7 +345,10 @@ async fn check_session(
                             .await
                             .ok();
 
-                        let whitelist_enabled = config.as_ref().map(|c| c.whitelist_enabled).unwrap_or(false);
+                        let whitelist_enabled = config
+                            .as_ref()
+                            .map(|c| c.whitelist_enabled)
+                            .unwrap_or(false);
 
                         if whitelist_enabled && !user.is_whitelisted {
                             // User is on waitlist
@@ -378,7 +398,9 @@ async fn check_session(
 
     // Fallback: check refresh token (client should call /refresh if access expired)
     if let Some(refresh_token) = cookies.get("end_user_refresh_token") {
-        if let Ok(claims) = jwt::verify_domain_end_user(refresh_token.value(), &app_state.config.jwt_secret) {
+        if let Ok(claims) =
+            jwt::verify_domain_end_user(refresh_token.value(), &app_state.config.jwt_secret)
+        {
             if claims.domain == root_domain {
                 // Refresh token is valid but access token expired - return 401 to prompt refresh
                 return Ok(Json(SessionResponse {
@@ -429,13 +451,17 @@ async fn refresh_token(
     }
 
     // Parse end_user_id from claims
-    let end_user_id = Uuid::parse_str(&claims.sub)
-        .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
+    let end_user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
     let domain_id = Uuid::parse_str(&claims.domain_id)
         .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
 
     // Check user's current status from database before issuing new token
-    if let Ok(Some(user)) = app_state.domain_auth_use_cases.get_end_user_by_id(end_user_id).await {
+    if let Ok(Some(user)) = app_state
+        .domain_auth_use_cases
+        .get_end_user_by_id(end_user_id)
+        .await
+    {
         if user.is_frozen {
             return Err(crate::app_error::AppError::AccountSuspended);
         }
@@ -448,7 +474,10 @@ async fn refresh_token(
         .await
         .ok();
 
-    let access_ttl_secs = config.as_ref().map(|c| c.access_token_ttl_secs).unwrap_or(86400);
+    let access_ttl_secs = config
+        .as_ref()
+        .map(|c| c.access_token_ttl_secs)
+        .unwrap_or(86400);
 
     // Issue new access token
     let access_token = jwt::issue_domain_end_user(
@@ -531,7 +560,9 @@ async fn delete_account(
 
     // Get end_user_id from access or refresh token
     let end_user_id = if let Some(access_token) = cookies.get("end_user_access_token") {
-        if let Ok(claims) = jwt::verify_domain_end_user(access_token.value(), &app_state.config.jwt_secret) {
+        if let Ok(claims) =
+            jwt::verify_domain_end_user(access_token.value(), &app_state.config.jwt_secret)
+        {
             if claims.domain == root_domain {
                 Some(Uuid::parse_str(&claims.sub).ok())
             } else {
@@ -541,7 +572,9 @@ async fn delete_account(
             None
         }
     } else if let Some(refresh_token) = cookies.get("end_user_refresh_token") {
-        if let Ok(claims) = jwt::verify_domain_end_user(refresh_token.value(), &app_state.config.jwt_secret) {
+        if let Ok(claims) =
+            jwt::verify_domain_end_user(refresh_token.value(), &app_state.config.jwt_secret)
+        {
             if claims.domain == root_domain {
                 Some(Uuid::parse_str(&claims.sub).ok())
             } else {
@@ -603,7 +636,11 @@ async fn delete_account(
 
 /// Ensures a login session exists (domain-scoped)
 /// The domain parameter should be the root domain (e.g., "example.com")
-fn ensure_login_session(jar: CookieJar, root_domain: &str, ttl_minutes: i64) -> (CookieJar, String) {
+fn ensure_login_session(
+    jar: CookieJar,
+    root_domain: &str,
+    ttl_minutes: i64,
+) -> (CookieJar, String) {
     let session_id = jar
         .get("login_session")
         .map(|c| c.value().to_owned())

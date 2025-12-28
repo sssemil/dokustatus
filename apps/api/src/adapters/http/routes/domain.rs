@@ -28,15 +28,34 @@ pub fn router() -> Router<AppState> {
         .route("/{domain_id}", delete(delete_domain))
         .route("/{domain_id}/auth-config", get(get_auth_config))
         .route("/{domain_id}/auth-config", patch(update_auth_config))
+        .route(
+            "/{domain_id}/auth-config/magic-link",
+            delete(delete_magic_link_config),
+        )
         .route("/{domain_id}/end-users", get(list_end_users))
         .route("/{domain_id}/end-users/invite", post(invite_end_user))
         .route("/{domain_id}/end-users/{user_id}", get(get_end_user))
         .route("/{domain_id}/end-users/{user_id}", delete(delete_end_user))
-        .route("/{domain_id}/end-users/{user_id}/freeze", post(freeze_end_user))
-        .route("/{domain_id}/end-users/{user_id}/freeze", delete(unfreeze_end_user))
-        .route("/{domain_id}/end-users/{user_id}/whitelist", post(whitelist_end_user))
-        .route("/{domain_id}/end-users/{user_id}/whitelist", delete(unwhitelist_end_user))
-        .route("/{domain_id}/end-users/{user_id}/roles", put(set_user_roles))
+        .route(
+            "/{domain_id}/end-users/{user_id}/freeze",
+            post(freeze_end_user),
+        )
+        .route(
+            "/{domain_id}/end-users/{user_id}/freeze",
+            delete(unfreeze_end_user),
+        )
+        .route(
+            "/{domain_id}/end-users/{user_id}/whitelist",
+            post(whitelist_end_user),
+        )
+        .route(
+            "/{domain_id}/end-users/{user_id}/whitelist",
+            delete(unwhitelist_end_user),
+        )
+        .route(
+            "/{domain_id}/end-users/{user_id}/roles",
+            put(set_user_roles),
+        )
         // API Keys
         .route("/{domain_id}/api-keys", get(list_api_keys))
         .route("/{domain_id}/api-keys", post(create_api_key))
@@ -45,7 +64,10 @@ pub fn router() -> Router<AppState> {
         .route("/{domain_id}/roles", get(list_roles))
         .route("/{domain_id}/roles", post(create_role))
         .route("/{domain_id}/roles/{role_name}", delete(delete_role))
-        .route("/{domain_id}/roles/{role_name}/user-count", get(get_role_user_count))
+        .route(
+            "/{domain_id}/roles/{role_name}/user-count",
+            get(get_role_user_count),
+        )
 }
 
 #[derive(Deserialize)]
@@ -65,7 +87,11 @@ async fn check_allowed(
     State(app_state): State<AppState>,
     Query(params): Query<CheckAllowedParams>,
 ) -> impl IntoResponse {
-    match app_state.domain_use_cases.is_domain_allowed(&params.domain).await {
+    match app_state
+        .domain_use_cases
+        .is_domain_allowed(&params.domain)
+        .await
+    {
         Ok(true) => StatusCode::OK,
         _ => StatusCode::NOT_FOUND,
     }
@@ -340,8 +366,8 @@ fn current_user(jar: &CookieJar, app_state: &AppState) -> AppResult<(CookieJar, 
         return Err(crate::app_error::AppError::InvalidCredentials);
     }
 
-    let end_user_id = Uuid::parse_str(&claims.sub)
-        .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
+    let end_user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
     Ok((jar.clone(), end_user_id))
 }
 
@@ -356,6 +382,8 @@ struct AuthConfigResponse {
     redirect_url: Option<String>,
     whitelist_enabled: bool,
     magic_link_config: Option<MagicLinkConfigResponse>,
+    using_fallback: bool,
+    fallback_from_email: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -371,10 +399,27 @@ async fn get_auth_config(
 ) -> AppResult<impl IntoResponse> {
     let (_, user_id) = current_user(&jar, &app_state)?;
 
+    // Get domain to access domain name
+    let domain = app_state
+        .domain_use_cases
+        .get_domain(user_id, domain_id)
+        .await?;
+
     let (auth_config, magic_link_config) = app_state
         .domain_auth_use_cases
         .get_auth_config(user_id, domain_id)
         .await?;
+
+    // Check if using fallback or custom config
+    let has_custom_config = magic_link_config.is_some();
+    let fallback_from_email = if !has_custom_config {
+        app_state
+            .domain_auth_use_cases
+            .get_fallback_email_info(&domain.domain)
+    } else {
+        None
+    };
+    let using_fallback = !has_custom_config && fallback_from_email.is_some();
 
     let magic_link_response = magic_link_config.map(|c| MagicLinkConfigResponse {
         from_email: c.from_email,
@@ -387,6 +432,8 @@ async fn get_auth_config(
         redirect_url: auth_config.redirect_url,
         whitelist_enabled: auth_config.whitelist_enabled,
         magic_link_config: magic_link_response,
+        using_fallback,
+        fallback_from_email,
     }))
 }
 
@@ -425,6 +472,21 @@ async fn update_auth_config(
         .await?;
 
     Ok(StatusCode::OK)
+}
+
+async fn delete_magic_link_config(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .domain_auth_use_cases
+        .delete_magic_link_config(user_id, domain_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[derive(Serialize)]

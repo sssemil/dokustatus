@@ -45,7 +45,8 @@ impl DomainRolesUseCases {
         domain_id: Uuid,
         name: &str,
     ) -> AppResult<DomainRole> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        self.verify_domain_ownership(owner_end_user_id, domain_id)
+            .await?;
 
         // Validate role name
         let name = name.trim().to_lowercase();
@@ -70,7 +71,8 @@ impl DomainRolesUseCases {
         owner_end_user_id: Uuid,
         domain_id: Uuid,
     ) -> AppResult<Vec<DomainRoleWithCount>> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        self.verify_domain_ownership(owner_end_user_id, domain_id)
+            .await?;
         self.role_repo.list_by_domain_with_counts(domain_id).await
     }
 
@@ -82,7 +84,8 @@ impl DomainRolesUseCases {
         domain_id: Uuid,
         role_name: &str,
     ) -> AppResult<()> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        self.verify_domain_ownership(owner_end_user_id, domain_id)
+            .await?;
 
         // Check if role exists
         if !self.role_repo.exists(domain_id, role_name).await? {
@@ -90,7 +93,9 @@ impl DomainRolesUseCases {
         }
 
         // Remove role from all users first
-        self.end_user_repo.remove_role_from_all_users(domain_id, role_name).await?;
+        self.end_user_repo
+            .remove_role_from_all_users(domain_id, role_name)
+            .await?;
 
         // Delete the role
         self.role_repo.delete(domain_id, role_name).await
@@ -104,8 +109,11 @@ impl DomainRolesUseCases {
         domain_id: Uuid,
         role_name: &str,
     ) -> AppResult<i64> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
-        self.end_user_repo.count_users_with_role(domain_id, role_name).await
+        self.verify_domain_ownership(owner_end_user_id, domain_id)
+            .await?;
+        self.end_user_repo
+            .count_users_with_role(domain_id, role_name)
+            .await
     }
 
     // ========================================================================
@@ -121,10 +129,12 @@ impl DomainRolesUseCases {
         user_id: Uuid,
         roles: Vec<String>,
     ) -> AppResult<()> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        self.verify_domain_ownership(owner_end_user_id, domain_id)
+            .await?;
 
         // Verify user belongs to this domain
-        let user = self.end_user_repo
+        let user = self
+            .end_user_repo
             .get_by_id(user_id)
             .await?
             .ok_or(AppError::NotFound)?;
@@ -136,7 +146,10 @@ impl DomainRolesUseCases {
         // Validate all roles exist in the domain
         for role_name in &roles {
             if !self.role_repo.exists(domain_id, role_name).await? {
-                return Err(AppError::InvalidInput(format!("Role '{}' does not exist", role_name)));
+                return Err(AppError::InvalidInput(format!(
+                    "Role '{}' does not exist",
+                    role_name
+                )));
             }
         }
 
@@ -150,7 +163,8 @@ impl DomainRolesUseCases {
         owner_end_user_id: Uuid,
         domain_id: Uuid,
     ) -> AppResult<Vec<String>> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        self.verify_domain_ownership(owner_end_user_id, domain_id)
+            .await?;
         let roles = self.role_repo.list_by_domain(domain_id).await?;
         Ok(roles.into_iter().map(|r| r.name).collect())
     }

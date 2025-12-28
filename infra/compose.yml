@@ -72,7 +72,7 @@ services:
       - redis
     secrets:
       - jwt_secret
-      - reauth_dev_resend_api_key
+      - fallback_resend_api_key
       - postgres_password
       - redis_password
       - process_number_key
@@ -90,7 +90,8 @@ services:
         export REDIS_URL="redis://default:$$REDIS_PASSWORD_RAW@${REDIS_HOST}:${REDIS_PORT}"
 
         export JWT_SECRET="$$(cat /run/secrets/jwt_secret)"
-        export REAUTH_DEV_RESEND_API_KEY="$$(cat /run/secrets/reauth_dev_resend_api_key)"
+        export FALLBACK_RESEND_API_KEY="$$(cat /run/secrets/fallback_resend_api_key)"
+        export FALLBACK_EMAIL_DOMAIN="${FALLBACK_EMAIL_DOMAIN:-mail.reauth.dev}"
         export PROCESS_NUMBER_KEY="$$(cat /run/secrets/process_number_key)"
         exec reauth-api
     restart: unless-stopped
@@ -212,9 +213,9 @@ secrets:
     file: ./secrets/redis_password
   process_number_key:
     file: ./secrets/process_number_key
-  # Resend API key for reauth.dev domain email sending
-  reauth_dev_resend_api_key:
-    file: ./secrets/reauth_dev_resend_api_key
+  # Fallback Resend API key for domains without custom email config
+  fallback_resend_api_key:
+    file: ./secrets/fallback_resend_api_key
   # Developer API keys for server-to-server authentication
   reauth_dev_api_key:
     file: ./secrets/reauth_dev_api_key

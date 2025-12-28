@@ -25,7 +25,10 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainAuthConfigProfile {
 
 #[async_trait]
 impl DomainAuthConfigRepo for PostgresPersistence {
-    async fn get_by_domain_id(&self, domain_id: Uuid) -> AppResult<Option<DomainAuthConfigProfile>> {
+    async fn get_by_domain_id(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Option<DomainAuthConfigProfile>> {
         let row = sqlx::query(
             "SELECT id, domain_id, magic_link_enabled, google_oauth_enabled, redirect_url, whitelist_enabled, access_token_ttl_secs, refresh_token_ttl_days, created_at, updated_at FROM domain_auth_config WHERE domain_id = $1",
         )

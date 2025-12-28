@@ -1,9 +1,8 @@
 use axum::{
-    Json, Router,
+    Extension, Json, Router,
     extract::{Path, State},
     response::IntoResponse,
     routing::{get, post},
-    Extension,
 };
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;

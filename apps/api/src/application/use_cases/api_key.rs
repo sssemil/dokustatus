@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::NaiveDateTime;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -157,10 +157,7 @@ impl ApiKeyUseCases {
 
     /// Validate an API key and return the domain info if valid.
     /// Returns (domain_id, domain_name, key_id) if valid.
-    pub async fn validate_api_key(
-        &self,
-        raw_key: &str,
-    ) -> AppResult<Option<(Uuid, String, Uuid)>> {
+    pub async fn validate_api_key(&self, raw_key: &str) -> AppResult<Option<(Uuid, String, Uuid)>> {
         // Hash the key
         let key_hash = hash_api_key(raw_key);
 

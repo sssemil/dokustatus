@@ -106,13 +106,25 @@ mod tests {
     #[test]
     fn test_extract_root_from_reauth_hostname() {
         // Normal subdomain extraction
-        assert_eq!(extract_root_from_reauth_hostname("reauth.example.com"), "example.com");
-        assert_eq!(extract_root_from_reauth_hostname("reauth.foo.co.uk"), "foo.co.uk");
+        assert_eq!(
+            extract_root_from_reauth_hostname("reauth.example.com"),
+            "example.com"
+        );
+        assert_eq!(
+            extract_root_from_reauth_hostname("reauth.foo.co.uk"),
+            "foo.co.uk"
+        );
 
         // Special case: reauth.dev is the actual domain
-        assert_eq!(extract_root_from_reauth_hostname("reauth.dev"), "reauth.dev");
+        assert_eq!(
+            extract_root_from_reauth_hostname("reauth.dev"),
+            "reauth.dev"
+        );
 
         // Non-reauth hostnames pass through
-        assert_eq!(extract_root_from_reauth_hostname("example.com"), "example.com");
+        assert_eq!(
+            extract_root_from_reauth_hostname("example.com"),
+            "example.com"
+        );
     }
 }

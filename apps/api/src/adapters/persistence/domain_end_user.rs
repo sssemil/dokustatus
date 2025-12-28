@@ -39,7 +39,11 @@ impl DomainEndUserRepo for PostgresPersistence {
         Ok(row.map(row_to_profile))
     }
 
-    async fn get_by_domain_and_email(&self, domain_id: Uuid, email: &str) -> AppResult<Option<DomainEndUserProfile>> {
+    async fn get_by_domain_and_email(
+        &self,
+        domain_id: Uuid,
+        email: &str,
+    ) -> AppResult<Option<DomainEndUserProfile>> {
         let row = sqlx::query(
             "SELECT id, domain_id, email, roles, email_verified_at, last_login_at, is_frozen, is_whitelisted, created_at, updated_at FROM domain_end_users WHERE domain_id = $1 AND email = $2",
         )
@@ -150,13 +154,12 @@ impl DomainEndUserRepo for PostgresPersistence {
         if domain_ids.is_empty() {
             return Ok(0);
         }
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM domain_end_users WHERE domain_id = ANY($1)",
-        )
-        .bind(domain_ids)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(AppError::from)?;
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM domain_end_users WHERE domain_id = ANY($1)")
+                .bind(domain_ids)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(AppError::from)?;
         Ok(row.0)
     }
 
@@ -191,12 +194,14 @@ impl DomainEndUserRepo for PostgresPersistence {
 
     async fn set_roles(&self, id: Uuid, roles: &[String]) -> AppResult<()> {
         let roles_json = serde_json::to_value(roles).unwrap_or_default();
-        sqlx::query("UPDATE domain_end_users SET roles = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2")
-            .bind(roles_json)
-            .bind(id)
-            .execute(&self.pool)
-            .await
-            .map_err(AppError::from)?;
+        sqlx::query(
+            "UPDATE domain_end_users SET roles = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+        )
+        .bind(roles_json)
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(AppError::from)?;
         Ok(())
     }
 

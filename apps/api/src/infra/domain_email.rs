@@ -38,7 +38,14 @@ struct ResendReq<'a> {
 
 #[async_trait]
 impl DomainEmailSenderTrait for DomainEmailSender {
-    async fn send(&self, api_key: &str, from_email: &str, to: &str, subject: &str, html: &str) -> AppResult<()> {
+    async fn send(
+        &self,
+        api_key: &str,
+        from_email: &str,
+        to: &str,
+        subject: &str,
+        html: &str,
+    ) -> AppResult<()> {
         let body = ResendReq {
             from: from_email,
             to: [to],

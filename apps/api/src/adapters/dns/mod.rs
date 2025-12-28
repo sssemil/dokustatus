@@ -1,11 +1,11 @@
 use std::net::SocketAddr;
 
 use async_trait::async_trait;
+use hickory_resolver::TokioResolver;
 use hickory_resolver::config::{NameServerConfig, ResolverConfig};
 use hickory_resolver::name_server::TokioConnectionProvider;
 use hickory_resolver::proto::rr::RecordType;
 use hickory_resolver::proto::xfer::Protocol;
-use hickory_resolver::TokioResolver;
 use tracing::{debug, warn};
 
 use crate::app_error::AppResult;

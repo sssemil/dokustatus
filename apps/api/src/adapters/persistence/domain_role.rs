@@ -21,7 +21,10 @@ pub struct DomainRoleWithCount {
 pub trait DomainRoleRepo: Send + Sync {
     async fn create(&self, domain_id: Uuid, name: &str) -> AppResult<DomainRole>;
     async fn list_by_domain(&self, domain_id: Uuid) -> AppResult<Vec<DomainRole>>;
-    async fn list_by_domain_with_counts(&self, domain_id: Uuid) -> AppResult<Vec<DomainRoleWithCount>>;
+    async fn list_by_domain_with_counts(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Vec<DomainRoleWithCount>>;
     async fn get_by_name(&self, domain_id: Uuid, name: &str) -> AppResult<Option<DomainRole>>;
     async fn delete(&self, domain_id: Uuid, name: &str) -> AppResult<()>;
     async fn exists(&self, domain_id: Uuid, name: &str) -> AppResult<bool>;
@@ -82,7 +85,10 @@ impl DomainRoleRepo for PostgresPersistence {
         Ok(rows.into_iter().map(row_to_role).collect())
     }
 
-    async fn list_by_domain_with_counts(&self, domain_id: Uuid) -> AppResult<Vec<DomainRoleWithCount>> {
+    async fn list_by_domain_with_counts(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Vec<DomainRoleWithCount>> {
         let rows = sqlx::query(
             r#"
             SELECT
@@ -138,14 +144,13 @@ impl DomainRoleRepo for PostgresPersistence {
     }
 
     async fn exists(&self, domain_id: Uuid, name: &str) -> AppResult<bool> {
-        let row: (i64,) = sqlx::query_as(
-            "SELECT COUNT(*) FROM domain_roles WHERE domain_id = $1 AND name = $2",
-        )
-        .bind(domain_id)
-        .bind(name)
-        .fetch_one(&self.pool)
-        .await
-        .map_err(AppError::from)?;
+        let row: (i64,) =
+            sqlx::query_as("SELECT COUNT(*) FROM domain_roles WHERE domain_id = $1 AND name = $2")
+                .bind(domain_id)
+                .bind(name)
+                .fetch_one(&self.pool)
+                .await
+                .map_err(AppError::from)?;
 
         Ok(row.0 > 0)
     }

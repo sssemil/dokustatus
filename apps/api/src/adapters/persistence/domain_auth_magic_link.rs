@@ -21,7 +21,10 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainAuthMagicLinkProfile {
 
 #[async_trait]
 impl DomainAuthMagicLinkRepo for PostgresPersistence {
-    async fn get_by_domain_id(&self, domain_id: Uuid) -> AppResult<Option<DomainAuthMagicLinkProfile>> {
+    async fn get_by_domain_id(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Option<DomainAuthMagicLinkProfile>> {
         let row = sqlx::query(
             "SELECT id, domain_id, resend_api_key_encrypted, from_email, created_at, updated_at FROM domain_auth_magic_link WHERE domain_id = $1",
         )

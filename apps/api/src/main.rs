@@ -1,7 +1,9 @@
 use dotenvy::dotenv;
 use tracing::info;
 
-use reauth_api::infra::{app::create_app, domain_verifier::run_domain_verification_loop, setup::init_app_state};
+use reauth_api::infra::{
+    app::create_app, domain_verifier::run_domain_verification_loop, setup::init_app_state,
+};
 use std::net::SocketAddr;
 
 #[tokio::main]

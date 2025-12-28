@@ -9,8 +9,8 @@ use uuid::Uuid;
 
 use crate::app_error::{AppError, AppResult};
 use crate::application::email_templates::{
-    account_created_email, account_frozen_email, account_invited_email,
-    account_unfrozen_email, account_whitelisted_email, primary_button, wrap_email,
+    account_created_email, account_frozen_email, account_invited_email, account_unfrozen_email,
+    account_whitelisted_email, primary_button, wrap_email,
 };
 use crate::application::use_cases::domain::DomainRepo;
 use crate::domain::entities::domain::DomainStatus;
@@ -22,7 +22,8 @@ use crate::infra::crypto::ProcessCipher;
 
 #[async_trait]
 pub trait DomainAuthConfigRepo: Send + Sync {
-    async fn get_by_domain_id(&self, domain_id: Uuid) -> AppResult<Option<DomainAuthConfigProfile>>;
+    async fn get_by_domain_id(&self, domain_id: Uuid)
+    -> AppResult<Option<DomainAuthConfigProfile>>;
     async fn upsert(
         &self,
         domain_id: Uuid,
@@ -36,7 +37,10 @@ pub trait DomainAuthConfigRepo: Send + Sync {
 
 #[async_trait]
 pub trait DomainAuthMagicLinkRepo: Send + Sync {
-    async fn get_by_domain_id(&self, domain_id: Uuid) -> AppResult<Option<DomainAuthMagicLinkProfile>>;
+    async fn get_by_domain_id(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Option<DomainAuthMagicLinkProfile>>;
     async fn upsert(
         &self,
         domain_id: Uuid,
@@ -50,7 +54,11 @@ pub trait DomainAuthMagicLinkRepo: Send + Sync {
 #[async_trait]
 pub trait DomainEndUserRepo: Send + Sync {
     async fn get_by_id(&self, id: Uuid) -> AppResult<Option<DomainEndUserProfile>>;
-    async fn get_by_domain_and_email(&self, domain_id: Uuid, email: &str) -> AppResult<Option<DomainEndUserProfile>>;
+    async fn get_by_domain_and_email(
+        &self,
+        domain_id: Uuid,
+        email: &str,
+    ) -> AppResult<Option<DomainEndUserProfile>>;
     async fn upsert(&self, domain_id: Uuid, email: &str) -> AppResult<DomainEndUserProfile>;
     async fn mark_verified(&self, id: Uuid) -> AppResult<DomainEndUserProfile>;
     async fn update_last_login(&self, id: Uuid) -> AppResult<()>;
@@ -68,14 +76,32 @@ pub trait DomainEndUserRepo: Send + Sync {
 
 #[async_trait]
 pub trait DomainMagicLinkStore: Send + Sync {
-    async fn save(&self, token_hash: &str, end_user_id: Uuid, domain_id: Uuid, session_id: &str, ttl_minutes: i64) -> AppResult<()>;
+    async fn save(
+        &self,
+        token_hash: &str,
+        end_user_id: Uuid,
+        domain_id: Uuid,
+        session_id: &str,
+        ttl_minutes: i64,
+    ) -> AppResult<()>;
     /// Consume a magic link. Returns the data if session matches, or SessionMismatch error if different browser/device.
-    async fn consume(&self, token_hash: &str, session_id: &str) -> AppResult<Option<DomainMagicLinkData>>;
+    async fn consume(
+        &self,
+        token_hash: &str,
+        session_id: &str,
+    ) -> AppResult<Option<DomainMagicLinkData>>;
 }
 
 #[async_trait]
 pub trait DomainEmailSender: Send + Sync {
-    async fn send(&self, api_key: &str, from_email: &str, to: &str, subject: &str, html: &str) -> AppResult<()>;
+    async fn send(
+        &self,
+        api_key: &str,
+        from_email: &str,
+        to: &str,
+        subject: &str,
+        html: &str,
+    ) -> AppResult<()>;
 }
 
 // ============================================================================
@@ -152,6 +178,8 @@ pub struct DomainAuthUseCases {
     magic_link_store: Arc<dyn DomainMagicLinkStore>,
     email_sender: Arc<dyn DomainEmailSender>,
     cipher: ProcessCipher,
+    fallback_resend_api_key: Option<String>,
+    fallback_email_domain: Option<String>,
 }
 
 impl DomainAuthUseCases {
@@ -163,6 +191,8 @@ impl DomainAuthUseCases {
         magic_link_store: Arc<dyn DomainMagicLinkStore>,
         email_sender: Arc<dyn DomainEmailSender>,
         cipher: ProcessCipher,
+        fallback_resend_api_key: Option<String>,
+        fallback_email_domain: Option<String>,
     ) -> Self {
         Self {
             domain_repo,
@@ -172,6 +202,8 @@ impl DomainAuthUseCases {
             magic_link_store,
             email_sender,
             cipher,
+            fallback_resend_api_key,
+            fallback_email_domain,
         }
     }
 
@@ -200,11 +232,22 @@ impl DomainAuthUseCases {
             .and_then(|c| c.redirect_url.clone())
             .unwrap_or_else(|| format!("https://{}", domain.domain));
 
+        // Magic link is enabled by default if fallback is available
+        let fallback_available =
+            self.fallback_resend_api_key.is_some() && self.fallback_email_domain.is_some();
+        let magic_link_enabled = auth_config
+            .as_ref()
+            .map(|c| c.magic_link_enabled)
+            .unwrap_or(fallback_available);
+
         Ok(PublicDomainConfig {
             domain_id: domain.id,
             domain: domain.domain,
-            magic_link_enabled: auth_config.as_ref().map(|c| c.magic_link_enabled).unwrap_or(false),
-            google_oauth_enabled: auth_config.as_ref().map(|c| c.google_oauth_enabled).unwrap_or(false),
+            magic_link_enabled,
+            google_oauth_enabled: auth_config
+                .as_ref()
+                .map(|c| c.google_oauth_enabled)
+                .unwrap_or(false),
             redirect_url: Some(redirect_url),
         })
     }
@@ -234,14 +277,18 @@ impl DomainAuthUseCases {
             .auth_config_repo
             .get_by_domain_id(domain.id)
             .await?
-            .ok_or_else(|| AppError::InvalidInput("Authentication not configured for this domain".into()))?;
+            .ok_or_else(|| {
+                AppError::InvalidInput("Authentication not configured for this domain".into())
+            })?;
 
         if !auth_config.magic_link_enabled {
-            return Err(AppError::InvalidInput("Magic link login is not enabled for this domain".into()));
+            return Err(AppError::InvalidInput(
+                "Magic link login is not enabled for this domain".into(),
+            ));
         }
 
         // Get Resend config (domain-specific or fallback to global)
-        let (api_key, from_email) = self.get_email_config(domain.id).await?;
+        let (api_key, from_email, _) = self.get_email_config(domain.id, domain_name).await?;
 
         // Create or get end-user
         let end_user = self.end_user_repo.upsert(domain.id, email).await?;
@@ -268,8 +315,7 @@ impl DomainAuthUseCases {
         );
         let button_label = "Sign in";
         let reason = format!("you requested to sign in to {}", domain_name);
-        let footer_note =
-            "This one-time link keeps your account protected; delete this email if you did not request it.";
+        let footer_note = "This one-time link keeps your account protected; delete this email if you did not request it.";
 
         let button = primary_button(&link, button_label);
         let origin = format!("https://{}", reauth_hostname);
@@ -284,7 +330,9 @@ impl DomainAuthUseCases {
             Some(footer_note),
         );
 
-        self.email_sender.send(&api_key, &from_email, email, subject, &html).await
+        self.email_sender
+            .send(&api_key, &from_email, email, subject, &html)
+            .await
     }
 
     /// Consume a magic link token and return end-user info
@@ -300,9 +348,16 @@ impl DomainAuthUseCases {
     ) -> AppResult<Option<DomainEndUserProfile>> {
         let token_hash = hash_domain_token(raw_token, domain_name);
 
-        if let Some(data) = self.magic_link_store.consume(&token_hash, session_id).await? {
+        if let Some(data) = self
+            .magic_link_store
+            .consume(&token_hash, session_id)
+            .await?
+        {
             // Get the end user first to check access
-            let end_user = self.end_user_repo.get_by_id(data.end_user_id).await?
+            let end_user = self
+                .end_user_repo
+                .get_by_id(data.end_user_id)
+                .await?
                 .ok_or(AppError::NotFound)?;
 
             // Check if user is frozen
@@ -318,11 +373,16 @@ impl DomainAuthUseCases {
 
             // Send welcome email on first login
             if is_first_login {
-                if let Ok((api_key, from_email)) = self.get_email_config(data.domain_id).await {
+                if let Ok((api_key, from_email, _)) =
+                    self.get_email_config(data.domain_id, domain_name).await
+                {
                     let app_origin = format!("https://reauth.{}", domain_name);
                     let (subject, html) = account_created_email(&app_origin, domain_name);
                     // Fire and forget - don't fail login if email fails
-                    let _ = self.email_sender.send(&api_key, &from_email, &end_user.email, &subject, &html).await;
+                    let _ = self
+                        .email_sender
+                        .send(&api_key, &from_email, &end_user.email, &subject, &html)
+                        .await;
                 }
             }
 
@@ -336,7 +396,9 @@ impl DomainAuthUseCases {
     /// Returns the count of non-whitelisted users created before this user + 1
     #[instrument(skip(self))]
     pub async fn get_waitlist_position(&self, domain_id: Uuid, user_id: Uuid) -> AppResult<i64> {
-        self.end_user_repo.get_waitlist_position(domain_id, user_id).await
+        self.end_user_repo
+            .get_waitlist_position(domain_id, user_id)
+            .await
     }
 
     // ========================================================================
@@ -368,7 +430,7 @@ impl DomainAuthUseCases {
             .unwrap_or(DomainAuthConfigProfile {
                 id: Uuid::nil(),
                 domain_id,
-                magic_link_enabled: false,
+                magic_link_enabled: true, // enabled by default with fallback
                 google_oauth_enabled: false,
                 redirect_url: None,
                 whitelist_enabled: false,
@@ -378,7 +440,10 @@ impl DomainAuthUseCases {
                 updated_at: None,
             });
 
-        let magic_link_config = self.magic_link_config_repo.get_by_domain_id(domain_id).await?;
+        let magic_link_config = self
+            .magic_link_config_repo
+            .get_by_domain_id(domain_id)
+            .await?;
 
         Ok((auth_config, magic_link_config))
     }
@@ -409,26 +474,37 @@ impl DomainAuthUseCases {
         }
 
         if domain.status != DomainStatus::Verified {
-            return Err(AppError::InvalidInput("Domain must be verified before configuring authentication".into()));
+            return Err(AppError::InvalidInput(
+                "Domain must be verified before configuring authentication".into(),
+            ));
         }
 
         // Validate redirect URL is on the domain or a subdomain
         if let Some(url) = redirect_url {
             if !is_valid_redirect_url(url, &domain.domain) {
-                return Err(AppError::InvalidInput(
-                    format!("Redirect URL must be on {} or a subdomain", domain.domain)
-                ));
+                return Err(AppError::InvalidInput(format!(
+                    "Redirect URL must be on {} or a subdomain",
+                    domain.domain
+                )));
             }
         }
 
         // If enabling whitelist and requested, whitelist all existing users
         if whitelist_enabled && whitelist_all_existing {
-            self.end_user_repo.whitelist_all_in_domain(domain_id).await?;
+            self.end_user_repo
+                .whitelist_all_in_domain(domain_id)
+                .await?;
         }
 
         // Update general auth config
         self.auth_config_repo
-            .upsert(domain_id, magic_link_enabled, google_oauth_enabled, redirect_url, whitelist_enabled)
+            .upsert(
+                domain_id,
+                magic_link_enabled,
+                google_oauth_enabled,
+                redirect_url,
+                whitelist_enabled,
+            )
             .await?;
 
         // Update magic link config if provided
@@ -453,9 +529,25 @@ impl DomainAuthUseCases {
         Ok(())
     }
 
+    /// Delete magic link email config for a domain (domain owner only)
+    /// This allows the domain to fall back to the global/shared email service
+    #[instrument(skip(self))]
+    pub async fn delete_magic_link_config(
+        &self,
+        end_user_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<()> {
+        self.verify_domain_ownership(end_user_id, domain_id).await?;
+        self.magic_link_config_repo.delete(domain_id).await
+    }
+
     /// List end-users for a domain (domain owner only)
     #[instrument(skip(self))]
-    pub async fn list_end_users(&self, end_user_id: Uuid, domain_id: Uuid) -> AppResult<Vec<DomainEndUserProfile>> {
+    pub async fn list_end_users(
+        &self,
+        end_user_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<Vec<DomainEndUserProfile>> {
         // Verify ownership
         let domain = self
             .domain_repo
@@ -478,7 +570,8 @@ impl DomainAuthUseCases {
         domain_id: Uuid,
         user_id: Uuid,
     ) -> AppResult<DomainEndUserProfile> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        self.verify_domain_ownership(owner_end_user_id, domain_id)
+            .await?;
 
         let user = self
             .end_user_repo
@@ -501,7 +594,8 @@ impl DomainAuthUseCases {
         domain_id: Uuid,
         user_id: Uuid,
     ) -> AppResult<()> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        self.verify_domain_ownership(owner_end_user_id, domain_id)
+            .await?;
 
         let user = self
             .end_user_repo
@@ -525,7 +619,9 @@ impl DomainAuthUseCases {
         domain_id: Uuid,
         user_id: Uuid,
     ) -> AppResult<()> {
-        let domain = self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
+        let domain = self
+            .verify_domain_ownership_get_domain(owner_end_user_id, domain_id)
+            .await?;
 
         let user = self
             .end_user_repo
@@ -544,10 +640,15 @@ impl DomainAuthUseCases {
 
         // Send suspension email
         if was_not_frozen {
-            if let Ok((api_key, from_email)) = self.get_email_config(domain_id).await {
+            if let Ok((api_key, from_email, _)) =
+                self.get_email_config(domain_id, &domain.domain).await
+            {
                 let app_origin = format!("https://reauth.{}", domain.domain);
                 let (subject, html) = account_frozen_email(&app_origin, &domain.domain);
-                let _ = self.email_sender.send(&api_key, &from_email, &user.email, &subject, &html).await;
+                let _ = self
+                    .email_sender
+                    .send(&api_key, &from_email, &user.email, &subject, &html)
+                    .await;
             }
         }
 
@@ -563,7 +664,9 @@ impl DomainAuthUseCases {
         domain_id: Uuid,
         user_id: Uuid,
     ) -> AppResult<()> {
-        let domain = self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
+        let domain = self
+            .verify_domain_ownership_get_domain(owner_end_user_id, domain_id)
+            .await?;
 
         let user = self
             .end_user_repo
@@ -582,11 +685,17 @@ impl DomainAuthUseCases {
 
         // Send restoration email
         if was_frozen {
-            if let Ok((api_key, from_email)) = self.get_email_config(domain_id).await {
+            if let Ok((api_key, from_email, _)) =
+                self.get_email_config(domain_id, &domain.domain).await
+            {
                 let app_origin = format!("https://reauth.{}", domain.domain);
                 let login_url = format!("https://reauth.{}/", domain.domain);
-                let (subject, html) = account_unfrozen_email(&app_origin, &domain.domain, &login_url);
-                let _ = self.email_sender.send(&api_key, &from_email, &user.email, &subject, &html).await;
+                let (subject, html) =
+                    account_unfrozen_email(&app_origin, &domain.domain, &login_url);
+                let _ = self
+                    .email_sender
+                    .send(&api_key, &from_email, &user.email, &subject, &html)
+                    .await;
             }
         }
 
@@ -602,7 +711,9 @@ impl DomainAuthUseCases {
         domain_id: Uuid,
         user_id: Uuid,
     ) -> AppResult<()> {
-        let domain = self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
+        let domain = self
+            .verify_domain_ownership_get_domain(owner_end_user_id, domain_id)
+            .await?;
 
         let user = self
             .end_user_repo
@@ -621,11 +732,17 @@ impl DomainAuthUseCases {
 
         // Send approval email
         if was_not_whitelisted {
-            if let Ok((api_key, from_email)) = self.get_email_config(domain_id).await {
+            if let Ok((api_key, from_email, _)) =
+                self.get_email_config(domain_id, &domain.domain).await
+            {
                 let app_origin = format!("https://reauth.{}", domain.domain);
                 let login_url = format!("https://reauth.{}/", domain.domain);
-                let (subject, html) = account_whitelisted_email(&app_origin, &domain.domain, &login_url);
-                let _ = self.email_sender.send(&api_key, &from_email, &user.email, &subject, &html).await;
+                let (subject, html) =
+                    account_whitelisted_email(&app_origin, &domain.domain, &login_url);
+                let _ = self
+                    .email_sender
+                    .send(&api_key, &from_email, &user.email, &subject, &html)
+                    .await;
             }
         }
 
@@ -640,7 +757,8 @@ impl DomainAuthUseCases {
         domain_id: Uuid,
         user_id: Uuid,
     ) -> AppResult<()> {
-        self.verify_domain_ownership(owner_end_user_id, domain_id).await?;
+        self.verify_domain_ownership(owner_end_user_id, domain_id)
+            .await?;
 
         let user = self
             .end_user_repo
@@ -666,10 +784,15 @@ impl DomainAuthUseCases {
         email: &str,
         pre_whitelist: bool,
     ) -> AppResult<DomainEndUserProfile> {
-        let domain = self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
+        let domain = self
+            .verify_domain_ownership_get_domain(owner_end_user_id, domain_id)
+            .await?;
 
         // Check if user already exists
-        let existing = self.end_user_repo.get_by_domain_and_email(domain_id, email).await?;
+        let existing = self
+            .end_user_repo
+            .get_by_domain_and_email(domain_id, email)
+            .await?;
         if existing.is_some() {
             return Err(AppError::InvalidInput("User already exists".into()));
         }
@@ -683,11 +806,15 @@ impl DomainAuthUseCases {
         }
 
         // Send invitation email
-        if let Ok((api_key, from_email)) = self.get_email_config(domain_id).await {
+        if let Ok((api_key, from_email, _)) = self.get_email_config(domain_id, &domain.domain).await
+        {
             let app_origin = format!("https://reauth.{}", domain.domain);
             let login_url = format!("https://reauth.{}/", domain.domain);
             let (subject, html) = account_invited_email(&app_origin, &domain.domain, &login_url);
-            let _ = self.email_sender.send(&api_key, &from_email, email, &subject, &html).await;
+            let _ = self
+                .email_sender
+                .send(&api_key, &from_email, email, &subject, &html)
+                .await;
         }
 
         // Return user with updated whitelist status
@@ -705,7 +832,10 @@ impl DomainAuthUseCases {
 
     /// Get auth config for a domain by name (no ownership check, for public endpoints)
     #[instrument(skip(self))]
-    pub async fn get_auth_config_for_domain(&self, domain_name: &str) -> AppResult<DomainAuthConfigProfile> {
+    pub async fn get_auth_config_for_domain(
+        &self,
+        domain_name: &str,
+    ) -> AppResult<DomainAuthConfigProfile> {
         let domain = self
             .domain_repo
             .get_by_domain(domain_name)
@@ -723,8 +853,13 @@ impl DomainAuthUseCases {
     // ========================================================================
 
     /// Verify that the end-user owns the specified domain
-    async fn verify_domain_ownership(&self, owner_end_user_id: Uuid, domain_id: Uuid) -> AppResult<()> {
-        self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id).await?;
+    async fn verify_domain_ownership(
+        &self,
+        owner_end_user_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<()> {
+        self.verify_domain_ownership_get_domain(owner_end_user_id, domain_id)
+            .await?;
         Ok(())
     }
 
@@ -747,20 +882,47 @@ impl DomainAuthUseCases {
         Ok(domain)
     }
 
-    /// Get email config for a domain (required - no fallback)
-    async fn get_email_config(&self, domain_id: Uuid) -> AppResult<(String, String)> {
-        let config = self
+    /// Get email config for a domain, with fallback to global config if available.
+    /// Returns (api_key, from_email, is_using_fallback).
+    async fn get_email_config(
+        &self,
+        domain_id: Uuid,
+        domain_name: &str,
+    ) -> AppResult<(String, String, bool)> {
+        // Try domain-specific config first
+        if let Some(config) = self
             .magic_link_config_repo
             .get_by_domain_id(domain_id)
             .await?
-            .ok_or_else(|| {
-                AppError::InvalidInput(
-                    "Email not configured for this domain. Please add a Resend API key.".into(),
-                )
-            })?;
+        {
+            let api_key = self.cipher.decrypt(&config.resend_api_key_encrypted)?;
+            return Ok((api_key, config.from_email, false));
+        }
 
-        let api_key = self.cipher.decrypt(&config.resend_api_key_encrypted)?;
-        Ok((api_key, config.from_email))
+        // Fall back to global config if available
+        if let (Some(api_key), Some(email_domain)) =
+            (&self.fallback_resend_api_key, &self.fallback_email_domain)
+        {
+            let sanitized_domain = sanitize_domain_for_email(domain_name);
+            let from_email = format!("{}@{}", sanitized_domain, email_domain);
+            return Ok((api_key.clone(), from_email, true));
+        }
+
+        Err(AppError::InvalidInput(
+            "Email not configured for this domain. Please add a Resend API key.".into(),
+        ))
+    }
+
+    /// Check if fallback email config is available and return the generated from_email.
+    pub fn get_fallback_email_info(&self, domain_name: &str) -> Option<String> {
+        if let (Some(_), Some(email_domain)) =
+            (&self.fallback_resend_api_key, &self.fallback_email_domain)
+        {
+            let sanitized = sanitize_domain_for_email(domain_name);
+            Some(format!("{}@{}", sanitized, email_domain))
+        } else {
+            None
+        }
     }
 
     /// Count total users across multiple domains
@@ -770,7 +932,10 @@ impl DomainAuthUseCases {
 
     /// Get end-user by ID (for session validation, no ownership check)
     #[instrument(skip(self))]
-    pub async fn get_end_user_by_id(&self, user_id: Uuid) -> AppResult<Option<DomainEndUserProfile>> {
+    pub async fn get_end_user_by_id(
+        &self,
+        user_id: Uuid,
+    ) -> AppResult<Option<DomainEndUserProfile>> {
         self.end_user_repo.get_by_id(user_id).await
     }
 }
@@ -778,6 +943,12 @@ impl DomainAuthUseCases {
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Sanitize a domain name for use in email local part.
+/// Replaces dots with hyphens: "myapp.com" -> "myapp-com"
+fn sanitize_domain_for_email(domain: &str) -> String {
+    domain.replace('.', "-")
+}
 
 fn generate_token() -> String {
     use rand::RngCore;
@@ -817,21 +988,45 @@ mod tests {
     #[test]
     fn test_is_valid_redirect_url() {
         // Valid: exact domain match
-        assert!(is_valid_redirect_url("https://example.com/callback", "example.com"));
+        assert!(is_valid_redirect_url(
+            "https://example.com/callback",
+            "example.com"
+        ));
         assert!(is_valid_redirect_url("https://example.com", "example.com"));
-        assert!(is_valid_redirect_url("http://example.com/path", "example.com"));
+        assert!(is_valid_redirect_url(
+            "http://example.com/path",
+            "example.com"
+        ));
 
         // Valid: subdomain
-        assert!(is_valid_redirect_url("https://app.example.com/callback", "example.com"));
-        assert!(is_valid_redirect_url("https://login.example.com", "example.com"));
-        assert!(is_valid_redirect_url("https://deep.nested.example.com/path", "example.com"));
+        assert!(is_valid_redirect_url(
+            "https://app.example.com/callback",
+            "example.com"
+        ));
+        assert!(is_valid_redirect_url(
+            "https://login.example.com",
+            "example.com"
+        ));
+        assert!(is_valid_redirect_url(
+            "https://deep.nested.example.com/path",
+            "example.com"
+        ));
 
         // Invalid: different domain
-        assert!(!is_valid_redirect_url("https://evil.com/callback", "example.com"));
-        assert!(!is_valid_redirect_url("https://notexample.com", "example.com"));
+        assert!(!is_valid_redirect_url(
+            "https://evil.com/callback",
+            "example.com"
+        ));
+        assert!(!is_valid_redirect_url(
+            "https://notexample.com",
+            "example.com"
+        ));
 
         // Invalid: domain suffix attack (evil.com shouldn't match example.com)
-        assert!(!is_valid_redirect_url("https://fakeexample.com", "example.com"));
+        assert!(!is_valid_redirect_url(
+            "https://fakeexample.com",
+            "example.com"
+        ));
 
         // Invalid: malformed URLs
         assert!(!is_valid_redirect_url("not-a-url", "example.com"));

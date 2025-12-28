@@ -1,29 +1,21 @@
 use crate::{
     adapters::{
-        dns::HickoryDnsVerifier,
-        http::app_state::AppState,
+        dns::HickoryDnsVerifier, http::app_state::AppState,
         persistence::domain_role::DomainRoleRepo,
     },
     application::use_cases::api_key::{ApiKeyRepo, ApiKeyUseCases},
     application::use_cases::domain_auth::{
-        DomainAuthConfigRepo, DomainAuthMagicLinkRepo, DomainAuthUseCases,
-        DomainEndUserRepo,
+        DomainAuthConfigRepo, DomainAuthMagicLinkRepo, DomainAuthUseCases, DomainEndUserRepo,
     },
     application::use_cases::domain_roles::DomainRolesUseCases,
     infra::{
-        config::AppConfig,
-        crypto::ProcessCipher,
-        domain_email::DomainEmailSender,
-        domain_magic_links::DomainMagicLinkStore,
-        postgres_persistence,
-        rate_limit::RateLimiter,
+        config::AppConfig, crypto::ProcessCipher, domain_email::DomainEmailSender,
+        domain_magic_links::DomainMagicLinkStore, postgres_persistence, rate_limit::RateLimiter,
     },
     use_cases::domain::{DomainRepo, DomainUseCases},
 };
-use sqlx::{PgPool, Row};
 use std::fs::File;
 use std::sync::Arc;
-use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
 pub async fn init_app_state() -> anyhow::Result<AppState> {
@@ -68,9 +60,6 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     // Initialize cipher for domain auth
     let cipher = ProcessCipher::from_env()?;
 
-    // Seed email config for the main domain (reauth.dev) if not already set
-    seed_main_domain_email_config(postgres_arc.pool(), &cipher, &config.main_domain).await?;
-
     let domain_auth_use_cases = DomainAuthUseCases::new(
         domain_repo_arc.clone(),
         auth_config_repo_arc,
@@ -79,6 +68,8 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         domain_magic_links,
         domain_email_sender,
         cipher,
+        config.fallback_resend_api_key.clone(),
+        config.fallback_email_domain.clone(),
     );
 
     let api_key_use_cases = ApiKeyUseCases::new(
@@ -87,11 +78,8 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         end_user_repo_arc.clone(),
     );
 
-    let domain_roles_use_cases = DomainRolesUseCases::new(
-        domain_repo_arc,
-        role_repo_arc,
-        end_user_repo_arc,
-    );
+    let domain_roles_use_cases =
+        DomainRolesUseCases::new(domain_repo_arc, role_repo_arc, end_user_repo_arc);
 
     Ok(AppState {
         config: Arc::new(config),
@@ -127,79 +115,4 @@ pub fn init_tracing() {
         .with(json_layer)
         .try_init()
         .ok();
-}
-
-/// Seeds the main domain (e.g., reauth.dev) with email config if not already set.
-/// This is required because we no longer have a global fallback Resend API key.
-async fn seed_main_domain_email_config(
-    pool: &PgPool,
-    cipher: &ProcessCipher,
-    main_domain: &str,
-) -> anyhow::Result<()> {
-    // Check if the main domain exists
-    let domain_row = sqlx::query("SELECT id FROM domains WHERE domain = $1")
-        .bind(main_domain)
-        .fetch_optional(pool)
-        .await?;
-
-    let domain_id: uuid::Uuid = match domain_row {
-        Some(row) => row.get("id"),
-        None => {
-            warn!(
-                "Main domain '{}' not found in database - skipping email config seeding",
-                main_domain
-            );
-            return Ok(());
-        }
-    };
-
-    // Check if email config already exists for this domain
-    let existing = sqlx::query("SELECT id FROM domain_auth_magic_link WHERE domain_id = $1")
-        .bind(domain_id)
-        .fetch_optional(pool)
-        .await?;
-
-    if existing.is_some() {
-        info!(
-            "Email config already exists for '{}' - skipping seeding",
-            main_domain
-        );
-        return Ok(());
-    }
-
-    // Get the Resend API key from environment (loaded from secret in production)
-    let resend_api_key = match std::env::var("REAUTH_DEV_RESEND_API_KEY") {
-        Ok(key) if !key.is_empty() => key,
-        _ => {
-            warn!(
-                "REAUTH_DEV_RESEND_API_KEY not set - cannot seed email config for '{}'",
-                main_domain
-            );
-            return Ok(());
-        }
-    };
-
-    // Encrypt the API key
-    let encrypted_key = cipher.encrypt(&resend_api_key)?;
-    let from_email = format!("noreply@{}", main_domain);
-
-    // Insert the email config
-    sqlx::query(
-        r#"
-        INSERT INTO domain_auth_magic_link (domain_id, resend_api_key_encrypted, from_email)
-        VALUES ($1, $2, $3)
-        "#,
-    )
-    .bind(domain_id)
-    .bind(&encrypted_key)
-    .bind(&from_email)
-    .execute(pool)
-    .await?;
-
-    info!(
-        "Seeded email config for '{}' with from_email '{}'",
-        main_domain, from_email
-    );
-
-    Ok(())
 }
