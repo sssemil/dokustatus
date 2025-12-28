@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import ConfirmModal from '@/components/ConfirmModal';
 import HoldToConfirmButton from '@/components/HoldToConfirmButton';
 
@@ -58,10 +58,17 @@ type ApiKey = {
   created_at: string | null;
 };
 
+const VALID_TABS: Tab[] = ['dns', 'configuration', 'roles', 'users', 'api-keys'];
+
 export default function DomainDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const domainId = params.id as string;
+
+  // Get initial tab from URL or default to 'dns'
+  const tabFromUrl = searchParams.get('tab') as Tab | null;
+  const initialTab = tabFromUrl && VALID_TABS.includes(tabFromUrl) ? tabFromUrl : 'dns';
 
   const [domain, setDomain] = useState<Domain | null>(null);
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
@@ -70,7 +77,15 @@ export default function DomainDetailPage() {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [copiedField, setCopiedField] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<Tab>('dns');
+  const [activeTab, setActiveTab] = useState<Tab>(initialTab);
+
+  // Update URL when tab changes
+  const handleTabChange = useCallback((tab: Tab) => {
+    setActiveTab(tab);
+    const newParams = new URLSearchParams(searchParams.toString());
+    newParams.set('tab', tab);
+    router.replace(`/domains/${domainId}?${newParams.toString()}`, { scroll: false });
+  }, [domainId, router, searchParams]);
   const [endUsers, setEndUsers] = useState<EndUser[]>([]);
   const [loadingUsers, setLoadingUsers] = useState(false);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -711,7 +726,7 @@ export default function DomainDetailPage() {
         ].map((tab) => (
           <button
             key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
+            onClick={() => handleTabChange(tab.id)}
             style={{
               padding: 'var(--spacing-sm) var(--spacing-md)',
               backgroundColor: activeTab === tab.id ? 'var(--bg-tertiary)' : 'transparent',

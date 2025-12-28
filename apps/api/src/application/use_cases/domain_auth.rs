@@ -43,6 +43,7 @@ pub trait DomainAuthMagicLinkRepo: Send + Sync {
         resend_api_key_encrypted: &str,
         from_email: &str,
     ) -> AppResult<DomainAuthMagicLinkProfile>;
+    async fn update_from_email(&self, domain_id: Uuid, from_email: &str) -> AppResult<()>;
     async fn delete(&self, domain_id: Uuid) -> AppResult<()>;
 }
 
@@ -151,12 +152,9 @@ pub struct DomainAuthUseCases {
     magic_link_store: Arc<dyn DomainMagicLinkStore>,
     email_sender: Arc<dyn DomainEmailSender>,
     cipher: ProcessCipher,
-    global_resend_api_key: Option<String>,
-    global_from_email: Option<String>,
 }
 
 impl DomainAuthUseCases {
-    #[allow(clippy::too_many_arguments)]
     pub fn new(
         domain_repo: Arc<dyn DomainRepo>,
         auth_config_repo: Arc<dyn DomainAuthConfigRepo>,
@@ -165,8 +163,6 @@ impl DomainAuthUseCases {
         magic_link_store: Arc<dyn DomainMagicLinkStore>,
         email_sender: Arc<dyn DomainEmailSender>,
         cipher: ProcessCipher,
-        global_resend_api_key: Option<String>,
-        global_from_email: Option<String>,
     ) -> Self {
         Self {
             domain_repo,
@@ -176,8 +172,6 @@ impl DomainAuthUseCases {
             magic_link_store,
             email_sender,
             cipher,
-            global_resend_api_key,
-            global_from_email,
         }
     }
 
@@ -438,11 +432,22 @@ impl DomainAuthUseCases {
             .await?;
 
         // Update magic link config if provided
-        if let (Some(api_key), Some(from)) = (resend_api_key, from_email) {
-            let encrypted_key = self.cipher.encrypt(api_key)?;
-            self.magic_link_config_repo
-                .upsert(domain_id, &encrypted_key, from)
-                .await?;
+        match (resend_api_key, from_email) {
+            // Both provided: upsert full config
+            (Some(api_key), Some(from)) => {
+                let encrypted_key = self.cipher.encrypt(api_key)?;
+                self.magic_link_config_repo
+                    .upsert(domain_id, &encrypted_key, from)
+                    .await?;
+            }
+            // Only from_email provided: update just the from_email (config must exist)
+            (None, Some(from)) => {
+                self.magic_link_config_repo
+                    .update_from_email(domain_id, from)
+                    .await?;
+            }
+            // Only api_key or neither: do nothing
+            _ => {}
         }
 
         Ok(())
@@ -742,19 +747,20 @@ impl DomainAuthUseCases {
         Ok(domain)
     }
 
-    /// Get email config: domain-specific if available, otherwise global
+    /// Get email config for a domain (required - no fallback)
     async fn get_email_config(&self, domain_id: Uuid) -> AppResult<(String, String)> {
-        // Try domain-specific config first
-        if let Some(config) = self.magic_link_config_repo.get_by_domain_id(domain_id).await? {
-            let api_key = self.cipher.decrypt(&config.resend_api_key_encrypted)?;
-            return Ok((api_key, config.from_email));
-        }
+        let config = self
+            .magic_link_config_repo
+            .get_by_domain_id(domain_id)
+            .await?
+            .ok_or_else(|| {
+                AppError::InvalidInput(
+                    "Email not configured for this domain. Please add a Resend API key.".into(),
+                )
+            })?;
 
-        // Fall back to global config
-        match (&self.global_resend_api_key, &self.global_from_email) {
-            (Some(key), Some(from)) => Ok((key.clone(), from.clone())),
-            _ => Err(AppError::InvalidInput("Email sending not configured for this domain".into())),
-        }
+        let api_key = self.cipher.decrypt(&config.resend_api_key_encrypted)?;
+        Ok((api_key, config.from_email))
     }
 
     /// Count total users across multiple domains

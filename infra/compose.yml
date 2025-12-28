@@ -60,7 +60,6 @@ services:
       DB_USER: ${POSTGRES_USER:?}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
-      EMAIL_FROM: ${EMAIL_FROM:?}
       APP_ORIGIN: ${APP_ORIGIN:?}
       BIND_ADDR: 0.0.0.0:${API_PORT:-3001}
       RATE_LIMIT_WINDOW_SECS: ${RATE_LIMIT_WINDOW_SECS:-60}
@@ -73,7 +72,7 @@ services:
       - redis
     secrets:
       - jwt_secret
-      - resend_api_key
+      - reauth_dev_resend_api_key
       - postgres_password
       - redis_password
       - process_number_key
@@ -91,7 +90,7 @@ services:
         export REDIS_URL="redis://default:$$REDIS_PASSWORD_RAW@${REDIS_HOST}:${REDIS_PORT}"
 
         export JWT_SECRET="$$(cat /run/secrets/jwt_secret)"
-        export RESEND_API_KEY="$$(cat /run/secrets/resend_api_key)"
+        export REAUTH_DEV_RESEND_API_KEY="$$(cat /run/secrets/reauth_dev_resend_api_key)"
         export PROCESS_NUMBER_KEY="$$(cat /run/secrets/process_number_key)"
         exec reauth-api
     restart: unless-stopped
@@ -207,14 +206,15 @@ volumes:
 secrets:
   jwt_secret:
     file: ./secrets/jwt_secret
-  resend_api_key:
-    file: ./secrets/resend_api_key
   postgres_password:
     file: ./secrets/postgres_password
   redis_password:
     file: ./secrets/redis_password
   process_number_key:
     file: ./secrets/process_number_key
+  # Resend API key for reauth.dev domain email sending
+  reauth_dev_resend_api_key:
+    file: ./secrets/reauth_dev_resend_api_key
   # Developer API keys for server-to-server authentication
   reauth_dev_api_key:
     file: ./secrets/reauth_dev_api_key

@@ -10,8 +10,6 @@ pub struct AppConfig {
     pub jwt_secret: SecretString,
     pub access_token_ttl: Duration,
     pub refresh_token_ttl: Duration,
-    pub resend_api_key: SecretString,
-    pub email_from: String,
     pub app_origin: Url,
     pub cors_origin: HeaderValue,
     pub magic_link_ttl_minutes: i64,
@@ -40,9 +38,6 @@ impl AppConfig {
 
         let access_token_ttl_secs: i64 = get_env_default("ACCESS_TOKEN_TTL_SECS", 86_400);
 
-        let resend_api_key: SecretString =
-            SecretString::new(get_env::<String>("RESEND_API_KEY").into());
-        let email_from: String = get_env("EMAIL_FROM");
         let app_origin: Url = get_env("APP_ORIGIN");
         let magic_link_ttl_minutes: i64 = get_env_default("MAGIC_LINK_TTL_MINUTES", 15);
         let cors_origin: HeaderValue =
@@ -70,8 +65,6 @@ impl AppConfig {
             jwt_secret,
             access_token_ttl: Duration::seconds(access_token_ttl_secs),
             refresh_token_ttl: Duration::days(refresh_token_ttl_days),
-            resend_api_key,
-            email_from,
             app_origin,
             magic_link_ttl_minutes,
             cors_origin,

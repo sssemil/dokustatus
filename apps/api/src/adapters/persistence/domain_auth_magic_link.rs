@@ -60,6 +60,22 @@ impl DomainAuthMagicLinkRepo for PostgresPersistence {
         Ok(row_to_profile(row))
     }
 
+    async fn update_from_email(&self, domain_id: Uuid, from_email: &str) -> AppResult<()> {
+        let result = sqlx::query(
+            "UPDATE domain_auth_magic_link SET from_email = $2, updated_at = CURRENT_TIMESTAMP WHERE domain_id = $1",
+        )
+        .bind(domain_id)
+        .bind(from_email)
+        .execute(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+
+        if result.rows_affected() == 0 {
+            return Err(AppError::NotFound);
+        }
+        Ok(())
+    }
+
     async fn delete(&self, domain_id: Uuid) -> AppResult<()> {
         sqlx::query("DELETE FROM domain_auth_magic_link WHERE domain_id = $1")
             .bind(domain_id)
