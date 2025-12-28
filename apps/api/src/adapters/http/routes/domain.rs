@@ -411,14 +411,11 @@ async fn get_auth_config(
         .await?;
 
     // Check if using fallback or custom config
+    // Always compute fallback_from_email so UI can show "switch to shared service" option
     let has_custom_config = magic_link_config.is_some();
-    let fallback_from_email = if !has_custom_config {
-        app_state
-            .domain_auth_use_cases
-            .get_fallback_email_info(&domain.domain)
-    } else {
-        None
-    };
+    let fallback_from_email = app_state
+        .domain_auth_use_cases
+        .get_fallback_email_info(&domain.domain);
     let using_fallback = !has_custom_config && fallback_from_email.is_some();
 
     let magic_link_response = magic_link_config.map(|c| MagicLinkConfigResponse {
