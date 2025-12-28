@@ -79,3 +79,54 @@ Secrets are stored in `infra/secrets/` as individual files (one secret per file)
 - Use long press for destructive actions; if an action is very destructive, require a dialog where a user has to type in a text of acknowledgement (like in case of removing a domain name type in the domain name which will enable the delete button in the modal and then hold the delete button for 3 seconds using our common hold to delete pattern).
 
 DO NOT BE LAZY! Be proactive, and action biased. Commit frequently.
+
+## Planning Guideline
+
+During planning, once you have a ready plan, before asking me to review it, always first ask codex for an opinion on your plan like more or less like this:
+
+```
+codex exec """
+    review my plan: my very long dummy plan placeholder
+
+    phase 1
+
+    phase 2
+
+    bla bla
+    bla ; just say OKAY I reviewed im just testing cli integration
+    """
+
+    OpenAI Codex v0.77.0 (research preview)
+    --------
+    workdir: /home/user/Projects/TQDM/reauth
+    model: gpt-5.2-codex
+    provider: openai
+    approval: never
+    sandbox: workspace-write [workdir, /tmp, $TMPDIR]
+    reasoning effort: high
+    reasoning summaries: auto
+    session id: 019b66b7-b1ab-7760-a21f-b8bebb6e1829
+    --------
+    user
+
+    review my plany: my very long dummy plan placeholder
+
+    phase 1
+
+    phase 2
+
+    bla bla
+    bla ; just say OKAY I reviewed im just testing cli integration
+
+    mcp startup: no servers
+
+    thinking
+    **Acknowledging review request**
+    codex
+    OKAY I reviewed.
+    tokens used
+    2,349
+    OKAY I reviewed.
+```
+
+And then validate and integrate the suggested changes into your plan.
