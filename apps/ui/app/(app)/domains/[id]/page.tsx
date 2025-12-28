@@ -331,10 +331,6 @@ export default function DomainDetailPage() {
   };
 
   const handleRemoveCustomConfig = async () => {
-    if (!confirm('Remove custom email configuration? The domain will use reauth\'s shared email service.')) {
-      return;
-    }
-
     setError('');
     setSuccess('');
 
@@ -984,40 +980,37 @@ export default function DomainDetailPage() {
                 <div style={{ marginTop: 'var(--spacing-lg)', borderTop: '1px solid var(--border-primary)', paddingTop: 'var(--spacing-lg)' }}>
                   {/* Show indicator for custom vs fallback config */}
                   {authConfig?.magic_link_config?.has_api_key && (
-                    <div
-                      style={{
-                        marginBottom: 'var(--spacing-md)',
-                        padding: 'var(--spacing-sm) var(--spacing-md)',
-                        backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                        border: '1px solid rgba(34, 197, 94, 0.3)',
-                        borderRadius: 'var(--radius-sm)',
-                      }}
-                    >
-                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <div>
-                          <span style={{ color: 'rgb(34, 197, 94)' }}>Using your custom email configuration</span>
-                          <span className="text-muted" style={{ marginLeft: 'var(--spacing-sm)' }}>
-                            ({authConfig.magic_link_config.from_email})
-                          </span>
-                        </div>
-                        {authConfig?.fallback_from_email && (
-                          <button
-                            type="button"
-                            onClick={handleRemoveCustomConfig}
-                            style={{
-                              background: 'none',
-                              border: 'none',
-                              color: 'var(--text-muted)',
-                              cursor: 'pointer',
-                              fontSize: '12px',
-                              textDecoration: 'underline',
-                            }}
-                          >
-                            Use shared service instead
-                          </button>
-                        )}
+                    <>
+                      <div
+                        style={{
+                          marginBottom: 'var(--spacing-md)',
+                          padding: 'var(--spacing-sm) var(--spacing-md)',
+                          backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                          border: '1px solid rgba(34, 197, 94, 0.3)',
+                          borderRadius: 'var(--radius-sm)',
+                        }}
+                      >
+                        <span style={{ color: 'rgb(34, 197, 94)' }}>Using your custom email configuration</span>
+                        <span className="text-muted" style={{ marginLeft: 'var(--spacing-sm)' }}>
+                          ({authConfig.magic_link_config.from_email})
+                        </span>
                       </div>
-                    </div>
+                      {authConfig?.fallback_from_email && (
+                        <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                          <HoldToConfirmButton
+                            label="Remove custom config"
+                            holdingLabel="Hold to remove..."
+                            onConfirm={handleRemoveCustomConfig}
+                            variant="danger"
+                            duration={2000}
+                            style={{ fontSize: '13px', padding: '6px 12px' }}
+                          />
+                          <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
+                            Switch back to reauth&apos;s shared email service ({authConfig.fallback_from_email})
+                          </p>
+                        </div>
+                      )}
+                    </>
                   )}
                   {!authConfig?.magic_link_config?.has_api_key && authConfig?.using_fallback && (
                     <div
