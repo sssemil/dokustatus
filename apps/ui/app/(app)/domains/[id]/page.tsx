@@ -115,6 +115,10 @@ export default function DomainDetailPage() {
   const [creatingRole, setCreatingRole] = useState(false);
   const [roleError, setRoleError] = useState('');
 
+  // Delete domain modal state
+  const [showDeleteDomainModal, setShowDeleteDomainModal] = useState(false);
+  const [deleteDomainConfirmText, setDeleteDomainConfirmText] = useState('');
+
   // DNS record verification status (for verifying domains)
   const [cnameVerified, setCnameVerified] = useState(false);
   const [txtVerified, setTxtVerified] = useState(false);
@@ -684,13 +688,16 @@ export default function DomainDetailPage() {
             {getStatusBadge(domain.status)}
           </div>
         </div>
-        <HoldToConfirmButton
-          label="Delete Domain"
-          holdingLabel="Hold to delete..."
-          onConfirm={handleDeleteDomain}
-          variant="danger"
-          duration={3000}
-        />
+        <button
+          onClick={() => setShowDeleteDomainModal(true)}
+          style={{
+            backgroundColor: 'var(--accent-red)',
+            color: '#fff',
+            border: 'none',
+          }}
+        >
+          Delete Domain
+        </button>
       </div>
 
       {error && (
@@ -1952,6 +1959,125 @@ export default function DomainDetailPage() {
               >
                 Done
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Domain Confirmation Modal */}
+      {showDeleteDomainModal && domain && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            backgroundColor: 'rgba(0, 0, 0, 0.6)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+          }}
+          onClick={() => {
+            setShowDeleteDomainModal(false);
+            setDeleteDomainConfirmText('');
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: 'var(--bg-secondary)',
+              borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--border-primary)',
+              boxShadow: 'var(--shadow-lg)',
+              maxWidth: '450px',
+              width: '90%',
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                padding: 'var(--spacing-md)',
+                borderBottom: '1px solid var(--border-primary)',
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: 'var(--accent-red)' }}>
+                Delete Domain
+              </h3>
+              <button
+                onClick={() => {
+                  setShowDeleteDomainModal(false);
+                  setDeleteDomainConfirmText('');
+                }}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  cursor: 'pointer',
+                  padding: '4px',
+                  color: 'var(--text-secondary)',
+                  fontSize: '18px',
+                  lineHeight: 1,
+                }}
+              >
+                &times;
+              </button>
+            </div>
+
+            <div style={{ padding: 'var(--spacing-lg) var(--spacing-md)' }}>
+              <p style={{ margin: 0, marginBottom: 'var(--spacing-md)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                This will permanently delete <strong style={{ color: 'var(--text-primary)' }}>{domain.domain}</strong> and all associated data including users, API keys, and configuration.
+              </p>
+              <p style={{ margin: 0, marginBottom: 'var(--spacing-md)', color: 'var(--text-secondary)', fontSize: '14px' }}>
+                This action cannot be undone.
+              </p>
+
+              <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                <label style={{ display: 'block', marginBottom: 'var(--spacing-xs)', fontSize: '13px', color: 'var(--text-muted)' }}>
+                  Type <strong style={{ color: 'var(--text-primary)' }}>{domain.domain}</strong> to confirm:
+                </label>
+                <input
+                  type="text"
+                  value={deleteDomainConfirmText}
+                  onChange={(e) => setDeleteDomainConfirmText(e.target.value)}
+                  placeholder={domain.domain}
+                  autoFocus
+                  style={{ width: '100%' }}
+                />
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                justifyContent: 'flex-end',
+                gap: 'var(--spacing-sm)',
+                padding: 'var(--spacing-md)',
+                borderTop: '1px solid var(--border-primary)',
+              }}
+            >
+              <button
+                onClick={() => {
+                  setShowDeleteDomainModal(false);
+                  setDeleteDomainConfirmText('');
+                }}
+              >
+                Cancel
+              </button>
+              <HoldToConfirmButton
+                label="Delete Domain"
+                holdingLabel="Hold to delete..."
+                onConfirm={() => {
+                  setShowDeleteDomainModal(false);
+                  setDeleteDomainConfirmText('');
+                  handleDeleteDomain();
+                }}
+                variant="danger"
+                duration={3000}
+                disabled={deleteDomainConfirmText !== domain.domain}
+              />
             </div>
           </div>
         </div>

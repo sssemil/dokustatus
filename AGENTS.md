@@ -74,3 +74,9 @@ openssl rand -base64 32
 ## Security & Configuration Tips
 - Never commit secrets; load them via `infra/secrets/`. Keep `JWT_SECRET`, DB credentials, and email keys private.
 - When changing request/response shapes, update both backend routes (`apps/api/src/adapters/http/routes/`) and the UI consumers under `apps/ui/app/` to stay in sync.
+
+## General Tips
+- Never use alerts in browsers, use our internal modal for dialogs, maintain a common style/component for it.
+- Use long press for destructive actions; if an action is very destructive, require a dialog where a user has to type in a text of acknowledgement (like in case of removing a domain name type in the domain name which will enable the delete button in the modal and then hold the delete button for 3 seconds using our common hold to delete pattern).
+
+DO NOT BE LAZY! Be proactive, and action biased. Commit frequently.
