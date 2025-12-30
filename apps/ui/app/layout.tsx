@@ -1,5 +1,11 @@
 import './globals.css';
+import { Inter } from 'next/font/google';
 import { ThemeProvider } from './components/ThemeContext';
+
+const inter = Inter({
+  subsets: ['latin'],
+  variable: '--font-inter',
+});
 
 export const metadata = {
   title: 'reauth.dev',
@@ -8,14 +14,8 @@ export const metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" suppressHydrationWarning>
+    <html lang="en" className={inter.variable} suppressHydrationWarning>
       <head>
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link
-          href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
-          rel="stylesheet"
-        />
         <script
           dangerouslySetInnerHTML={{
             __html: `
@@ -26,13 +26,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
                   }
                   document.documentElement.setAttribute('data-theme', theme);
+                  document.documentElement.classList.add(theme);
                 } catch (e) {}
               })();
             `,
           }}
         />
       </head>
-      <body>
+      <body className="font-sans">
         <ThemeProvider>
           {children}
         </ThemeProvider>

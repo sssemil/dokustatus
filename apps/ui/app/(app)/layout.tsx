@@ -1,15 +1,16 @@
 'use client';
 
-import { useState, useEffect, useRef, createContext, useContext, ReactNode } from 'react';
+import { useState, useEffect, createContext, useContext, ReactNode } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
-import Link from 'next/link';
-import { useTheme } from '../components/ThemeContext';
 import { isMainApp as checkIsMainApp, getRootDomain, URLS } from '@/lib/domain-utils';
+import { Sidebar } from '@/components/layout';
+import { ToastProvider } from '@/contexts/ToastContext';
 
 type User = {
   email: string;
   id: string;
   roles: string[];
+  googleLinked: boolean;
 };
 
 type AppContextType = {
@@ -31,21 +32,16 @@ export function useAppContext() {
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [menuOpen, setMenuOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [isIngress, setIsIngress] = useState(false);
   const [displayDomain, setDisplayDomain] = useState('');
-  const [apiDomain, setApiDomain] = useState('');
-  const menuRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const pathname = usePathname();
-  const { theme, cycleTheme } = useTheme();
 
   useEffect(() => {
     const hostname = window.location.hostname;
     const isMainApp = checkIsMainApp(hostname);
     setIsIngress(!isMainApp && hostname !== 'localhost');
-    setApiDomain(hostname);
     setDisplayDomain(getRootDomain(hostname));
   }, []);
 
@@ -98,7 +94,12 @@ export default function AppLayout({ children }: { children: ReactNode }) {
           return;
         }
 
-        setUser({ email: data.email || '', id: data.end_user_id || '', roles: data.roles || [] });
+        setUser({
+          email: data.email || '',
+          id: data.end_user_id || '',
+          roles: data.roles || [],
+          googleLinked: data.google_linked ?? false,
+        });
       }
     } catch {
       router.push('/');
@@ -111,16 +112,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     fetchUser();
   }, []);
 
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
   const handleLogout = async () => {
     const apiDomain = getRootDomain(window.location.hostname);
     await fetch(`/api/public/domain/${apiDomain}/auth/logout`, { method: 'POST', credentials: 'include' });
@@ -128,12 +119,14 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     window.location.href = '/';
   };
 
-  const themeLabel = theme === 'dark' ? 'Dark' : theme === 'light' ? 'Light' : 'System';
+  const handleProfileClick = () => {
+    window.location.href = URLS.profile;
+  };
 
   if (loading || !user) {
     return (
-      <div className="flex items-center justify-center" style={{ minHeight: '100vh' }}>
-        <div className="spinner" />
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="w-6 h-6 border-2 border-zinc-600 border-t-white rounded-full animate-spin" />
       </div>
     );
   }
@@ -144,213 +137,43 @@ export default function AppLayout({ children }: { children: ReactNode }) {
     if (pathname !== '/profile') {
       window.location.href = '/profile';
       return (
-        <div className="flex items-center justify-center" style={{ minHeight: '100vh' }}>
-          <div className="spinner" />
+        <div className="flex items-center justify-center min-h-screen">
+          <div className="w-6 h-6 border-2 border-zinc-600 border-t-white rounded-full animate-spin" />
         </div>
       );
     }
 
     return (
       <AppContext.Provider value={{ user, refetchUser: fetchUser, isIngress, displayDomain }}>
-        <main className="flex items-center justify-center" style={{ padding: 'var(--spacing-xl)' }}>
-          <div style={{ maxWidth: '400px', width: '100%' }}>
-            {children}
-          </div>
-        </main>
+        <ToastProvider>
+          <main className="flex items-center justify-center p-8">
+            <div className="max-w-md w-full">
+              {children}
+            </div>
+          </main>
+        </ToastProvider>
       </AppContext.Provider>
     );
   }
 
   // Full dashboard layout for reauth.dev
-  const navItems = [
-    { href: '/dashboard', label: 'Dashboard', icon: 'M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6' },
-    { href: '/domains', label: 'Domains', icon: 'M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9' },
-    { href: '/settings', label: 'Settings', icon: 'M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z M15 12a3 3 0 11-6 0 3 3 0 016 0z' },
-  ];
-
-  const emailInitial = user.email ? user.email.charAt(0).toUpperCase() : '?';
-
   return (
     <AppContext.Provider value={{ user, refetchUser: fetchUser, isIngress, displayDomain }}>
-      <div style={{ display: 'flex', height: '100vh', overflow: 'hidden' }}>
-        {/* Sidebar */}
-        <aside style={{
-          width: '240px',
-          backgroundColor: 'var(--bg-secondary)',
-          borderRight: '1px solid var(--border-primary)',
-          display: 'flex',
-          flexDirection: 'column',
-          padding: 'var(--spacing-md)',
-          flexShrink: 0,
-        }}>
-          {/* Logo */}
-          <div style={{ padding: 'var(--spacing-sm) var(--spacing-md)', marginBottom: 'var(--spacing-lg)' }}>
-            <span style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--text-primary)' }}>reauth.dev</span>
+      <ToastProvider>
+        <div className="flex h-screen overflow-hidden">
+          <Sidebar
+            email={user.email}
+            onLogout={handleLogout}
+            onProfileClick={handleProfileClick}
+          />
+
+          <div className="flex-1 overflow-auto">
+            <main className="flex flex-col gap-6 w-full max-w-5xl mx-auto p-6 lg:p-8">
+              {children}
+            </main>
           </div>
-
-          {/* Nav items */}
-          <nav style={{ flex: 1 }}>
-            {navItems.map((item) => {
-              const isActive = pathname === item.href;
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: 'var(--spacing-sm)',
-                    padding: 'var(--spacing-sm) var(--spacing-md)',
-                    marginBottom: 'var(--spacing-xs)',
-                    borderRadius: 'var(--radius-sm)',
-                    color: isActive ? 'var(--text-primary)' : 'var(--text-secondary)',
-                    backgroundColor: isActive ? 'var(--bg-tertiary)' : 'transparent',
-                    textDecoration: 'none',
-                    fontSize: '14px',
-                    transition: 'all 0.15s',
-                  }}
-                >
-                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d={item.icon} />
-                  </svg>
-                  {item.label}
-                </Link>
-              );
-            })}
-          </nav>
-
-          {/* User menu */}
-          <div ref={menuRef} style={{ position: 'relative' }}>
-            <button
-              onClick={() => setMenuOpen(!menuOpen)}
-              style={{
-                width: '100%',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--spacing-sm)',
-                padding: 'var(--spacing-sm)',
-                backgroundColor: 'transparent',
-                border: '1px solid var(--border-primary)',
-                borderRadius: 'var(--radius-sm)',
-                cursor: 'pointer',
-                textAlign: 'left',
-              }}
-            >
-              <div style={{
-                width: '32px',
-                height: '32px',
-                borderRadius: '50%',
-                backgroundColor: 'var(--accent-blue)',
-                color: '#000',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 600,
-                fontSize: '14px',
-                flexShrink: 0,
-              }}>
-                {emailInitial}
-              </div>
-              <span style={{
-                flex: 1,
-                overflow: 'hidden',
-                textOverflow: 'ellipsis',
-                whiteSpace: 'nowrap',
-                fontSize: '13px',
-                color: 'var(--text-secondary)',
-              }}>
-                {user.email}
-              </span>
-            </button>
-
-            {menuOpen && (
-              <div style={{
-                position: 'absolute',
-                bottom: '100%',
-                left: 0,
-                right: 0,
-                marginBottom: 'var(--spacing-xs)',
-                backgroundColor: 'var(--bg-secondary)',
-                border: '1px solid var(--border-primary)',
-                borderRadius: 'var(--radius-sm)',
-                overflow: 'hidden',
-                boxShadow: 'var(--shadow-md)',
-                zIndex: 100,
-              }}>
-                <button
-                  onClick={() => { setMenuOpen(false); window.location.href = URLS.profile; }}
-                  style={{
-                    width: '100%',
-                    padding: 'var(--spacing-sm) var(--spacing-md)',
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    color: 'var(--text-secondary)',
-                    fontSize: '13px',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                  }}
-                >
-                  My profile
-                </button>
-                <button
-                  onClick={() => { cycleTheme(); }}
-                  style={{
-                    width: '100%',
-                    padding: 'var(--spacing-sm) var(--spacing-md)',
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    color: 'var(--text-secondary)',
-                    fontSize: '13px',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                  }}
-                >
-                  <span>Theme</span>
-                  <span style={{ color: 'var(--text-muted)' }}>{themeLabel}</span>
-                </button>
-                <div style={{ height: '1px', backgroundColor: 'var(--border-primary)' }} />
-                <button
-                  onClick={handleLogout}
-                  style={{
-                    width: '100%',
-                    padding: 'var(--spacing-sm) var(--spacing-md)',
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    color: 'var(--accent-red)',
-                    fontSize: '13px',
-                    textAlign: 'left',
-                    cursor: 'pointer',
-                  }}
-                >
-                  Log out
-                </button>
-              </div>
-            )}
-          </div>
-        </aside>
-
-        {/* Main content */}
-        <div style={{
-          flex: 1,
-          overflow: 'auto',
-        }}>
-          <main style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 'var(--spacing-lg)',
-            width: '100%',
-            maxWidth: '72rem',
-            marginLeft: 'auto',
-            marginRight: 'auto',
-            padding: 'var(--spacing-xl)',
-          }}>
-            {children}
-          </main>
         </div>
-      </div>
+      </ToastProvider>
     </AppContext.Provider>
   );
 }

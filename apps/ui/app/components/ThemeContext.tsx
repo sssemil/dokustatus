@@ -42,7 +42,13 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }, [theme]);
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', effectiveTheme);
+    const root = document.documentElement;
+    // Remove old theme classes
+    root.classList.remove('dark', 'light');
+    // Add current theme class (CSS uses .light selector)
+    root.classList.add(effectiveTheme);
+    // Also set data-theme attribute for backwards compatibility
+    root.setAttribute('data-theme', effectiveTheme);
   }, [effectiveTheme]);
 
   const setTheme = (newTheme: Theme) => {

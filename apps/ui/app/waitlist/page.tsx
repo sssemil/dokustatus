@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Suspense } from 'react';
+import { Clock, AlertTriangle, LogOut } from 'lucide-react';
 import { isMainApp as checkIsMainApp, getRootDomain } from '@/lib/domain-utils';
+import { Card, Button } from '@/components/ui';
 
 function WaitlistContent() {
   const router = useRouter();
@@ -24,18 +26,15 @@ function WaitlistContent() {
         });
 
         if (!res.ok) {
-          // Not authenticated
           router.push('/');
           return;
         }
 
         const data = await res.json();
 
-        // Check for error (e.g., account suspended)
         if (data.error) {
           setStatus('error');
           setErrorMessage(data.error);
-          // Log them out
           await fetch(`/api/public/domain/${apiDomain}/auth/logout`, {
             method: 'POST',
             credentials: 'include',
@@ -48,17 +47,14 @@ function WaitlistContent() {
           return;
         }
 
-        // Check if user is still on waitlist
         if (data.waitlist_position) {
           setPosition(data.waitlist_position);
           setEmail(data.email || null);
           setStatus('waitlist');
         } else {
-          // User is no longer on waitlist - they got approved!
           if (isMainApp) {
             router.push('/dashboard');
           } else {
-            // Fetch redirect URL for custom domains
             try {
               const configRes = await fetch(`/api/public/domain/${apiDomain}/config`);
               if (configRes.ok) {
@@ -91,86 +87,63 @@ function WaitlistContent() {
 
   if (status === 'loading') {
     return (
-      <main className="flex items-center justify-center">
-        <div className="card text-center" style={{ maxWidth: '400px', width: '100%' }}>
-          <div className="spinner" style={{ margin: '0 auto' }} />
-          <h2 style={{ marginTop: 'var(--spacing-lg)', borderBottom: 'none', paddingBottom: 0 }}>
-            Checking status...
-          </h2>
-        </div>
+      <main className="min-h-screen flex items-center justify-center p-4 bg-zinc-950">
+        <Card className="w-full max-w-sm p-8 text-center">
+          <div className="w-8 h-8 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin mx-auto mb-4" />
+          <h2 className="text-lg font-semibold text-white">Checking status...</h2>
+        </Card>
       </main>
     );
   }
 
   if (status === 'error') {
     return (
-      <main className="flex items-center justify-center">
-        <div className="card text-center" style={{ maxWidth: '450px', width: '100%' }}>
-          <div style={{ marginBottom: 'var(--spacing-lg)' }}>
-            <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--accent-red)" strokeWidth="1.5" style={{ margin: '0 auto' }}>
-              <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-            </svg>
+      <main className="min-h-screen flex items-center justify-center p-4 bg-zinc-950">
+        <Card className="w-full max-w-md p-8 text-center">
+          <div className="w-16 h-16 bg-red-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+            <AlertTriangle size={32} className="text-red-400" />
           </div>
-
-          <h2 style={{ borderBottom: 'none', paddingBottom: 0, marginBottom: 'var(--spacing-sm)' }}>
-            Account Suspended
-          </h2>
-
-          <p className="text-muted" style={{ marginBottom: 'var(--spacing-lg)', fontSize: '14px' }}>
+          <h2 className="text-xl font-bold text-white mb-2">Account Suspended</h2>
+          <p className="text-sm text-zinc-400 mb-6">
             {errorMessage || 'Your account has been suspended.'}
           </p>
-
-          <button onClick={() => window.location.href = '/'} className="primary" style={{ width: '100%' }}>
+          <Button variant="primary" onClick={() => window.location.href = '/'} className="w-full">
             Go to login
-          </button>
-        </div>
+          </Button>
+        </Card>
       </main>
     );
   }
 
   return (
-    <main className="flex items-center justify-center">
-      <div className="card text-center" style={{ maxWidth: '450px', width: '100%' }}>
-        <div style={{ marginBottom: 'var(--spacing-lg)' }}>
-          <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" strokeWidth="1.5" style={{ margin: '0 auto' }}>
-            <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-          </svg>
+    <main className="min-h-screen flex items-center justify-center p-4 bg-zinc-950">
+      <Card className="w-full max-w-md p-8 text-center">
+        <div className="w-16 h-16 bg-blue-500/10 rounded-full flex items-center justify-center mx-auto mb-6">
+          <Clock size={32} className="text-blue-400" />
         </div>
 
-        <h2 style={{ borderBottom: 'none', paddingBottom: 0, marginBottom: 'var(--spacing-sm)' }}>
-          You&apos;re on the waitlist!
-        </h2>
+        <h1 className="text-xl font-bold text-white mb-2">You&apos;re on the waitlist!</h1>
 
         {email && (
-          <p className="text-muted" style={{ marginBottom: 'var(--spacing-lg)', fontSize: '14px' }}>
-            {email}
-          </p>
+          <p className="text-sm text-zinc-400 mb-6">{email}</p>
         )}
 
         {position && (
-          <div style={{
-            backgroundColor: 'var(--bg-tertiary)',
-            borderRadius: 'var(--radius-md)',
-            padding: 'var(--spacing-lg)',
-            marginBottom: 'var(--spacing-lg)',
-          }}>
-            <div className="text-muted" style={{ fontSize: '13px', marginBottom: 'var(--spacing-xs)' }}>
-              Your position
-            </div>
-            <div style={{ fontSize: '3rem', fontWeight: 700, color: 'var(--accent-blue)' }}>
-              #{position}
-            </div>
+          <div className="bg-zinc-800/50 rounded-xl p-6 mb-6">
+            <div className="text-sm text-zinc-500 mb-1">Your position</div>
+            <div className="text-5xl font-bold text-blue-400">#{position}</div>
           </div>
         )}
 
-        <p className="text-muted" style={{ fontSize: '14px', marginBottom: 'var(--spacing-lg)' }}>
+        <p className="text-sm text-zinc-400 mb-6">
           We&apos;ll notify you when your account is approved. Thank you for your patience!
         </p>
 
-        <button onClick={handleLogout} style={{ width: '100%' }}>
+        <Button variant="ghost" onClick={handleLogout} className="w-full">
+          <LogOut size={16} className="mr-2" />
           Sign out
-        </button>
-      </div>
+        </Button>
+      </Card>
     </main>
   );
 }
@@ -178,11 +151,11 @@ function WaitlistContent() {
 export default function WaitlistPage() {
   return (
     <Suspense fallback={
-      <main className="flex items-center justify-center">
-        <div className="card text-center" style={{ maxWidth: '400px', width: '100%' }}>
-          <div className="spinner" style={{ margin: '0 auto' }} />
-          <h2 style={{ marginTop: 'var(--spacing-lg)', borderBottom: 'none', paddingBottom: 0 }}>Loading...</h2>
-        </div>
+      <main className="min-h-screen flex items-center justify-center p-4 bg-zinc-950">
+        <Card className="w-full max-w-sm p-8 text-center">
+          <div className="w-8 h-8 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin mx-auto mb-4" />
+          <h2 className="text-lg font-semibold text-white">Loading...</h2>
+        </Card>
       </main>
     }>
       <WaitlistContent />

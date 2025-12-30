@@ -188,6 +188,7 @@ struct SessionResponse {
     email: Option<String>,
     roles: Option<Vec<String>>,
     waitlist_position: Option<i64>,
+    google_linked: Option<bool>,
     error: Option<String>,
     error_code: Option<String>,
 }
@@ -207,6 +208,7 @@ pub fn router() -> Router<AppState> {
             post(google_confirm_link),
         )
         .route("/{domain}/auth/google/complete", post(google_complete))
+        .route("/{domain}/auth/google/unlink", post(unlink_google))
         .route("/{domain}/auth/session", get(check_session))
         .route("/{domain}/auth/refresh", post(refresh_token))
         .route("/{domain}/auth/logout", post(logout))
@@ -362,9 +364,10 @@ async fn check_session(
                             return Ok(Json(SessionResponse {
                                 valid: false,
                                 end_user_id: Some(claims.sub.clone()),
-                                email: Some(user.email),
+                                email: Some(user.email.clone()),
                                 roles: None,
                                 waitlist_position: None,
+                                google_linked: Some(user.google_id.is_some()),
                                 error: Some("Your account has been suspended".to_string()),
                                 error_code: Some("ACCOUNT_SUSPENDED".to_string()),
                             }));
@@ -393,9 +396,10 @@ async fn check_session(
                             return Ok(Json(SessionResponse {
                                 valid: true,
                                 end_user_id: Some(claims.sub.clone()),
-                                email: Some(user.email),
+                                email: Some(user.email.clone()),
                                 roles: Some(claims.roles),
                                 waitlist_position,
+                                google_linked: Some(user.google_id.is_some()),
                                 error: None,
                                 error_code: None,
                             }));
@@ -408,6 +412,7 @@ async fn check_session(
                             email: Some(user.email),
                             roles: Some(claims.roles),
                             waitlist_position: None,
+                            google_linked: Some(user.google_id.is_some()),
                             error: None,
                             error_code: None,
                         }));
@@ -421,6 +426,7 @@ async fn check_session(
                     email: None,
                     roles: None,
                     waitlist_position: None,
+                    google_linked: None,
                     error: Some("Session verification failed".to_string()),
                     error_code: Some("SESSION_VERIFICATION_FAILED".to_string()),
                 }));
@@ -441,6 +447,7 @@ async fn check_session(
                     email: None,
                     roles: None,
                     waitlist_position: None,
+                    google_linked: None,
                     error: None,
                     error_code: None,
                 }));
@@ -454,6 +461,7 @@ async fn check_session(
         email: None,
         roles: None,
         waitlist_position: None,
+        google_linked: None,
         error: None,
         error_code: None,
     }))
@@ -1046,6 +1054,58 @@ async fn google_complete(
             waitlist_position: result.waitlist_position,
         }),
     ))
+}
+
+/// POST /api/public/domain/{domain}/auth/google/unlink
+/// Unlinks the Google account from the current end-user's account
+async fn unlink_google(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    cookies: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    // Extract root domain from reauth.* hostname
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get end_user_id from access or refresh token (same pattern as delete_account)
+    let end_user_id = if let Some(access_token) = cookies.get("end_user_access_token") {
+        if let Ok(claims) =
+            jwt::verify_domain_end_user(access_token.value(), &app_state.config.jwt_secret)
+        {
+            if claims.domain == root_domain {
+                Some(Uuid::parse_str(&claims.sub).ok())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else if let Some(refresh_token) = cookies.get("end_user_refresh_token") {
+        if let Ok(claims) =
+            jwt::verify_domain_end_user(refresh_token.value(), &app_state.config.jwt_secret)
+        {
+            if claims.domain == root_domain {
+                Some(Uuid::parse_str(&claims.sub).ok())
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    let Some(Some(end_user_id)) = end_user_id else {
+        return Err(AppError::InvalidCredentials);
+    };
+
+    // Unlink Google account
+    app_state
+        .domain_auth_use_cases
+        .unlink_google_account(end_user_id)
+        .await?;
+
+    Ok(StatusCode::OK)
 }
 
 // ============================================================================

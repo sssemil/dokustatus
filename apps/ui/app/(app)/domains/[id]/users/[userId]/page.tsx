@@ -2,7 +2,10 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import HoldToConfirmButton from '@/components/HoldToConfirmButton';
+import Link from 'next/link';
+import { ArrowLeft, Mail, Calendar, Clock, Shield, Snowflake, CheckCircle } from 'lucide-react';
+import { Card, Button, Badge, HoldButton } from '@/components/ui';
+import { useToast } from '@/contexts/ToastContext';
 
 type EndUser = {
   id: string;
@@ -26,11 +29,10 @@ export default function UserDetailPage() {
   const router = useRouter();
   const domainId = params.id as string;
   const userId = params.userId as string;
+  const { addToast } = useToast();
 
   const [user, setUser] = useState<EndUser | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
   const [actionLoading, setActionLoading] = useState(false);
 
   // Roles state
@@ -46,14 +48,14 @@ export default function UserDetailPage() {
         setUser(data);
         setSelectedRoles(data.roles || []);
       } else {
-        setError('User not found');
+        addToast('User not found', 'error');
       }
     } catch {
-      setError('Failed to load user');
+      addToast('Failed to load user', 'error');
     } finally {
       setLoading(false);
     }
-  }, [domainId, userId]);
+  }, [domainId, userId, addToast]);
 
   const fetchRoles = useCallback(async () => {
     try {
@@ -62,9 +64,7 @@ export default function UserDetailPage() {
         const data = await res.json();
         setAvailableRoles(data);
       }
-    } catch {
-      // Ignore
-    }
+    } catch {}
   }, [domainId]);
 
   useEffect(() => {
@@ -98,15 +98,17 @@ export default function UserDetailPage() {
 
       if (res.ok) {
         if (action === 'delete') {
-          router.push(`/domains/${domainId}`);
+          addToast('User deleted', 'success');
+          router.push(`/domains/${domainId}?tab=users`);
         } else {
+          addToast(`User ${action}ed successfully`, 'success');
           fetchUser();
         }
       } else {
-        setError(`Failed to ${action} user`);
+        addToast(`Failed to ${action} user`, 'error');
       }
     } catch {
-      setError('Network error. Please try again.');
+      addToast('Network error', 'error');
     } finally {
       setActionLoading(false);
     }
@@ -114,16 +116,12 @@ export default function UserDetailPage() {
 
   const handleRoleToggle = (roleName: string) => {
     setSelectedRoles((prev) =>
-      prev.includes(roleName)
-        ? prev.filter((r) => r !== roleName)
-        : [...prev, roleName]
+      prev.includes(roleName) ? prev.filter((r) => r !== roleName) : [...prev, roleName]
     );
   };
 
   const handleSaveRoles = async () => {
     setSavingRoles(true);
-    setError('');
-    setSuccess('');
 
     try {
       const res = await fetch(`/api/domains/${domainId}/end-users/${userId}/roles`, {
@@ -134,14 +132,14 @@ export default function UserDetailPage() {
       });
 
       if (res.ok) {
-        setSuccess('Roles updated successfully');
+        addToast('Roles updated', 'success');
         fetchUser();
       } else {
         const errData = await res.json().catch(() => ({}));
-        setError(errData.message || 'Failed to update roles');
+        addToast(errData.message || 'Failed to update roles', 'error');
       }
     } catch {
-      setError('Network error. Please try again.');
+      addToast('Network error', 'error');
     } finally {
       setSavingRoles(false);
     }
@@ -151,8 +149,7 @@ export default function UserDetailPage() {
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Never';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
+    return new Date(dateString).toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
       year: 'numeric',
@@ -163,231 +160,182 @@ export default function UserDetailPage() {
 
   if (loading) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
-        <span className="spinner" />
+      <div className="flex justify-center py-20">
+        <div className="w-6 h-6 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
       </div>
     );
   }
 
   if (!user) {
     return (
-      <div className="card">
-        <p className="text-muted">{error || 'User not found'}</p>
-        <button onClick={() => router.push(`/domains/${domainId}`)}>Back to domain</button>
-      </div>
+      <Card className="p-8 text-center">
+        <p className="text-zinc-400 mb-4">User not found</p>
+        <Button onClick={() => router.push(`/domains/${domainId}`)}>Back to domain</Button>
+      </Card>
     );
   }
 
   return (
-    <>
-      {/* Header */}
-      <button
-        onClick={() => router.push(`/domains/${domainId}`)}
-        style={{
-          background: 'none',
-          border: 'none',
-          color: 'var(--text-muted)',
-          cursor: 'pointer',
-          padding: 0,
-          marginBottom: 'var(--spacing-md)',
-        }}
-      >
-        &larr; Back to domain
-      </button>
+    <div className="space-y-6">
+      {/* Back link */}
+      <Link href={`/domains/${domainId}?tab=users`} className="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-white transition-colors">
+        <ArrowLeft size={16} />
+        Back to users
+      </Link>
 
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--spacing-lg)' }}>
+      {/* Header */}
+      <div className="flex items-start justify-between">
         <div>
-          <h1 style={{ marginBottom: 'var(--spacing-xs)' }}>{user.email}</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
-            {user.is_frozen && (
-              <span style={{
-                padding: '4px 8px',
-                borderRadius: 'var(--radius-sm)',
-                backgroundColor: 'var(--accent-red)',
-                color: '#fff',
-                fontSize: '12px',
-                fontWeight: 500,
-              }}>
-                Frozen
-              </span>
-            )}
-            {user.is_whitelisted && (
-              <span style={{
-                padding: '4px 8px',
-                borderRadius: 'var(--radius-sm)',
-                backgroundColor: 'var(--accent-green)',
-                color: '#000',
-                fontSize: '12px',
-                fontWeight: 500,
-              }}>
-                Whitelisted
-              </span>
-            )}
-            {user.email_verified_at && (
-              <span style={{
-                padding: '4px 8px',
-                borderRadius: 'var(--radius-sm)',
-                backgroundColor: 'var(--accent-blue)',
-                color: '#000',
-                fontSize: '12px',
-                fontWeight: 500,
-              }}>
-                Verified
-              </span>
-            )}
-            {user.roles && user.roles.map((role) => (
-              <span
-                key={role}
-                style={{
-                  padding: '4px 8px',
-                  borderRadius: 'var(--radius-sm)',
-                  backgroundColor: 'var(--bg-tertiary)',
-                  color: 'var(--text-secondary)',
-                  fontSize: '12px',
-                  fontWeight: 500,
-                }}
-              >
-                {role}
-              </span>
-            ))}
+          <h1 className="text-2xl font-bold text-white">{user.email}</h1>
+          <div className="flex items-center gap-2 mt-2">
+            {user.is_frozen && <Badge variant="error">Frozen</Badge>}
+            {user.is_whitelisted && <Badge variant="success">Whitelisted</Badge>}
+            {user.email_verified_at && <Badge variant="info">Verified</Badge>}
+            {user.roles?.map((role) => <Badge key={role} variant="default">{role}</Badge>)}
           </div>
         </div>
-        <HoldToConfirmButton
-          label="Delete"
-          holdingLabel="Hold to delete..."
-          onConfirm={() => handleAction('delete')}
+        <HoldButton
+          onComplete={() => handleAction('delete')}
           variant="danger"
+          duration={3000}
           disabled={actionLoading}
-        />
+        >
+          Delete
+        </HoldButton>
       </div>
-
-      {error && (
-        <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="message success" style={{ marginBottom: 'var(--spacing-md)' }}>
-          {success}
-        </div>
-      )}
 
       {/* User Details */}
-      <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-        <h2 style={{ marginBottom: 'var(--spacing-md)' }}>User Details</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
-          <div>
-            <span className="text-muted" style={{ fontSize: '12px', display: 'block', marginBottom: '4px' }}>Email</span>
-            <span>{user.email}</span>
+      <Card className="p-6">
+        <h2 className="text-lg font-semibold text-white mb-4">User Details</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center flex-shrink-0">
+              <Mail size={16} className="text-zinc-400" />
+            </div>
+            <div>
+              <p className="text-xs text-zinc-500">Email</p>
+              <p className="text-sm text-white">{user.email}</p>
+            </div>
           </div>
-          <div>
-            <span className="text-muted" style={{ fontSize: '12px', display: 'block', marginBottom: '4px' }}>Last Login</span>
-            <span>{formatDate(user.last_login_at)}</span>
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center flex-shrink-0">
+              <Clock size={16} className="text-zinc-400" />
+            </div>
+            <div>
+              <p className="text-xs text-zinc-500">Last Login</p>
+              <p className="text-sm text-white">{formatDate(user.last_login_at)}</p>
+            </div>
           </div>
-          <div>
-            <span className="text-muted" style={{ fontSize: '12px', display: 'block', marginBottom: '4px' }}>Email Verified</span>
-            <span>{formatDate(user.email_verified_at)}</span>
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center flex-shrink-0">
+              <CheckCircle size={16} className="text-zinc-400" />
+            </div>
+            <div>
+              <p className="text-xs text-zinc-500">Email Verified</p>
+              <p className="text-sm text-white">{formatDate(user.email_verified_at)}</p>
+            </div>
           </div>
-          <div>
-            <span className="text-muted" style={{ fontSize: '12px', display: 'block', marginBottom: '4px' }}>Created</span>
-            <span>{formatDate(user.created_at)}</span>
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center flex-shrink-0">
+              <Calendar size={16} className="text-zinc-400" />
+            </div>
+            <div>
+              <p className="text-xs text-zinc-500">Created</p>
+              <p className="text-sm text-white">{formatDate(user.created_at)}</p>
+            </div>
           </div>
         </div>
-      </div>
+      </Card>
 
       {/* Roles */}
-      <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-        <h2 style={{ marginBottom: 'var(--spacing-md)' }}>Roles</h2>
+      <Card className="p-6">
+        <h2 className="text-lg font-semibold text-white mb-4">Roles</h2>
         {availableRoles.length === 0 ? (
-          <p className="text-muted" style={{ margin: 0 }}>
+          <p className="text-sm text-zinc-400">
             No roles available. Create roles in the Roles tab of the domain page.
           </p>
         ) : (
-          <>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-md)' }}>
+          <div className="space-y-4">
+            <div className="flex flex-wrap gap-2">
               {availableRoles.map((role) => {
                 const isSelected = selectedRoles.includes(role.name);
                 return (
                   <button
                     key={role.id}
                     onClick={() => handleRoleToggle(role.name)}
-                    style={{
-                      padding: '6px 12px',
-                      borderRadius: 'var(--radius-sm)',
-                      border: isSelected ? '2px solid var(--accent-blue)' : '2px solid var(--border-primary)',
-                      backgroundColor: isSelected ? 'var(--accent-blue)' : 'var(--bg-tertiary)',
-                      color: isSelected ? '#000' : 'var(--text-primary)',
-                      cursor: 'pointer',
-                      fontSize: '13px',
-                      fontWeight: 500,
-                      transition: 'all 0.15s ease',
-                    }}
+                    className={`
+                      px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
+                      ${isSelected
+                        ? 'bg-blue-600 text-white border-2 border-blue-500'
+                        : 'bg-zinc-800 text-zinc-300 border-2 border-zinc-700 hover:border-zinc-600'
+                      }
+                    `}
                   >
                     {role.name}
                   </button>
                 );
               })}
             </div>
-            <button
-              className="primary"
+            <Button
+              variant="primary"
               onClick={handleSaveRoles}
               disabled={!rolesChanged || savingRoles}
-              style={{ opacity: rolesChanged ? 1 : 0.5 }}
             >
               {savingRoles ? 'Saving...' : 'Save Roles'}
-            </button>
-          </>
+            </Button>
+          </div>
         )}
-      </div>
+      </Card>
 
       {/* Actions */}
-      <div className="card">
-        <h2 style={{ marginBottom: 'var(--spacing-md)' }}>Actions</h2>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
+      <Card className="p-6">
+        <h2 className="text-lg font-semibold text-white mb-4">Actions</h2>
+        <div className="space-y-4">
           {/* Freeze/Unfreeze */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: '4px' }}>
-                {user.is_frozen ? 'Unfreeze Account' : 'Freeze Account'}
+          <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center flex-shrink-0">
+                <Snowflake size={16} className="text-zinc-400" />
               </div>
-              <p className="text-muted" style={{ margin: 0, fontSize: '13px' }}>
-                {user.is_frozen
-                  ? 'Allow this user to sign in again.'
-                  : 'Prevent this user from signing in.'}
-              </p>
+              <div>
+                <p className="font-medium text-white">
+                  {user.is_frozen ? 'Unfreeze Account' : 'Freeze Account'}
+                </p>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  {user.is_frozen
+                    ? 'Allow this user to sign in again.'
+                    : 'Prevent this user from signing in.'}
+                </p>
+              </div>
             </div>
-            <button
-              onClick={() => handleAction(user.is_frozen ? 'unfreeze' : 'freeze')}
-              disabled={actionLoading}
-            >
+            <Button onClick={() => handleAction(user.is_frozen ? 'unfreeze' : 'freeze')} disabled={actionLoading}>
               {user.is_frozen ? 'Unfreeze' : 'Freeze'}
-            </button>
+            </Button>
           </div>
-
-          <div style={{ borderTop: '1px solid var(--border-primary)' }} />
 
           {/* Whitelist/Unwhitelist */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: '4px' }}>
-                {user.is_whitelisted ? 'Remove from Whitelist' : 'Add to Whitelist'}
+          <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg">
+            <div className="flex items-start gap-3">
+              <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center flex-shrink-0">
+                <Shield size={16} className="text-zinc-400" />
               </div>
-              <p className="text-muted" style={{ margin: 0, fontSize: '13px' }}>
-                {user.is_whitelisted
-                  ? 'Remove this user from the whitelist.'
-                  : 'Add this user to the whitelist. When whitelist mode is enabled, only whitelisted users can sign in.'}
-              </p>
+              <div>
+                <p className="font-medium text-white">
+                  {user.is_whitelisted ? 'Remove from Whitelist' : 'Add to Whitelist'}
+                </p>
+                <p className="text-xs text-zinc-500 mt-0.5">
+                  {user.is_whitelisted
+                    ? 'Remove this user from the whitelist.'
+                    : 'Add this user to the whitelist.'}
+                </p>
+              </div>
             </div>
-            <button
-              onClick={() => handleAction(user.is_whitelisted ? 'unwhitelist' : 'whitelist')}
-              disabled={actionLoading}
-            >
+            <Button onClick={() => handleAction(user.is_whitelisted ? 'unwhitelist' : 'whitelist')} disabled={actionLoading}>
               {user.is_whitelisted ? 'Remove' : 'Whitelist'}
-            </button>
+            </Button>
           </div>
         </div>
-      </div>
-    </>
+      </Card>
+    </div>
   );
 }

@@ -2,36 +2,30 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
-import ConfirmModal from '@/components/ConfirmModal';
+import { Globe, Plus, MoreVertical, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Card, Button, Badge, EmptyState, ConfirmModal, SearchInput, Modal, Input } from '@/components/ui';
+import { zIndex } from '@/lib/design-tokens';
 
 type Domain = {
   id: string;
   domain: string;
   status: 'pending_dns' | 'verifying' | 'verified' | 'failed';
-  dns_records?: {
-    cname_name: string;
-    cname_value: string;
-    txt_name: string;
-    txt_value: string;
-  };
   verified_at: string | null;
   created_at: string | null;
   has_auth_methods: boolean;
 };
 
-type WizardStep = 'closed' | 'input' | 'records';
-
 export default function DomainsPage() {
   const router = useRouter();
   const [domains, setDomains] = useState<Domain[]>([]);
   const [loading, setLoading] = useState(true);
-  const [wizardStep, setWizardStep] = useState<WizardStep>('closed');
-  const [newDomain, setNewDomain] = useState('');
-  const [createdDomain, setCreatedDomain] = useState<Domain | null>(null);
-  const [error, setError] = useState('');
-  const [copiedField, setCopiedField] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [newDomainName, setNewDomainName] = useState('');
+  const [addingDomain, setAddingDomain] = useState(false);
+  const [addError, setAddError] = useState('');
   const menuRef = useRef<HTMLDivElement>(null);
 
   // Close menu when clicking outside
@@ -62,109 +56,6 @@ export default function DomainsPage() {
   useEffect(() => {
     fetchDomains();
   }, [fetchDomains]);
-
-
-  const validateDomain = (domain: string): string | null => {
-    const trimmed = domain.trim().toLowerCase();
-
-    if (!trimmed) {
-      return 'Please enter a domain name';
-    }
-
-    // Check for protocol prefix
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return 'Enter just the domain name without http:// or https://';
-    }
-
-    // Check for path
-    if (trimmed.includes('/')) {
-      return 'Enter just the domain name without any path';
-    }
-
-    // Basic domain format check
-    const parts = trimmed.split('.');
-    if (parts.length < 2) {
-      return 'Please enter a valid domain (e.g., example.com)';
-    }
-
-    // Check for empty parts (e.g., "example..com")
-    if (parts.some(p => p.length === 0)) {
-      return 'Invalid domain format';
-    }
-
-    // Multi-part TLDs
-    const multiPartTlds = ['co.uk', 'com.au', 'co.nz', 'com.br', 'co.jp', 'org.uk', 'net.au'];
-    for (const tld of multiPartTlds) {
-      if (trimmed.endsWith(tld)) {
-        if (parts.length > 3) {
-          return `Please enter your root domain (e.g., example.${tld}), not a subdomain`;
-        }
-        if (parts.length < 3) {
-          return 'Please enter a valid domain';
-        }
-        return null; // Valid multi-part TLD domain
-      }
-    }
-
-    // Standard TLDs - should have exactly 2 parts
-    if (parts.length > 2) {
-      return `Please enter your root domain (e.g., ${parts.slice(-2).join('.')}), not a subdomain`;
-    }
-
-    return null; // Valid
-  };
-
-  const handleCreateDomain = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-
-    const validationError = validateDomain(newDomain);
-    if (validationError) {
-      setError(validationError);
-      return;
-    }
-
-    try {
-      const res = await fetch('/api/domains', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ domain: newDomain.trim().toLowerCase() }),
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setCreatedDomain(data);
-        setWizardStep('records');
-        setNewDomain('');
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setError(errData.message || 'Failed to add domain');
-      }
-    } catch {
-      setError('Network error. Please try again.');
-    }
-  };
-
-  const handleStartVerification = async () => {
-    if (!createdDomain) return;
-
-    try {
-      const res = await fetch(`/api/domains/${createdDomain.id}/verify`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        // Navigate to domain detail page
-        router.push(`/domains/${createdDomain.id}`);
-      } else {
-        setError('Failed to start verification');
-      }
-    } catch {
-      setError('Network error. Please try again.');
-    }
-  };
 
   const handleDeleteDomain = async (domainId: string) => {
     try {
@@ -198,357 +89,266 @@ export default function DomainsPage() {
     }
   };
 
-  const copyToClipboard = async (text: string, field: string) => {
+  const validateDomain = (domain: string): string | null => {
+    const trimmed = domain.trim().toLowerCase();
+    if (!trimmed) return 'Please enter a domain name';
+    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+      return 'Enter just the domain name without http:// or https://';
+    }
+    if (trimmed.includes('/')) return 'Enter just the domain name without any path';
+    const parts = trimmed.split('.');
+    if (parts.length < 2) return 'Please enter a valid domain (e.g., example.com)';
+    if (parts.some(p => p.length === 0)) return 'Invalid domain format';
+    const multiPartTlds = ['co.uk', 'com.au', 'co.nz', 'com.br', 'co.jp', 'org.uk', 'net.au'];
+    for (const tld of multiPartTlds) {
+      if (trimmed.endsWith(tld)) {
+        if (parts.length > 3) return `Please enter your root domain (e.g., example.${tld}), not a subdomain`;
+        if (parts.length < 3) return 'Please enter a valid domain';
+        return null;
+      }
+    }
+    if (parts.length > 2) return `Please enter your root domain (e.g., ${parts.slice(-2).join('.')}), not a subdomain`;
+    return null;
+  };
+
+  const handleAddDomain = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setAddError('');
+    const validationError = validateDomain(newDomainName);
+    if (validationError) {
+      setAddError(validationError);
+      return;
+    }
+    setAddingDomain(true);
     try {
-      await navigator.clipboard.writeText(text);
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 2000);
+      const res = await fetch('/api/domains', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ domain: newDomainName.trim().toLowerCase() }),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        const domainName = newDomainName.trim().toLowerCase();
+        // Set default redirect URL to the domain itself
+        await fetch(`/api/domains/${data.id}/auth-config`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ redirect_url: `https://${domainName}` }),
+          credentials: 'include',
+        }).catch(() => {}); // Ignore errors
+        setShowAddModal(false);
+        setNewDomainName('');
+        router.push(`/domains/${data.id}`);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setAddError(errData.message || 'Failed to add domain');
+      }
     } catch {
-      // Fallback for older browsers
-      const textArea = document.createElement('textarea');
-      textArea.value = text;
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textArea);
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 2000);
+      setAddError('Network error. Please try again.');
+    } finally {
+      setAddingDomain(false);
     }
   };
 
-  const getStatusBadge = (status: Domain['status']) => {
-    const styles: Record<Domain['status'], { bg: string; color: string; label: string }> = {
-      pending_dns: { bg: 'var(--accent-orange)', color: '#000', label: 'Pending DNS' },
-      verifying: { bg: 'var(--accent-blue)', color: '#000', label: 'Verifying...' },
-      verified: { bg: 'var(--accent-green)', color: '#000', label: 'Verified' },
-      failed: { bg: 'var(--accent-red)', color: '#fff', label: 'Failed' },
-    };
-    const style = styles[status];
-    return (
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 'var(--spacing-xs)',
-          padding: '4px 8px',
-          borderRadius: 'var(--radius-sm)',
-          backgroundColor: style.bg,
-          color: style.color,
-          fontSize: '12px',
-          fontWeight: 500,
-        }}
-      >
-        {status === 'verifying' && <span className="spinner" style={{ width: 12, height: 12 }} />}
-        {style.label}
-      </span>
-    );
-  };
-
-  const closeWizard = () => {
-    setWizardStep('closed');
-    setNewDomain('');
-    setCreatedDomain(null);
-    setError('');
-  };
+  // Filter domains by search
+  const filteredDomains = domains.filter(d =>
+    d.domain.toLowerCase().includes(search.toLowerCase())
+  );
 
   return (
-    <>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>Domains</h1>
-        {wizardStep === 'closed' && (
-          <button className="primary" onClick={() => setWizardStep('input')}>
-            + Add domain
-          </button>
-        )}
+    <div className="space-y-6">
+      {/* Page header */}
+      <div className="flex items-center justify-between">
+        <h1 className="text-xl sm:text-2xl font-bold text-white">Domains</h1>
+        <Button variant="primary" onClick={() => setShowAddModal(true)}>
+          <Plus size={16} />
+          <span className="hidden sm:inline ml-1">Add domain</span>
+        </Button>
       </div>
 
-      {/* Wizard */}
-      {wizardStep !== 'closed' && (
-        <div className="card">
-          {wizardStep === 'input' && (
-            <>
-              <h2>Add a domain</h2>
-              <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-                Enter your root domain. Your login page will be at <code>reauth.yourdomain.com</code>
-              </p>
-              <form onSubmit={handleCreateDomain}>
-                <label htmlFor="domain">Root domain</label>
-                <input
-                  id="domain"
-                  type="text"
-                  value={newDomain}
-                  onChange={(e) => setNewDomain(e.target.value)}
-                  placeholder="example.com"
-                  style={{ marginBottom: 'var(--spacing-md)' }}
-                />
-                <p className="text-muted" style={{ fontSize: '12px', marginTop: '-12px', marginBottom: 'var(--spacing-md)' }}>
-                  Enter your root domain (e.g., example.com), not a subdomain
-                </p>
-                {error && (
-                  <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
-                    {error}
-                  </div>
-                )}
-                <div style={{ display: 'flex', gap: 'var(--spacing-sm)' }}>
-                  <button type="submit" className="primary">
-                    + Add Domain
-                  </button>
-                  <button type="button" onClick={closeWizard}>
-                    Cancel
-                  </button>
-                </div>
-              </form>
-            </>
-          )}
-
-          {wizardStep === 'records' && createdDomain?.dns_records && (
-            <>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <div>
-                  <h2>DNS Records</h2>
-                  <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-                    Add the following DNS records in your domain provider.
-                  </p>
-                </div>
-                <a
-                  href="https://resend.com/docs/knowledge-base/godaddy"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{ color: 'var(--accent-blue)', fontSize: '14px' }}
-                >
-                  How to add records
-                </a>
-              </div>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
-                {/* CNAME Record */}
-                <div
-                  style={{
-                    backgroundColor: 'var(--bg-tertiary)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: 'var(--spacing-md)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>CNAME Record</span>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
-                    <span className="text-muted">Name</span>
-                    <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                      {createdDomain.dns_records.cname_name}
-                    </code>
-                    <button
-                      onClick={() => copyToClipboard(createdDomain.dns_records!.cname_name, 'cname_name')}
-                      style={{ padding: '4px 8px', fontSize: '12px' }}
-                    >
-                      {copiedField === 'cname_name' ? 'Copied!' : 'Copy'}
-                    </button>
-
-                    <span className="text-muted">Value</span>
-                    <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                      {createdDomain.dns_records.cname_value}
-                    </code>
-                    <button
-                      onClick={() => copyToClipboard(createdDomain.dns_records!.cname_value, 'cname_value')}
-                      style={{ padding: '4px 8px', fontSize: '12px' }}
-                    >
-                      {copiedField === 'cname_value' ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* TXT Record */}
-                <div
-                  style={{
-                    backgroundColor: 'var(--bg-tertiary)',
-                    borderRadius: 'var(--radius-md)',
-                    padding: 'var(--spacing-md)',
-                  }}
-                >
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
-                    <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>TXT Record</span>
-                  </div>
-                  <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
-                    <span className="text-muted">Name</span>
-                    <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                      {createdDomain.dns_records.txt_name}
-                    </code>
-                    <button
-                      onClick={() => copyToClipboard(createdDomain.dns_records!.txt_name, 'txt_name')}
-                      style={{ padding: '4px 8px', fontSize: '12px' }}
-                    >
-                      {copiedField === 'txt_name' ? 'Copied!' : 'Copy'}
-                    </button>
-
-                    <span className="text-muted">Value</span>
-                    <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                      {createdDomain.dns_records.txt_value}
-                    </code>
-                    <button
-                      onClick={() => copyToClipboard(createdDomain.dns_records!.txt_value, 'txt_value')}
-                      style={{ padding: '4px 8px', fontSize: '12px' }}
-                    >
-                      {copiedField === 'txt_value' ? 'Copied!' : 'Copy'}
-                    </button>
-                  </div>
-                </div>
-              </div>
-
-              {error && (
-                <div className="message error" style={{ marginTop: 'var(--spacing-md)' }}>
-                  {error}
-                </div>
-              )}
-
-              <div style={{ display: 'flex', gap: 'var(--spacing-sm)', marginTop: 'var(--spacing-lg)' }}>
-                <button className="primary" onClick={handleStartVerification}>
-                  I&apos;ve added the records
-                </button>
-                <button onClick={closeWizard}>Cancel</button>
-              </div>
-            </>
-          )}
-
-        </div>
+      {/* Search */}
+      {domains.length > 0 && (
+        <SearchInput
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search domains..."
+        />
       )}
 
       {/* Domains List */}
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
-          <div className="spinner" />
+        <div className="flex justify-center py-12">
+          <div className="w-6 h-6 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
         </div>
-      ) : domains.length === 0 && wizardStep === 'closed' ? (
-        <div className="card" style={{ textAlign: 'center' }}>
-          <p className="text-muted">No domains added yet. Click &quot;+ Add domain&quot; to get started.</p>
-        </div>
+      ) : domains.length === 0 ? (
+        <EmptyState
+          icon={Globe}
+          title="No domains found"
+          description="Get started by adding your first domain"
+          action={
+            <Button variant="primary" onClick={() => setShowAddModal(true)}>
+              <Plus size={16} className="mr-1" />
+              Add your first domain
+            </Button>
+          }
+        />
+      ) : filteredDomains.length === 0 && search ? (
+        <EmptyState
+          icon={Globe}
+          title="No domains found"
+          description="Try adjusting your search"
+        />
       ) : (
-        domains.map((domain) => (
-          <div
-            key={domain.id}
-            className="card"
-            onClick={() => router.push(`/domains/${domain.id}`)}
-            style={{
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-              cursor: 'pointer',
-              transition: 'background-color 0.15s ease',
-            }}
-            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)')}
-            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '')}
-          >
-            <div>
-              <div style={{ fontWeight: 600, marginBottom: 'var(--spacing-xs)' }}>{domain.domain}</div>
-              {domain.status === 'verified' && (
-                <div style={{ fontSize: '12px', marginBottom: 'var(--spacing-xs)' }}>
-                  <span className="text-muted">Login: </span>
-                  <span style={{ color: 'var(--accent-blue)' }}>
-                    reauth.{domain.domain}
-                  </span>
+        <div className="space-y-3">
+          {filteredDomains.map((domain) => (
+            <Card
+              key={domain.id}
+              className="p-3 sm:p-4"
+              hover
+              onClick={() => router.push(`/domains/${domain.id}`)}
+            >
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3 min-w-0">
+                  <div className={`w-9 h-9 sm:w-10 sm:h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                    domain.status === 'verified' ? 'bg-emerald-900/30' :
+                    domain.status === 'failed' ? 'bg-red-900/30' : 'bg-zinc-700'
+                  }`}>
+                    <Globe size={18} className={
+                      domain.status === 'verified' ? 'text-emerald-400' :
+                      domain.status === 'failed' ? 'text-red-400' : 'text-zinc-400'
+                    } />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium truncate">{domain.domain}</span>
+                      {domain.status === 'verified' ? (
+                        <Badge variant="success">verified</Badge>
+                      ) : domain.status === 'failed' ? (
+                        <Badge variant="error">failed</Badge>
+                      ) : (
+                        <Badge variant="warning">pending</Badge>
+                      )}
+                    </div>
+                    {domain.status !== 'verified' && (
+                      <div className="flex items-center gap-1 text-sm text-amber-400 mt-0.5">
+                        <AlertTriangle size={12} />
+                        <span className="truncate">DNS verification pending</span>
+                      </div>
+                    )}
+                    {domain.status === 'verified' && !domain.has_auth_methods && (
+                      <div className="flex items-center gap-1 text-sm text-amber-400 mt-0.5">
+                        <AlertTriangle size={12} />
+                        <span className="truncate">No auth methods configured</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              )}
-              <div style={{ display: 'flex', gap: 'var(--spacing-xs)', alignItems: 'center', flexWrap: 'wrap' }}>
-                {getStatusBadge(domain.status)}
-                {domain.status === 'verified' && !domain.has_auth_methods && (
-                  <span
-                    style={{
-                      padding: '4px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      backgroundColor: 'rgba(204, 120, 50, 0.15)',
-                      color: '#cc7832',
-                      fontSize: '12px',
-                      fontWeight: 500,
-                    }}
+
+                <div className="flex items-center gap-2 flex-shrink-0 ml-2">
+                  {domain.status === 'failed' && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRetryVerification(domain);
+                      }}
+                    >
+                      <RefreshCw size={14} className="mr-1" />
+                      Retry
+                    </Button>
+                  )}
+
+                  <div
+                    ref={openMenuId === domain.id ? menuRef : null}
+                    className="relative"
                   >
-                    No Login Methods
-                  </span>
-                )}
-              </div>
-            </div>
-            <div style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
-              {domain.status === 'failed' && (
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleRetryVerification(domain);
-                  }}
-                >
-                  Retry
-                </button>
-              )}
-              <div ref={openMenuId === domain.id ? menuRef : null} style={{ position: 'relative' }}>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpenMenuId(openMenuId === domain.id ? null : domain.id);
-                  }}
-                  style={{
-                    padding: 'var(--spacing-xs)',
-                    backgroundColor: 'transparent',
-                    border: 'none',
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                    <circle cx="12" cy="5" r="2" />
-                    <circle cx="12" cy="12" r="2" />
-                    <circle cx="12" cy="19" r="2" />
-                  </svg>
-                </button>
-                {openMenuId === domain.id && (
-                  <div style={{
-                    position: 'absolute',
-                    top: '100%',
-                    right: 0,
-                    marginTop: 'var(--spacing-xs)',
-                    backgroundColor: 'var(--bg-secondary)',
-                    border: '1px solid var(--border-primary)',
-                    borderRadius: 'var(--radius-sm)',
-                    boxShadow: 'var(--shadow-md)',
-                    zIndex: 100,
-                    minWidth: '120px',
-                  }}>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
-                        setOpenMenuId(null);
-                        setDeleteConfirmId(domain.id);
+                        setOpenMenuId(openMenuId === domain.id ? null : domain.id);
                       }}
-                      style={{
-                        width: '100%',
-                        padding: 'var(--spacing-sm) var(--spacing-md)',
-                        backgroundColor: 'transparent',
-                        border: 'none',
-                        color: 'var(--accent-red)',
-                        fontSize: '13px',
-                        textAlign: 'left',
-                        cursor: 'pointer',
-                      }}
+                      className="p-2 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition-colors"
                     >
-                      Delete
+                      <MoreVertical size={16} />
                     </button>
+
+                    {openMenuId === domain.id && (
+                      <div
+                        className="absolute top-full right-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl min-w-[120px] overflow-hidden animate-scale-in"
+                        style={{ zIndex: zIndex.dropdown }}
+                      >
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setOpenMenuId(null);
+                            setDeleteConfirmId(domain.id);
+                          }}
+                          className="w-full px-4 py-2 text-sm text-red-400 hover:bg-zinc-700 text-left transition-colors"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
                   </div>
-                )}
+                </div>
               </div>
-            </div>
-          </div>
-        ))
+            </Card>
+          ))}
+        </div>
       )}
 
+      {/* Delete Confirmation Modal */}
       <ConfirmModal
         isOpen={deleteConfirmId !== null}
         title="Delete Domain"
-        message="Are you sure you want to delete this domain? This cannot be undone."
+        message="This action cannot be undone. All users, API keys, and authentication settings for this domain will be permanently deleted."
         confirmLabel="Delete"
         cancelLabel="Cancel"
         variant="danger"
         confirmText={domains.find(d => d.id === deleteConfirmId)?.domain}
+        useHoldToConfirm
         onConfirm={() => deleteConfirmId && handleDeleteDomain(deleteConfirmId)}
         onCancel={() => setDeleteConfirmId(null)}
       />
-    </>
+
+      {/* Add Domain Modal */}
+      <Modal
+        open={showAddModal}
+        onClose={() => { setShowAddModal(false); setNewDomainName(''); setAddError(''); }}
+        title="Add Domain"
+      >
+        <form onSubmit={handleAddDomain} className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm text-zinc-400">Domain name</label>
+            <Input
+              value={newDomainName}
+              onChange={(e) => setNewDomainName(e.target.value)}
+              placeholder="example.com"
+              autoFocus
+            />
+            <p className="text-xs text-zinc-500">
+              Your login page will be at{' '}
+              <code className="text-blue-400">https://reauth.{newDomainName || 'example.com'}</code>
+            </p>
+          </div>
+          {addError && (
+            <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400">
+              <AlertTriangle size={16} />
+              {addError}
+            </div>
+          )}
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => { setShowAddModal(false); setNewDomainName(''); setAddError(''); }}>
+              Cancel
+            </Button>
+            <Button type="submit" variant="primary" disabled={addingDomain || !newDomainName.trim()}>
+              {addingDomain ? 'Adding...' : 'Add Domain'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
   );
 }

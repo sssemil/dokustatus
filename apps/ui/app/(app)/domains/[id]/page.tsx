@@ -2,9 +2,19 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import ConfirmModal from '@/components/ConfirmModal';
-import HoldToConfirmButton from '@/components/HoldToConfirmButton';
+import Link from 'next/link';
+import {
+  ExternalLink, Globe, Trash2, RefreshCw, AlertTriangle,
+  Mail, Key, Users, Shield, Settings, MoreVertical, Plus, Check, ChevronRight
+} from 'lucide-react';
+import {
+  Card, Button, Badge, Input, Toggle, Tabs, Modal, ConfirmModal,
+  CopyButton, CodeBlock, EmptyState, HoldButton, SearchInput
+} from '@/components/ui';
+import { useToast } from '@/contexts/ToastContext';
+import { zIndex } from '@/lib/design-tokens';
 
+// Types
 type Domain = {
   id: string;
   domain: string;
@@ -24,16 +34,10 @@ type AuthConfig = {
   google_oauth_enabled: boolean;
   redirect_url: string | null;
   whitelist_enabled: boolean;
-  magic_link_config: {
-    from_email: string;
-    has_api_key: boolean;
-  } | null;
+  magic_link_config: { from_email: string; has_api_key: boolean } | null;
   using_fallback: boolean;
   fallback_from_email: string | null;
-  google_oauth_config: {
-    client_id_prefix: string;
-    has_client_secret: boolean;
-  } | null;
+  google_oauth_config: { client_id_prefix: string; has_client_secret: boolean } | null;
   using_google_fallback: boolean;
 };
 
@@ -48,83 +52,30 @@ type EndUser = {
   created_at: string | null;
 };
 
-type Tab = 'dns' | 'configuration' | 'roles' | 'users' | 'api-keys';
+type Role = { id: string; name: string; user_count: number; created_at: string | null };
+type ApiKey = { id: string; key_prefix: string; name: string; last_used_at: string | null; created_at: string | null };
 
-type Role = {
-  id: string;
-  name: string;
-  user_count: number;
-  created_at: string | null;
-};
-
-type ApiKey = {
-  id: string;
-  key_prefix: string;
-  name: string;
-  last_used_at: string | null;
-  created_at: string | null;
-};
-
-const VALID_TABS: Tab[] = ['dns', 'configuration', 'roles', 'users', 'api-keys'];
+type Tab = 'overview' | 'auth' | 'users' | 'api' | 'settings';
+const VALID_TABS: Tab[] = ['overview', 'auth', 'users', 'api', 'settings'];
 
 export default function DomainDetailPage() {
   const params = useParams();
   const router = useRouter();
   const searchParams = useSearchParams();
   const domainId = params.id as string;
+  const { addToast } = useToast();
 
-  // Get initial tab from URL or default to 'dns'
   const tabFromUrl = searchParams.get('tab') as Tab | null;
-  const initialTab = tabFromUrl && VALID_TABS.includes(tabFromUrl) ? tabFromUrl : 'dns';
+  const initialTab = tabFromUrl && VALID_TABS.includes(tabFromUrl) ? tabFromUrl : 'overview';
 
+  // Core state
   const [domain, setDomain] = useState<Domain | null>(null);
   const [authConfig, setAuthConfig] = useState<AuthConfig | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [copiedField, setCopiedField] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<Tab>(initialTab);
 
-  // Update URL when tab changes
-  const handleTabChange = useCallback((tab: Tab) => {
-    setActiveTab(tab);
-    const newParams = new URLSearchParams(searchParams.toString());
-    newParams.set('tab', tab);
-    router.replace(`/domains/${domainId}?${newParams.toString()}`, { scroll: false });
-  }, [domainId, router, searchParams]);
-  const [endUsers, setEndUsers] = useState<EndUser[]>([]);
-  const [loadingUsers, setLoadingUsers] = useState(false);
-  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const [deleteUserConfirmId, setDeleteUserConfirmId] = useState<string | null>(null);
-  const [showWhitelistModal, setShowWhitelistModal] = useState(false);
-  const [showInviteModal, setShowInviteModal] = useState(false);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [invitePreWhitelist, setInvitePreWhitelist] = useState(false);
-  const [inviting, setInviting] = useState(false);
-  const [inviteError, setInviteError] = useState('');
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // API Keys state
-  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
-  const [loadingApiKeys, setLoadingApiKeys] = useState(false);
-  const [showCreateKeyModal, setShowCreateKeyModal] = useState(false);
-  const [newKeyName, setNewKeyName] = useState('');
-  const [creatingKey, setCreatingKey] = useState(false);
-  const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
-
-  // Roles state
-  const [roles, setRoles] = useState<Role[]>([]);
-  const [loadingRoles, setLoadingRoles] = useState(false);
-  const [newRoleName, setNewRoleName] = useState('');
-  const [creatingRole, setCreatingRole] = useState(false);
-  const [roleError, setRoleError] = useState('');
-
-  // Delete domain modal state
-  const [showDeleteDomainModal, setShowDeleteDomainModal] = useState(false);
-  const [deleteDomainConfirmText, setDeleteDomainConfirmText] = useState('');
-
-  // DNS record verification status (for verifying domains)
+  // DNS verification state
   const [cnameVerified, setCnameVerified] = useState(false);
   const [txtVerified, setTxtVerified] = useState(false);
 
@@ -134,175 +85,154 @@ export default function DomainDetailPage() {
   const [fromEmail, setFromEmail] = useState('');
   const [redirectUrl, setRedirectUrl] = useState('');
   const [whitelistEnabled, setWhitelistEnabled] = useState(false);
-  const [userSearch, setUserSearch] = useState('');
   const [googleOAuthEnabled, setGoogleOAuthEnabled] = useState(false);
   const [googleClientId, setGoogleClientId] = useState('');
   const [googleClientSecret, setGoogleClientSecret] = useState('');
 
+  // Users state
+  const [endUsers, setEndUsers] = useState<EndUser[]>([]);
+  const [loadingUsers, setLoadingUsers] = useState(false);
+  const [userSearch, setUserSearch] = useState('');
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [deleteUserConfirmId, setDeleteUserConfirmId] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Invite modal state
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [invitePreWhitelist, setInvitePreWhitelist] = useState(false);
+  const [inviting, setInviting] = useState(false);
+
+  // Roles state
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [loadingRoles, setLoadingRoles] = useState(false);
+  const [newRoleName, setNewRoleName] = useState('');
+  const [creatingRole, setCreatingRole] = useState(false);
+  const [deleteRoleConfirm, setDeleteRoleConfirm] = useState<Role | null>(null);
+
+  // API Keys state
+  const [apiKeys, setApiKeys] = useState<ApiKey[]>([]);
+  const [loadingApiKeys, setLoadingApiKeys] = useState(false);
+  const [showCreateKeyModal, setShowCreateKeyModal] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('');
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
+
+  // Delete domain modal
+  const [showDeleteDomainModal, setShowDeleteDomainModal] = useState(false);
+
+  // Whitelist modal
+  const [showWhitelistModal, setShowWhitelistModal] = useState(false);
+
+  // Tab change handler
+  const handleTabChange = useCallback((tab: Tab) => {
+    setActiveTab(tab);
+    const newParams = new URLSearchParams(searchParams.toString());
+    newParams.set('tab', tab);
+    router.replace(`/domains/${domainId}?${newParams.toString()}`, { scroll: false });
+  }, [domainId, router, searchParams]);
+
+  // Fetch functions
   const fetchData = useCallback(async () => {
     try {
       const domainRes = await fetch(`/api/domains/${domainId}`, { credentials: 'include' });
-
       if (domainRes.ok) {
         const domainData = await domainRes.json();
         setDomain(domainData);
-
-        // Only fetch auth config if domain is verified
-        if (domainData.status === 'verified') {
-          const configRes = await fetch(`/api/domains/${domainId}/auth-config`, { credentials: 'include' });
-          if (configRes.ok) {
-            const configData = await configRes.json();
-            setAuthConfig(configData);
-            setMagicLinkEnabled(configData.magic_link_enabled);
-            setGoogleOAuthEnabled(configData.google_oauth_enabled);
-            setRedirectUrl(configData.redirect_url || '');
-            setWhitelistEnabled(configData.whitelist_enabled);
-            if (configData.magic_link_config) {
-              setFromEmail(configData.magic_link_config.from_email);
-            }
+        // Fetch auth config for all domains
+        const configRes = await fetch(`/api/domains/${domainId}/auth-config`, { credentials: 'include' });
+        if (configRes.ok) {
+          const configData = await configRes.json();
+          setAuthConfig(configData);
+          setMagicLinkEnabled(configData.magic_link_enabled);
+          setGoogleOAuthEnabled(configData.google_oauth_enabled);
+          setRedirectUrl(configData.redirect_url || '');
+          setWhitelistEnabled(configData.whitelist_enabled);
+          if (configData.magic_link_config) {
+            setFromEmail(configData.magic_link_config.from_email);
           }
         }
       }
     } catch {
-      setError('Failed to load domain');
+      addToast('Failed to load domain', 'error');
     } finally {
       setLoading(false);
     }
-  }, [domainId]);
-
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
-
-  // Close menu when clicking outside
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setOpenMenuId(null);
-      }
-    };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
+  }, [domainId, addToast]);
 
   const fetchEndUsers = useCallback(async () => {
-    if (!domain || domain.status !== 'verified') return;
+    if (!domain) return;
     setLoadingUsers(true);
     try {
       const res = await fetch(`/api/domains/${domainId}/end-users`, { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        setEndUsers(data);
-      }
-    } catch {
-      // Ignore
-    } finally {
-      setLoadingUsers(false);
-    }
+      if (res.ok) setEndUsers(await res.json());
+    } catch { /* ignore */ } finally { setLoadingUsers(false); }
   }, [domainId, domain]);
-
-  useEffect(() => {
-    if (activeTab === 'users' && domain?.status === 'verified') {
-      fetchEndUsers();
-    }
-  }, [activeTab, domain, fetchEndUsers]);
-
-  const fetchApiKeys = useCallback(async () => {
-    if (!domain || domain.status !== 'verified') return;
-    setLoadingApiKeys(true);
-    try {
-      const res = await fetch(`/api/domains/${domainId}/api-keys`, { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        setApiKeys(data);
-      }
-    } catch {
-      // Ignore
-    } finally {
-      setLoadingApiKeys(false);
-    }
-  }, [domainId, domain]);
-
-  useEffect(() => {
-    if (activeTab === 'api-keys' && domain?.status === 'verified') {
-      fetchApiKeys();
-    }
-  }, [activeTab, domain, fetchApiKeys]);
 
   const fetchRoles = useCallback(async () => {
-    if (!domain || domain.status !== 'verified') return;
+    if (!domain) return;
     setLoadingRoles(true);
     try {
       const res = await fetch(`/api/domains/${domainId}/roles`, { credentials: 'include' });
-      if (res.ok) {
-        const data = await res.json();
-        setRoles(data);
-      }
-    } catch {
-      // Ignore
-    } finally {
-      setLoadingRoles(false);
-    }
+      if (res.ok) setRoles(await res.json());
+    } catch { /* ignore */ } finally { setLoadingRoles(false); }
   }, [domainId, domain]);
 
-  useEffect(() => {
-    if (activeTab === 'roles' && domain?.status === 'verified') {
-      fetchRoles();
-    }
-  }, [activeTab, domain, fetchRoles]);
+  const fetchApiKeys = useCallback(async () => {
+    if (!domain) return;
+    setLoadingApiKeys(true);
+    try {
+      const res = await fetch(`/api/domains/${domainId}/api-keys`, { credentials: 'include' });
+      if (res.ok) setApiKeys(await res.json());
+    } catch { /* ignore */ } finally { setLoadingApiKeys(false); }
+  }, [domainId, domain]);
 
-  // Poll for verification status when domain is verifying
+  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => { if ((activeTab === 'users' || activeTab === 'overview') && domain) { fetchEndUsers(); fetchRoles(); } }, [activeTab, domain, fetchEndUsers, fetchRoles]);
+  useEffect(() => { if ((activeTab === 'api' || activeTab === 'overview') && domain) fetchApiKeys(); }, [activeTab, domain, fetchApiKeys]);
+
+  // Poll for verification status
   useEffect(() => {
     if (!domain || (domain.status !== 'verifying' && domain.status !== 'pending_dns')) return;
-
     const checkStatus = async () => {
       try {
         const res = await fetch(`/api/domains/${domainId}/status`, { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
-          // Update individual record status
           setCnameVerified(data.cname_verified);
           setTxtVerified(data.txt_verified);
-          if (data.status !== domain.status) {
-            fetchData(); // Refetch all data when status changes
-          }
+          if (data.status !== domain.status) fetchData();
         }
-      } catch {
-        // Continue polling
-      }
+      } catch { /* continue */ }
     };
-
-    // Check immediately on mount
     checkStatus();
-
     const interval = setInterval(checkStatus, 5000);
-
     return () => clearInterval(interval);
   }, [domain, domainId, fetchData]);
 
+  // Close menu on click outside
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (menuRef.current && !menuRef.current.contains(e.target as Node)) setOpenMenuId(null);
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Handlers
   const handleStartVerification = async () => {
     try {
-      const res = await fetch(`/api/domains/${domainId}/verify`, {
-        method: 'POST',
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        fetchData();
-      } else {
-        setError('Failed to start verification');
-      }
+      const res = await fetch(`/api/domains/${domainId}/verify`, { method: 'POST', credentials: 'include' });
+      if (res.ok) fetchData();
+      else addToast('Failed to start verification', 'error');
     } catch {
-      setError('Network error. Please try again.');
+      addToast('Network error', 'error');
     }
   };
 
   const handleSaveConfig = async (e: React.FormEvent, whitelistAllExisting = false) => {
     e.preventDefault();
-    setError('');
-    setSuccess('');
     setSaving(true);
-
     try {
       const payload: Record<string, unknown> = {
         magic_link_enabled: magicLinkEnabled,
@@ -311,129 +241,78 @@ export default function DomainDetailPage() {
         whitelist_enabled: whitelistEnabled,
         whitelist_all_existing: whitelistAllExisting,
       };
-
       if (magicLinkEnabled) {
-        if (resendApiKey) {
-          payload.resend_api_key = resendApiKey;
-        }
-        if (fromEmail) {
-          payload.from_email = fromEmail;
-        }
+        if (resendApiKey) payload.resend_api_key = resendApiKey;
+        if (fromEmail) payload.from_email = fromEmail;
       }
-
       if (googleOAuthEnabled && googleClientId && googleClientSecret) {
         payload.google_client_id = googleClientId;
         payload.google_client_secret = googleClientSecret;
       }
-
       const res = await fetch(`/api/domains/${domainId}/auth-config`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
         credentials: 'include',
       });
-
       if (res.ok) {
-        setSuccess('Configuration saved successfully');
+        addToast('Configuration saved successfully', 'success');
         setResendApiKey('');
         setGoogleClientId('');
         setGoogleClientSecret('');
         fetchData();
       } else {
-        const errData = await res.json().catch(() => ({}));
-        setError(errData.message || 'Failed to save configuration');
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to save configuration', 'error');
       }
     } catch {
-      setError('Network error. Please try again.');
+      addToast('Network error', 'error');
     } finally {
       setSaving(false);
     }
   };
 
   const handleRemoveCustomConfig = async () => {
-    setError('');
-    setSuccess('');
-
     try {
-      const res = await fetch(`/api/domains/${domainId}/auth-config/magic-link`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        setSuccess('Custom email configuration removed');
-        setResendApiKey('');
-        setFromEmail('');
-        fetchData();
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setError(errData.message || 'Failed to remove configuration');
-      }
+      const res = await fetch(`/api/domains/${domainId}/auth-config/magic-link`, { method: 'DELETE', credentials: 'include' });
+      if (res.ok) { addToast('Custom email configuration removed', 'success'); fetchData(); }
+      else addToast('Failed to remove configuration', 'error');
     } catch {
-      setError('Network error. Please try again.');
+      addToast('Network error', 'error');
     }
   };
 
   const handleRemoveGoogleOAuthConfig = async () => {
-    setError('');
-    setSuccess('');
-
     try {
-      const res = await fetch(`/api/domains/${domainId}/auth-config/google-oauth`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        setSuccess('Custom Google OAuth configuration removed');
-        setGoogleClientId('');
-        setGoogleClientSecret('');
-        fetchData();
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setError(errData.message || 'Failed to remove configuration');
-      }
+      const res = await fetch(`/api/domains/${domainId}/auth-config/google-oauth`, { method: 'DELETE', credentials: 'include' });
+      if (res.ok) { addToast('Google OAuth configuration removed', 'success'); fetchData(); }
+      else addToast('Failed to remove configuration', 'error');
     } catch {
-      setError('Network error. Please try again.');
+      addToast('Network error', 'error');
     }
   };
 
   const handleWhitelistToggle = (enabled: boolean) => {
-    if (enabled && !authConfig?.whitelist_enabled) {
-      // Show whitelist modal to ask about existing users
-      setShowWhitelistModal(true);
-    } else {
-      setWhitelistEnabled(enabled);
-    }
+    if (enabled && !authConfig?.whitelist_enabled) setShowWhitelistModal(true);
+    else setWhitelistEnabled(enabled);
   };
 
   const handleWhitelistConfirm = async (whitelistAllExisting: boolean) => {
     setShowWhitelistModal(false);
     setWhitelistEnabled(true);
-
     if (whitelistAllExisting) {
       setSaving(true);
       try {
         const res = await fetch(`/api/domains/${domainId}/auth-config`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            magic_link_enabled: magicLinkEnabled,
-            google_oauth_enabled: googleOAuthEnabled,
-            redirect_url: redirectUrl || null,
-            whitelist_enabled: true,
-            whitelist_all_existing: true,
-          }),
+          body: JSON.stringify({ magic_link_enabled: magicLinkEnabled, google_oauth_enabled: googleOAuthEnabled, redirect_url: redirectUrl || null, whitelist_enabled: true, whitelist_all_existing: true }),
           credentials: 'include',
         });
-        if (res.ok) {
-          setSuccess('Whitelist enabled and all existing users have been whitelisted');
-          fetchData();
-        } else {
-          setError('Failed to enable whitelist');
-        }
+        if (res.ok) { addToast('Whitelist enabled and all existing users whitelisted', 'success'); fetchData(); }
+        else addToast('Failed to enable whitelist', 'error');
       } catch {
-        setError('Network error');
+        addToast('Network error', 'error');
       } finally {
         setSaving(false);
       }
@@ -442,150 +321,65 @@ export default function DomainDetailPage() {
 
   const handleDeleteDomain = async () => {
     try {
-      const res = await fetch(`/api/domains/${domainId}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        router.push('/domains');
-      } else {
-        setError('Failed to delete domain');
-      }
+      const res = await fetch(`/api/domains/${domainId}`, { method: 'DELETE', credentials: 'include' });
+      if (res.ok) router.push('/domains');
+      else addToast('Failed to delete domain', 'error');
     } catch {
-      setError('Network error. Please try again.');
+      addToast('Network error', 'error');
     }
   };
 
   const handleUserAction = async (userId: string, action: 'freeze' | 'unfreeze' | 'whitelist' | 'unwhitelist' | 'delete') => {
-    if (action === 'delete') {
-      setDeleteUserConfirmId(null);
-    }
-
-    const methodMap = {
-      freeze: 'POST',
-      unfreeze: 'DELETE',
-      whitelist: 'POST',
-      unwhitelist: 'DELETE',
-      delete: 'DELETE',
-    };
-
-    const urlMap = {
+    if (action === 'delete') setDeleteUserConfirmId(null);
+    const methods = { freeze: 'POST', unfreeze: 'DELETE', whitelist: 'POST', unwhitelist: 'DELETE', delete: 'DELETE' };
+    const urls = {
       freeze: `/api/domains/${domainId}/end-users/${userId}/freeze`,
       unfreeze: `/api/domains/${domainId}/end-users/${userId}/freeze`,
       whitelist: `/api/domains/${domainId}/end-users/${userId}/whitelist`,
       unwhitelist: `/api/domains/${domainId}/end-users/${userId}/whitelist`,
       delete: `/api/domains/${domainId}/end-users/${userId}`,
     };
-
     try {
-      const res = await fetch(urlMap[action], {
-        method: methodMap[action],
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        setOpenMenuId(null);
-        fetchEndUsers();
-      } else {
-        setError(`Failed to ${action} user`);
-      }
+      const res = await fetch(urls[action], { method: methods[action], credentials: 'include' });
+      if (res.ok) { setOpenMenuId(null); fetchEndUsers(); }
+      else addToast(`Failed to ${action} user`, 'error');
     } catch {
-      setError('Network error. Please try again.');
+      addToast('Network error', 'error');
     }
   };
 
   const handleInviteUser = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!inviteEmail.trim()) return;
-
     setInviting(true);
-    setInviteError('');
-
     try {
       const res = await fetch(`/api/domains/${domainId}/end-users/invite`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: inviteEmail.trim(),
-          pre_whitelist: invitePreWhitelist,
-        }),
+        body: JSON.stringify({ email: inviteEmail.trim(), pre_whitelist: invitePreWhitelist }),
         credentials: 'include',
       });
-
       if (res.ok) {
         setShowInviteModal(false);
         setInviteEmail('');
         setInvitePreWhitelist(false);
-        setSuccess('Invitation sent successfully');
+        addToast('Invitation sent', 'success');
         fetchEndUsers();
       } else {
-        const errData = await res.json().catch(() => ({}));
-        setInviteError(errData.message || 'Failed to invite user');
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to invite user', 'error');
       }
     } catch {
-      setInviteError('Network error. Please try again.');
+      addToast('Network error', 'error');
     } finally {
       setInviting(false);
-    }
-  };
-
-  const handleCreateApiKey = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setCreatingKey(true);
-    setError('');
-
-    try {
-      const res = await fetch(`/api/domains/${domainId}/api-keys`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newKeyName.trim() || 'Default' }),
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        const data = await res.json();
-        setNewlyCreatedKey(data.key);
-        setNewKeyName('');
-        fetchApiKeys();
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setError(errData.message || 'Failed to create API key');
-        setShowCreateKeyModal(false);
-      }
-    } catch {
-      setError('Network error. Please try again.');
-      setShowCreateKeyModal(false);
-    } finally {
-      setCreatingKey(false);
-    }
-  };
-
-  const handleRevokeApiKeyDirect = async (keyId: string) => {
-    try {
-      const res = await fetch(`/api/domains/${domainId}/api-keys/${keyId}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        setSuccess('API key revoked successfully');
-        fetchApiKeys();
-      } else {
-        setError('Failed to revoke API key');
-      }
-    } catch {
-      setError('Network error. Please try again.');
     }
   };
 
   const handleCreateRole = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newRoleName.trim()) return;
-
     setCreatingRole(true);
-    setRoleError('');
-
     try {
       const res = await fetch(`/api/domains/${domainId}/roles`, {
         method: 'POST',
@@ -593,1695 +387,703 @@ export default function DomainDetailPage() {
         body: JSON.stringify({ name: newRoleName.trim().toLowerCase() }),
         credentials: 'include',
       });
-
-      if (res.ok) {
-        setNewRoleName('');
-        fetchRoles();
-      } else {
-        const errData = await res.json().catch(() => ({}));
-        setRoleError(errData.message || 'Failed to create role');
+      if (res.ok) { setNewRoleName(''); fetchRoles(); addToast('Role created', 'success'); }
+      else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to create role', 'error');
       }
     } catch {
-      setRoleError('Network error. Please try again.');
+      addToast('Network error', 'error');
     } finally {
       setCreatingRole(false);
     }
   };
 
-  const handleDeleteRole = async (roleName: string) => {
+  const handleDeleteRole = async () => {
+    if (!deleteRoleConfirm) return;
+    const roleName = deleteRoleConfirm.name;
     try {
-      const res = await fetch(`/api/domains/${domainId}/roles/${encodeURIComponent(roleName)}`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
-
-      if (res.ok) {
-        setSuccess(`Role "${roleName}" deleted`);
-        fetchRoles();
-        fetchEndUsers(); // Refresh users to update their roles
-      } else {
-        setError('Failed to delete role');
-      }
+      const res = await fetch(`/api/domains/${domainId}/roles/${encodeURIComponent(roleName)}`, { method: 'DELETE', credentials: 'include' });
+      if (res.ok) { addToast(`Role "${roleName}" deleted`, 'success'); fetchRoles(); fetchEndUsers(); }
+      else addToast('Failed to delete role', 'error');
     } catch {
-      setError('Network error. Please try again.');
+      addToast('Network error', 'error');
+    } finally {
+      setDeleteRoleConfirm(null);
     }
   };
 
-  const copyToClipboard = async (text: string, field: string) => {
+  const handleCreateApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreatingKey(true);
     try {
-      await navigator.clipboard.writeText(text);
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 2000);
+      const res = await fetch(`/api/domains/${domainId}/api-keys`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newKeyName.trim() || 'Default' }),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setNewlyCreatedKey(data.key);
+        setNewKeyName('');
+        fetchApiKeys();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to create API key', 'error');
+        setShowCreateKeyModal(false);
+      }
     } catch {
-      const textArea = document.createElement('textarea');
-      textArea.value = text;
-      document.body.appendChild(textArea);
-      textArea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textArea);
-      setCopiedField(field);
-      setTimeout(() => setCopiedField(null), 2000);
+      addToast('Network error', 'error');
+    } finally {
+      setCreatingKey(false);
     }
+  };
+
+  const handleRevokeApiKey = async (keyId: string) => {
+    try {
+      const res = await fetch(`/api/domains/${domainId}/api-keys/${keyId}`, { method: 'DELETE', credentials: 'include' });
+      if (res.ok) { addToast('API key revoked', 'success'); fetchApiKeys(); }
+      else addToast('Failed to revoke API key', 'error');
+    } catch {
+      addToast('Network error', 'error');
+    }
+  };
+
+  // Helpers
+  const formatDate = (dateString: string | null) => {
+    if (!dateString) return '';
+    return new Date(dateString).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   };
 
   const getStatusBadge = (status: Domain['status']) => {
-    const styles: Record<Domain['status'], { bg: string; color: string; label: string }> = {
-      pending_dns: { bg: 'var(--accent-orange)', color: '#000', label: 'Pending DNS' },
-      verifying: { bg: 'var(--accent-blue)', color: '#000', label: 'Verifying...' },
-      verified: { bg: 'var(--accent-green)', color: '#000', label: 'Verified' },
-      failed: { bg: 'var(--accent-red)', color: '#fff', label: 'Failed' },
+    const variants: Record<Domain['status'], 'default' | 'success' | 'error' | 'warning' | 'info'> = {
+      pending_dns: 'warning',
+      verifying: 'info',
+      verified: 'success',
+      failed: 'error',
     };
-    const style = styles[status];
-    return (
-      <span
-        style={{
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 'var(--spacing-xs)',
-          padding: '4px 8px',
-          borderRadius: 'var(--radius-sm)',
-          backgroundColor: style.bg,
-          color: style.color,
-          fontSize: '12px',
-          fontWeight: 500,
-        }}
-      >
-        {status === 'verifying' && <span className="spinner" style={{ width: 12, height: 12 }} />}
-        {style.label}
-      </span>
-    );
+    const labels: Record<Domain['status'], string> = {
+      pending_dns: 'Pending DNS',
+      verifying: 'Verifying...',
+      verified: 'Verified',
+      failed: 'Failed',
+    };
+    return <Badge variant={variants[status]}>{labels[status]}</Badge>;
   };
 
-  const formatDate = (dateString: string | null) => {
-    if (!dateString) return '';
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    });
-  };
-
+  // Loading state
   if (loading) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
-        <span className="spinner" />
+      <div className="flex justify-center py-20">
+        <div className="w-6 h-6 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
       </div>
     );
   }
 
   if (!domain) {
     return (
-      <div className="card">
-        <p className="text-muted">Domain not found</p>
-        <button onClick={() => router.push('/domains')}>Back to domains</button>
-      </div>
+      <Card className="p-8 text-center">
+        <p className="text-zinc-400 mb-4">Domain not found</p>
+        <Button onClick={() => router.push('/domains')}>Back to domains</Button>
+      </Card>
     );
   }
 
+  const tabs = [
+    { id: 'overview' as Tab, label: 'Overview' },
+    { id: 'auth' as Tab, label: 'Auth' },
+    { id: 'users' as Tab, label: 'Users' },
+    { id: 'api' as Tab, label: 'API' },
+    { id: 'settings' as Tab, label: 'Settings' },
+  ];
+
   return (
-    <>
-      {/* Header */}
-      <button
-        onClick={() => router.push('/domains')}
-        style={{
-          background: 'none',
-          border: 'none',
-          color: 'var(--text-muted)',
-          cursor: 'pointer',
-          padding: 0,
-          marginBottom: 'var(--spacing-md)',
-        }}
-      >
-        &larr; Back to domains
-      </button>
-
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--spacing-lg)' }}>
+    <div className="flex flex-col h-full">
+      {/* Sticky Header */}
+      <div className="sticky top-0 z-10 bg-zinc-950 border-b border-zinc-800 px-4 sm:px-6 py-3 sm:py-4">
         <div>
-          <h1 style={{ marginBottom: 'var(--spacing-xs)' }}>{domain.domain}</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)' }}>
-            {domain.created_at && (
-              <span className="text-muted" style={{ fontSize: '14px' }}>
-                Created {formatDate(domain.created_at)}
-              </span>
-            )}
-            {getStatusBadge(domain.status)}
+          <div className="flex items-center gap-2 text-sm text-zinc-400 mb-2 sm:mb-3">
+            <Link href="/domains" className="hover:text-white transition-colors">Domains</Link>
+            <ChevronRight size={14} />
+            <span className="text-white truncate">{domain.domain}</span>
           </div>
-        </div>
-        <button
-          onClick={() => setShowDeleteDomainModal(true)}
-          style={{
-            backgroundColor: 'var(--accent-red)',
-            color: '#fff',
-            border: 'none',
-          }}
-        >
-          Delete Domain
-        </button>
-      </div>
 
-      {error && (
-        <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
-          {error}
-        </div>
-      )}
-
-      {success && (
-        <div className="message success" style={{ marginBottom: 'var(--spacing-md)' }}>
-          {success}
-        </div>
-      )}
-
-      {/* No Auth Methods Warning */}
-      {domain.status === 'verified' && !magicLinkEnabled && !googleOAuthEnabled && (
-        <div className="message warning" style={{ marginBottom: 'var(--spacing-md)' }}>
-          No login methods are enabled. Go to the Configuration tab to enable Magic Link or Google OAuth.
-        </div>
-      )}
-
-      {/* Verifying Banner */}
-      {domain.status === 'verifying' && (
-        <div
-          className="card"
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 'var(--spacing-md)',
-            backgroundColor: 'var(--bg-tertiary)',
-            marginBottom: 'var(--spacing-lg)',
-          }}
-        >
-          <div className="spinner" />
-          <div>
-            <div style={{ fontWeight: 600 }}>Looking for DNS records...</div>
-            <p className="text-muted" style={{ margin: 0, fontSize: '14px' }}>
-              May take a few minutes or hours depending on your DNS provider.
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* Tabs */}
-      <div style={{
-        display: 'flex',
-        gap: 'var(--spacing-xs)',
-        marginBottom: 'var(--spacing-lg)',
-        borderBottom: '1px solid var(--border-primary)',
-      }}>
-        {[
-          { id: 'dns' as Tab, label: 'DNS Records' },
-          ...(domain.status === 'verified' ? [
-            { id: 'configuration' as Tab, label: 'Configuration' },
-            { id: 'roles' as Tab, label: 'Roles' },
-            { id: 'users' as Tab, label: 'Users' },
-            { id: 'api-keys' as Tab, label: 'API Keys' },
-          ] : []),
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => handleTabChange(tab.id)}
-            style={{
-              padding: 'var(--spacing-sm) var(--spacing-md)',
-              backgroundColor: activeTab === tab.id ? 'var(--bg-tertiary)' : 'transparent',
-              border: activeTab === tab.id ? '1px solid var(--border-primary)' : '1px solid transparent',
-              borderBottom: activeTab === tab.id ? '1px solid var(--bg-tertiary)' : '1px solid transparent',
-              borderRadius: 'var(--radius-sm) var(--radius-sm) 0 0',
-              color: activeTab === tab.id ? 'var(--text-primary)' : 'var(--text-muted)',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: activeTab === tab.id ? 600 : 400,
-              marginBottom: '-1px',
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
-      </div>
-
-      {/* DNS Records Tab */}
-      {activeTab === 'dns' && domain.dns_records && (
-        <>
-          <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--spacing-md)' }}>
-              <h2 style={{ margin: 0 }}>DNS Records</h2>
-              <a
-                href="https://resend.com/docs/knowledge-base/godaddy"
-                target="_blank"
-                rel="noopener noreferrer"
-                style={{ color: 'var(--accent-blue)', fontSize: '14px' }}
-              >
-                How to add records
-              </a>
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+              <h1 className="text-lg sm:text-2xl font-bold truncate">{domain.domain}</h1>
+              {domain.status === 'verified' ? (
+                <Badge variant="success">verified</Badge>
+              ) : (
+                <Badge variant="error">pending</Badge>
+              )}
             </div>
-
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--spacing-md)' }}>
-              {/* CNAME Record */}
-              <div
-                style={{
-                  backgroundColor: 'var(--bg-tertiary)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: 'var(--spacing-md)',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>CNAME Record</span>
-                  {(domain.status === 'verified' || cnameVerified) ? (
-                    <span style={{
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      backgroundColor: 'var(--accent-green)',
-                      color: '#000',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                    }}>Verified</span>
-                  ) : domain.status === 'verifying' ? (
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      backgroundColor: 'var(--accent-orange)',
-                      color: '#000',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                    }}>
-                      <span className="spinner" style={{ width: 10, height: 10 }} />
-                      Verifying
-                    </span>
-                  ) : null}
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
-                  <span className="text-muted">Name</span>
-                  <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                    {domain.dns_records.cname_name}
-                  </code>
-                  <button
-                    onClick={() => copyToClipboard(domain.dns_records!.cname_name, 'cname_name')}
-                    style={{ padding: '4px 8px', fontSize: '12px' }}
-                  >
-                    {copiedField === 'cname_name' ? 'Copied!' : 'Copy'}
-                  </button>
-
-                  <span className="text-muted">Value</span>
-                  <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                    {domain.dns_records.cname_value}
-                  </code>
-                  <button
-                    onClick={() => copyToClipboard(domain.dns_records!.cname_value, 'cname_value')}
-                    style={{ padding: '4px 8px', fontSize: '12px' }}
-                  >
-                    {copiedField === 'cname_value' ? 'Copied!' : 'Copy'}
-                  </button>
-                </div>
-              </div>
-
-              {/* TXT Record */}
-              <div
-                style={{
-                  backgroundColor: 'var(--bg-tertiary)',
-                  borderRadius: 'var(--radius-md)',
-                  padding: 'var(--spacing-md)',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 'var(--spacing-sm)' }}>
-                  <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>TXT Record</span>
-                  {(domain.status === 'verified' || txtVerified) ? (
-                    <span style={{
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      backgroundColor: 'var(--accent-green)',
-                      color: '#000',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                    }}>Verified</span>
-                  ) : domain.status === 'verifying' ? (
-                    <span style={{
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      gap: '4px',
-                      padding: '2px 8px',
-                      borderRadius: 'var(--radius-sm)',
-                      backgroundColor: 'var(--accent-orange)',
-                      color: '#000',
-                      fontSize: '11px',
-                      fontWeight: 500,
-                    }}>
-                      <span className="spinner" style={{ width: 10, height: 10 }} />
-                      Verifying
-                    </span>
-                  ) : null}
-                </div>
-                <div style={{ display: 'grid', gridTemplateColumns: '80px 1fr auto', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
-                  <span className="text-muted">Name</span>
-                  <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                    {domain.dns_records.txt_name}
-                  </code>
-                  <button
-                    onClick={() => copyToClipboard(domain.dns_records!.txt_name, 'txt_name')}
-                    style={{ padding: '4px 8px', fontSize: '12px' }}
-                  >
-                    {copiedField === 'txt_name' ? 'Copied!' : 'Copy'}
-                  </button>
-
-                  <span className="text-muted">Value</span>
-                  <code style={{ backgroundColor: 'var(--bg-secondary)', padding: '4px 8px', borderRadius: '4px', fontSize: '13px' }}>
-                    {domain.dns_records.txt_value}
-                  </code>
-                  <button
-                    onClick={() => copyToClipboard(domain.dns_records!.txt_value, 'txt_value')}
-                    style={{ padding: '4px 8px', fontSize: '12px' }}
-                  >
-                    {copiedField === 'txt_value' ? 'Copied!' : 'Copy'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* Start verification button for pending_dns status */}
-            {domain.status === 'pending_dns' && (
-              <button
-                className="primary"
-                onClick={handleStartVerification}
-                style={{ marginTop: 'var(--spacing-lg)' }}
-              >
-                I&apos;ve added the records
-              </button>
-            )}
-
-            {/* Retry button for failed status */}
-            {domain.status === 'failed' && (
-              <div style={{ marginTop: 'var(--spacing-lg)' }}>
-                <div className="message error" style={{ marginBottom: 'var(--spacing-md)' }}>
-                  DNS verification failed. Please check your DNS records and try again.
-                </div>
-                <button className="primary" onClick={handleStartVerification}>
-                  Retry verification
-                </button>
-              </div>
-            )}
-          </div>
-        </>
-      )}
-
-      {/* Configuration Tab */}
-      {activeTab === 'configuration' && domain.status === 'verified' && (
-        <>
-          <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-            <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Configuration</h2>
-            <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-              Login URL:{' '}
+            {domain.status === 'verified' && (
               <a
                 href={`https://reauth.${domain.domain}`}
                 target="_blank"
                 rel="noopener noreferrer"
-                style={{ color: 'var(--accent-blue)' }}
+                className="hidden sm:flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300 transition-colors flex-shrink-0"
               >
-                https://reauth.{domain.domain}
+                <ExternalLink size={14} /> Open login page
               </a>
-            </p>
-          </div>
-
-          <form onSubmit={handleSaveConfig}>
-            {/* Magic Link Section */}
-            <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Magic Link</h2>
-                  <p className="text-muted" style={{ margin: 0 }}>
-                    Allow users to sign in with a magic link sent to their email.
-                  </p>
-                </div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={magicLinkEnabled}
-                    onChange={(e) => setMagicLinkEnabled(e.target.checked)}
-                    style={{ width: 18, height: 18 }}
-                  />
-                  <span>{magicLinkEnabled ? 'Enabled' : 'Disabled'}</span>
-                </label>
-              </div>
-
-              {magicLinkEnabled && (
-                <div style={{ marginTop: 'var(--spacing-lg)', borderTop: '1px solid var(--border-primary)', paddingTop: 'var(--spacing-lg)' }}>
-                  {/* Show indicator for custom vs fallback config */}
-                  {authConfig?.magic_link_config?.has_api_key && (
-                    <>
-                      <div
-                        style={{
-                          marginBottom: 'var(--spacing-md)',
-                          padding: 'var(--spacing-sm) var(--spacing-md)',
-                          backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                          border: '1px solid rgba(34, 197, 94, 0.3)',
-                          borderRadius: 'var(--radius-sm)',
-                        }}
-                      >
-                        <span style={{ color: 'rgb(34, 197, 94)' }}>Using your custom email configuration</span>
-                        <span className="text-muted" style={{ marginLeft: 'var(--spacing-sm)' }}>
-                          ({authConfig.magic_link_config.from_email})
-                        </span>
-                      </div>
-                      {authConfig?.fallback_from_email && (
-                        <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                          <HoldToConfirmButton
-                            label="Remove custom config"
-                            holdingLabel="Hold to remove..."
-                            onConfirm={handleRemoveCustomConfig}
-                            variant="danger"
-                            duration={2000}
-                            style={{ fontSize: '13px', padding: '6px 12px' }}
-                          />
-                          <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
-                            Switch back to reauth&apos;s shared email service ({authConfig.fallback_from_email})
-                          </p>
-                        </div>
-                      )}
-                    </>
-                  )}
-                  {!authConfig?.magic_link_config?.has_api_key && authConfig?.using_fallback && (
-                    <div
-                      style={{
-                        marginBottom: 'var(--spacing-md)',
-                        padding: 'var(--spacing-sm) var(--spacing-md)',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        border: '1px solid rgba(59, 130, 246, 0.3)',
-                        borderRadius: 'var(--radius-sm)',
-                      }}
-                    >
-                      <div style={{ fontWeight: 500, marginBottom: 4 }}>Using reauth&apos;s shared email service</div>
-                      <div className="text-muted" style={{ fontSize: '13px' }}>
-                        Magic links will be sent from <code style={{ backgroundColor: 'var(--bg-tertiary)', padding: '2px 6px', borderRadius: 4 }}>{authConfig.fallback_from_email}</code>
-                      </div>
-                      <div className="text-muted" style={{ fontSize: '12px', marginTop: 4 }}>
-                        Add your own Resend API key below for custom branding.
-                      </div>
-                    </div>
-                  )}
-
-                  <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                    <label htmlFor="resendApiKey">
-                      Resend API Key
-                      {authConfig?.using_fallback && !authConfig?.magic_link_config?.has_api_key && (
-                        <span className="text-muted" style={{ fontWeight: 'normal', marginLeft: 'var(--spacing-sm)' }}>(optional)</span>
-                      )}
-                    </label>
-                    <input
-                      id="resendApiKey"
-                      type="password"
-                      value={resendApiKey}
-                      onChange={(e) => setResendApiKey(e.target.value)}
-                      placeholder={authConfig?.magic_link_config?.has_api_key ? '••••••••••••••••' : 'Enter your Resend API key'}
-                    />
-                    <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
-                      Get your API key from{' '}
-                      <a href="https://resend.com/api-keys" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)' }}>
-                        resend.com/api-keys
-                      </a>
-                      {authConfig?.magic_link_config?.has_api_key && ' (leave blank to keep existing key)'}
-                    </p>
-                  </div>
-
-                  <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                    <label htmlFor="fromEmail">
-                      From Email
-                      {authConfig?.using_fallback && !authConfig?.magic_link_config?.has_api_key && (
-                        <span className="text-muted" style={{ fontWeight: 'normal', marginLeft: 'var(--spacing-sm)' }}>(optional)</span>
-                      )}
-                    </label>
-                    <input
-                      id="fromEmail"
-                      type="email"
-                      value={fromEmail}
-                      onChange={(e) => setFromEmail(e.target.value)}
-                      placeholder={authConfig?.using_fallback ? authConfig.fallback_from_email || 'noreply@yourdomain.com' : 'noreply@yourdomain.com'}
-                    />
-                    <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
-                      The email address magic links will be sent from. Must be verified in Resend.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Google OAuth Section */}
-            <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Google OAuth</h2>
-                  <p className="text-muted" style={{ margin: 0 }}>
-                    Allow users to sign in with their Google account.
-                  </p>
-                </div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={googleOAuthEnabled}
-                    onChange={(e) => setGoogleOAuthEnabled(e.target.checked)}
-                    style={{ width: 18, height: 18 }}
-                  />
-                  <span>{googleOAuthEnabled ? 'Enabled' : 'Disabled'}</span>
-                </label>
-              </div>
-
-              {googleOAuthEnabled && (
-                <div style={{ marginTop: 'var(--spacing-lg)', borderTop: '1px solid var(--border-primary)', paddingTop: 'var(--spacing-lg)' }}>
-                  {/* Show indicator for custom vs fallback config */}
-                  {authConfig?.google_oauth_config?.has_client_secret && (
-                    <>
-                      <div
-                        style={{
-                          marginBottom: 'var(--spacing-md)',
-                          padding: 'var(--spacing-sm) var(--spacing-md)',
-                          backgroundColor: 'rgba(34, 197, 94, 0.1)',
-                          border: '1px solid rgba(34, 197, 94, 0.3)',
-                          borderRadius: 'var(--radius-sm)',
-                        }}
-                      >
-                        <span style={{ color: 'rgb(34, 197, 94)' }}>Using your custom Google OAuth credentials</span>
-                        <span className="text-muted" style={{ marginLeft: 'var(--spacing-sm)' }}>
-                          (Client ID: {authConfig.google_oauth_config.client_id_prefix}...)
-                        </span>
-                      </div>
-                      {authConfig?.using_google_fallback !== undefined && (
-                        <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                          <HoldToConfirmButton
-                            label="Remove custom config"
-                            holdingLabel="Hold to remove..."
-                            onConfirm={handleRemoveGoogleOAuthConfig}
-                            variant="danger"
-                            duration={2000}
-                            style={{ fontSize: '13px', padding: '6px 12px' }}
-                          />
-                          <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
-                            Switch back to reauth&apos;s shared Google OAuth credentials
-                          </p>
-                        </div>
-                      )}
-                    </>
-                  )}
-                  {!authConfig?.google_oauth_config?.has_client_secret && authConfig?.using_google_fallback && (
-                    <div
-                      style={{
-                        marginBottom: 'var(--spacing-md)',
-                        padding: 'var(--spacing-sm) var(--spacing-md)',
-                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                        border: '1px solid rgba(59, 130, 246, 0.3)',
-                        borderRadius: 'var(--radius-sm)',
-                      }}
-                    >
-                      <div style={{ fontWeight: 500, marginBottom: 4 }}>Using reauth&apos;s shared Google OAuth</div>
-                      <div className="text-muted" style={{ fontSize: '13px' }}>
-                        Users will see &quot;Sign in with Google&quot; powered by reauth.
-                      </div>
-                      <div className="text-muted" style={{ fontSize: '12px', marginTop: 4 }}>
-                        Add your own Google OAuth credentials below for custom branding.
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Google Cloud Console Setup Instructions */}
-                  <div
-                    style={{
-                      marginBottom: 'var(--spacing-lg)',
-                      backgroundColor: 'var(--bg-tertiary)',
-                      borderRadius: 'var(--radius-md)',
-                      padding: 'var(--spacing-md)',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--spacing-md)' }}>
-                      <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600 }}>Google Cloud Console Setup</h3>
-                      <a
-                        href="https://console.cloud.google.com/apis/credentials"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{ color: 'var(--accent-blue)', fontSize: '13px' }}
-                      >
-                        Open Console
-                      </a>
-                    </div>
-
-                    {/* Authorized Redirect URI */}
-                    <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: 'var(--spacing-xs)' }}>
-                        Authorized redirect URI (add this to your OAuth client)
-                      </div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
-                        <code style={{
-                          flex: 1,
-                          backgroundColor: 'var(--bg-secondary)',
-                          padding: '8px 12px',
-                          borderRadius: '4px',
-                          fontSize: '13px',
-                          wordBreak: 'break-all',
-                        }}>
-                          {`https://reauth.${domain?.domain}/callback/google`}
-                        </code>
-                        <button
-                          type="button"
-                          onClick={() => copyToClipboard(`https://reauth.${domain?.domain}/callback/google`, 'google_redirect_uri')}
-                          style={{ padding: '6px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
-                        >
-                          {copiedField === 'google_redirect_uri' ? 'Copied!' : 'Copy'}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Setup Steps */}
-                    <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
-                      <div style={{ fontWeight: 500, marginBottom: 'var(--spacing-xs)' }}>Setup steps:</div>
-                      <ol style={{ margin: 0, paddingLeft: 'var(--spacing-md)', lineHeight: 1.6 }}>
-                        <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)' }}>Google Cloud Console → APIs &amp; Services → Credentials</a></li>
-                        <li>Create a new project or select an existing one</li>
-                        <li>Configure the <strong>OAuth consent screen</strong> (External, add your app name and email)</li>
-                        <li>Create <strong>OAuth 2.0 Client ID</strong> (Web application)</li>
-                        <li>Add the redirect URI above to <strong>Authorized redirect URIs</strong></li>
-                        <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> and paste them below</li>
-                      </ol>
-                    </div>
-                  </div>
-
-                  <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                    <label htmlFor="googleClientId">
-                      Google Client ID
-                      {authConfig?.using_google_fallback && !authConfig?.google_oauth_config?.has_client_secret && (
-                        <span className="text-muted" style={{ fontWeight: 'normal', marginLeft: 'var(--spacing-sm)' }}>(optional)</span>
-                      )}
-                    </label>
-                    <input
-                      id="googleClientId"
-                      type="text"
-                      value={googleClientId}
-                      onChange={(e) => setGoogleClientId(e.target.value)}
-                      placeholder={authConfig?.google_oauth_config?.has_client_secret ? `${authConfig.google_oauth_config.client_id_prefix}...` : 'Enter your Google Client ID'}
-                    />
-                    <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
-                      Get credentials from{' '}
-                      <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)' }}>
-                        Google Cloud Console
-                      </a>
-                      {authConfig?.google_oauth_config?.has_client_secret && ' (leave blank to keep existing)'}
-                    </p>
-                  </div>
-
-                  <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                    <label htmlFor="googleClientSecret">
-                      Google Client Secret
-                      {authConfig?.using_google_fallback && !authConfig?.google_oauth_config?.has_client_secret && (
-                        <span className="text-muted" style={{ fontWeight: 'normal', marginLeft: 'var(--spacing-sm)' }}>(optional)</span>
-                      )}
-                    </label>
-                    <input
-                      id="googleClientSecret"
-                      type="password"
-                      value={googleClientSecret}
-                      onChange={(e) => setGoogleClientSecret(e.target.value)}
-                      placeholder={authConfig?.google_oauth_config?.has_client_secret ? '••••••••••••••••' : 'Enter your Google Client Secret'}
-                    />
-                    <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
-                      The client secret from your OAuth 2.0 credentials.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Redirect URL */}
-            <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-              <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Redirect URL</h2>
-              <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-                Where to redirect users after successful login.
-              </p>
-              <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                <label htmlFor="redirectUrl">URL</label>
-                <input
-                  id="redirectUrl"
-                  type="url"
-                  value={redirectUrl}
-                  onChange={(e) => setRedirectUrl(e.target.value)}
-                  placeholder="https://app.yourdomain.com/callback"
-                />
-                <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
-                  Must be on <strong>{domain.domain}</strong> or a subdomain (e.g., app.{domain.domain}). If not set, users will see a &quot;Login successful&quot; message.
-                </p>
-              </div>
-            </div>
-
-            {/* Whitelist Mode */}
-            <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div>
-                  <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Whitelist Mode</h2>
-                  <p className="text-muted" style={{ margin: 0 }}>
-                    When enabled, only whitelisted users can sign in.
-                  </p>
-                </div>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={whitelistEnabled}
-                    onChange={(e) => handleWhitelistToggle(e.target.checked)}
-                    style={{ width: 18, height: 18 }}
-                  />
-                  <span>{whitelistEnabled ? 'Enabled' : 'Disabled'}</span>
-                </label>
-              </div>
-              {whitelistEnabled && (
-                <p className="text-muted" style={{ marginTop: 'var(--spacing-md)', fontSize: '13px' }}>
-                  Go to the Users tab to manage which users are whitelisted.
-                </p>
-              )}
-            </div>
-
-            {/* Save Button */}
-            <button type="submit" className="primary" disabled={saving}>
-              {saving ? 'Saving...' : 'Save changes'}
-            </button>
-              </form>
-            </>
-          )}
-
-      {/* Roles Tab */}
-      {activeTab === 'roles' && domain.status === 'verified' && (
-        <>
-          <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
-            <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Create Role</h2>
-            <p className="text-muted" style={{ marginBottom: 'var(--spacing-md)' }}>
-              Roles can be assigned to users and accessed via the SDK.
-            </p>
-            <form onSubmit={handleCreateRole} style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'flex-start' }}>
-              <div style={{ flex: 1 }}>
-                <input
-                  type="text"
-                  value={newRoleName}
-                  onChange={(e) => setNewRoleName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-                  placeholder="e.g., admin, editor, viewer"
-                  style={{ width: '100%' }}
-                />
-                <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
-                  Lowercase letters, numbers, and hyphens only.
-                </p>
-              </div>
-              <button type="submit" className="primary" disabled={creatingRole || !newRoleName.trim()}>
-                {creatingRole ? 'Creating...' : 'Create'}
-              </button>
-            </form>
-            {roleError && (
-              <div className="message error" style={{ marginTop: 'var(--spacing-sm)' }}>
-                {roleError}
-              </div>
             )}
           </div>
 
-          {loadingRoles ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
-              <span className="spinner" />
-            </div>
-          ) : roles.length === 0 ? (
-            <div className="card" style={{ textAlign: 'center' }}>
-              <p className="text-muted">No roles created yet. Create a role above to get started.</p>
-            </div>
-          ) : (
-            roles.map((role) => (
-              <div
-                key={role.id}
-                className="card"
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: 'var(--spacing-sm)',
-                }}
-              >
+          <div className="mt-3 sm:mt-4 -mx-4 sm:mx-0 px-4 sm:px-0 overflow-x-auto">
+            <Tabs
+              tabs={tabs.map(t => ({ id: t.id, label: t.label }))}
+              activeTab={activeTab}
+              onChange={(id) => handleTabChange(id as Tab)}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Tab Content */}
+      <div className="flex-1 overflow-auto p-4 sm:p-6">
+        <div className="space-y-6">
+
+      {/* Overview Tab */}
+      {activeTab === 'overview' && (
+        <div className="space-y-6">
+          {/* Unverified Warning */}
+          {domain.status !== 'verified' && (
+            <Card className="p-4 border-amber-600/30 bg-amber-900/10">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="text-amber-400 mt-0.5" size={20} />
                 <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-xs)' }}>
-                    <code style={{
-                      backgroundColor: 'var(--bg-tertiary)',
-                      padding: '4px 8px',
-                      borderRadius: '4px',
-                      fontSize: '14px',
-                      fontWeight: 600,
-                    }}>
-                      {role.name}
-                    </code>
-                  </div>
-                  <span className="text-muted" style={{ fontSize: '12px' }}>
-                    {role.user_count} {role.user_count === 1 ? 'user' : 'users'}
-                  </span>
+                  <h3 className="font-semibold text-amber-400">DNS verification required</h3>
+                  <p className="text-sm text-zinc-400 mt-1">
+                    Your domain is not yet verified. Please add the DNS records below to complete setup.
+                  </p>
                 </div>
-                <HoldToConfirmButton
-                  label="Delete"
-                  holdingLabel={`Deleting... (${role.user_count} users)`}
-                  onConfirm={() => handleDeleteRole(role.name)}
-                  variant="danger"
-                  duration={3000}
-                  style={{ fontSize: '13px', padding: '6px 12px' }}
-                />
               </div>
-            ))
+            </Card>
           )}
-        </>
+
+          {/* Verifying banner */}
+          {domain.status === 'verifying' && (
+            <Card className="p-4">
+              <div className="flex items-center gap-4">
+                <div className="w-6 h-6 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+                <div>
+                  <p className="font-medium text-white">Looking for DNS records...</p>
+                  <p className="text-sm text-zinc-400">May take a few minutes depending on your DNS provider.</p>
+                </div>
+              </div>
+            </Card>
+          )}
+
+          {/* Quick Stats - only show when verified */}
+          {domain.status === 'verified' && (
+            <div className="grid grid-cols-2 gap-4">
+              <Card className="p-4 text-center">
+                <div className="text-2xl font-bold">{roles.length}</div>
+                <div className="text-sm text-zinc-400">Roles</div>
+              </Card>
+              <Card className="p-4 text-center">
+                <div className="text-2xl font-bold">{apiKeys.length}</div>
+                <div className="text-sm text-zinc-400">API Keys</div>
+              </Card>
+            </div>
+          )}
+
+          {/* Login URL */}
+          {domain.status === 'verified' && (
+            <Card className="p-5">
+              <h3 className="font-semibold mb-3">Login URL</h3>
+              <CodeBlock value={`https://reauth.${domain.domain}`} />
+            </Card>
+          )}
+
+          {/* DNS Records */}
+          {domain.dns_records && (
+            <Card className="p-5">
+              <div className="flex items-start justify-between mb-4">
+                <h3 className="font-semibold">DNS Records</h3>
+                <a
+                  href="https://resend.com/docs/knowledge-base/godaddy"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center gap-1 text-sm text-blue-400 hover:text-blue-300"
+                >
+                  How to add records
+                  <ExternalLink size={14} />
+                </a>
+              </div>
+
+              <div className="space-y-4">
+                {/* CNAME Record */}
+                <div className="bg-zinc-800/50 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-medium text-white text-sm">CNAME Record</h4>
+                    {(domain.status === 'verified' || cnameVerified) ? (
+                      <Badge variant="success">Verified</Badge>
+                    ) : domain.status === 'verifying' ? (
+                      <Badge variant="warning">Verifying</Badge>
+                    ) : null}
+                  </div>
+                  <div className="grid grid-cols-[80px_1fr_auto] gap-3 items-center text-sm">
+                    <span className="text-zinc-500">Name</span>
+                    <code className="bg-zinc-900 px-3 py-1.5 rounded text-zinc-300 font-mono text-xs">{domain.dns_records.cname_name}</code>
+                    <CopyButton text={domain.dns_records.cname_name} />
+                    <span className="text-zinc-500">Value</span>
+                    <code className="bg-zinc-900 px-3 py-1.5 rounded text-zinc-300 font-mono text-xs">{domain.dns_records.cname_value}</code>
+                    <CopyButton text={domain.dns_records.cname_value} />
+                  </div>
+                </div>
+
+                {/* TXT Record */}
+                <div className="bg-zinc-800/50 rounded-lg p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-medium text-white text-sm">TXT Record</h4>
+                    {(domain.status === 'verified' || txtVerified) ? (
+                      <Badge variant="success">Verified</Badge>
+                    ) : domain.status === 'verifying' ? (
+                      <Badge variant="warning">Verifying</Badge>
+                    ) : null}
+                  </div>
+                  <div className="grid grid-cols-[80px_1fr_auto] gap-3 items-center text-sm">
+                    <span className="text-zinc-500">Name</span>
+                    <code className="bg-zinc-900 px-3 py-1.5 rounded text-zinc-300 font-mono text-xs">{domain.dns_records.txt_name}</code>
+                    <CopyButton text={domain.dns_records.txt_name} />
+                    <span className="text-zinc-500">Value</span>
+                    <code className="bg-zinc-900 px-3 py-1.5 rounded text-zinc-300 font-mono text-xs truncate">{domain.dns_records.txt_value}</code>
+                    <CopyButton text={domain.dns_records.txt_value} />
+                  </div>
+                </div>
+              </div>
+
+              {domain.status === 'pending_dns' && (
+                <Button variant="primary" className="mt-6" onClick={handleStartVerification}>
+                  I&apos;ve added the records
+                </Button>
+              )}
+
+              {domain.status === 'failed' && (
+                <div className="mt-6">
+                  <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/20 rounded-lg text-sm text-red-400 mb-4">
+                    <AlertTriangle size={16} />
+                    DNS verification failed. Please check your DNS records and try again.
+                  </div>
+                  <Button variant="primary" onClick={handleStartVerification}>
+                    <RefreshCw size={16} className="mr-1" />
+                    Retry verification
+                  </Button>
+                </div>
+              )}
+            </Card>
+          )}
+        </div>
+      )}
+
+      {/* Auth Tab */}
+      {activeTab === 'auth' && (
+        <form onSubmit={handleSaveConfig} className="space-y-4">
+          {/* Login URL */}
+          <Card className="p-6">
+            <h2 className="text-lg font-semibold text-white mb-2">Login URL</h2>
+            <p className="text-sm text-zinc-400">
+              Your users can sign in at{' '}
+              <a href={`https://reauth.${domain.domain}`} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline">
+                https://reauth.{domain.domain}
+              </a>
+            </p>
+          </Card>
+
+          {/* Magic Link */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Mail size={20} className="text-blue-400" />
+                  Magic Link
+                </h2>
+                <p className="text-sm text-zinc-400 mt-1">Allow users to sign in with a magic link.</p>
+              </div>
+              <Toggle enabled={magicLinkEnabled} onChange={setMagicLinkEnabled} />
+            </div>
+
+            {magicLinkEnabled && (
+              <div className="border-t border-zinc-800 pt-4 mt-4 space-y-4">
+                {authConfig?.magic_link_config?.has_api_key ? (
+                  <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <Check size={16} className="text-emerald-400" />
+                      <span className="text-sm text-emerald-200">Using custom email: {authConfig.magic_link_config.from_email}</span>
+                    </div>
+                    <HoldButton onComplete={handleRemoveCustomConfig} variant="danger" duration={2000}>Remove</HoldButton>
+                  </div>
+                ) : authConfig?.using_fallback && (
+                  <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                    <p className="text-sm text-blue-200">Using reauth&apos;s shared email service ({authConfig.fallback_from_email})</p>
+                    <p className="text-xs text-blue-300/70 mt-1">Add your own Resend API key for custom branding.</p>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-zinc-300">Resend API Key</label>
+                  <Input type="password" value={resendApiKey} onChange={(e) => setResendApiKey(e.target.value)} placeholder={authConfig?.magic_link_config?.has_api_key ? '••••••••' : 'Enter API key'} />
+                  <p className="text-xs text-zinc-500">Get your key from <a href="https://resend.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-400">resend.com</a></p>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-zinc-300">From Email</label>
+                  <Input type="email" value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} placeholder={authConfig?.fallback_from_email || 'noreply@yourdomain.com'} />
+                </div>
+              </div>
+            )}
+          </Card>
+
+          {/* Google OAuth */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white">Google OAuth</h2>
+                <p className="text-sm text-zinc-400 mt-1">Allow users to sign in with Google.</p>
+              </div>
+              <Toggle enabled={googleOAuthEnabled} onChange={setGoogleOAuthEnabled} />
+            </div>
+
+            {googleOAuthEnabled && (
+              <div className="border-t border-zinc-800 pt-4 mt-4 space-y-4">
+                {authConfig?.google_oauth_config?.has_client_secret ? (
+                  <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+                    <div className="flex items-center gap-2">
+                      <Check size={16} className="text-emerald-400" />
+                      <span className="text-sm text-emerald-200">Using custom OAuth (Client: {authConfig.google_oauth_config.client_id_prefix}...)</span>
+                    </div>
+                    <HoldButton onComplete={handleRemoveGoogleOAuthConfig} variant="danger" duration={2000}>Remove</HoldButton>
+                  </div>
+                ) : authConfig?.using_google_fallback && (
+                  <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                    <p className="text-sm text-blue-200">Using reauth&apos;s shared Google OAuth</p>
+                  </div>
+                )}
+
+                <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <h3 className="font-medium text-white text-sm">Redirect URI</h3>
+                    <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400">Open Console</a>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <code className="flex-1 bg-zinc-900 px-3 py-2 rounded text-xs text-zinc-300 font-mono break-all">
+                      https://reauth.{domain.domain}/callback/google
+                    </code>
+                    <CopyButton text={`https://reauth.${domain.domain}/callback/google`} />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-zinc-300">Google Client ID</label>
+                  <Input value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} placeholder={authConfig?.google_oauth_config?.has_client_secret ? `${authConfig.google_oauth_config.client_id_prefix}...` : 'Enter Client ID'} />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-zinc-300">Google Client Secret</label>
+                  <Input type="password" value={googleClientSecret} onChange={(e) => setGoogleClientSecret(e.target.value)} placeholder={authConfig?.google_oauth_config?.has_client_secret ? '••••••••' : 'Enter Client Secret'} />
+                </div>
+              </div>
+            )}
+          </Card>
+
+          <Button type="submit" variant="primary" disabled={saving}>
+            {saving ? 'Saving...' : 'Save changes'}
+          </Button>
+        </form>
       )}
 
       {/* Users Tab */}
-      {activeTab === 'users' && domain.status === 'verified' && (
-            <>
-              {/* Search and Invite */}
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--spacing-md)', gap: 'var(--spacing-md)' }}>
-                <input
-                  type="text"
-                  value={userSearch}
-                  onChange={(e) => setUserSearch(e.target.value)}
-                  placeholder="Search by email..."
-                  style={{ flex: 1, maxWidth: '400px' }}
-                />
-                <button className="primary" onClick={() => setShowInviteModal(true)}>
-                  Invite User
-                </button>
-              </div>
+      {activeTab === 'users' && (
+        <div className="space-y-6">
+          {/* Roles Section */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold">Roles</h3>
+              <Button variant="ghost" size="sm" onClick={() => setNewRoleName('')}>
+                <Plus size={14} /> Add role
+              </Button>
+            </div>
 
-              {loadingUsers ? (
-                <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
-                  <span className="spinner" />
-                </div>
-              ) : endUsers.length === 0 ? (
-                <div className="card" style={{ textAlign: 'center' }}>
-                  <p className="text-muted">No users have signed up yet.</p>
-                </div>
-              ) : endUsers.filter((user) => user.email.toLowerCase().includes(userSearch.toLowerCase())).length === 0 ? (
-                <div className="card" style={{ textAlign: 'center' }}>
-                  <p className="text-muted">No users match your search.</p>
-                </div>
-              ) : (
-                endUsers
-                  .filter((user) => user.email.toLowerCase().includes(userSearch.toLowerCase()))
-                  .map((user) => (
+            {newRoleName !== '' && (
+              <form onSubmit={handleCreateRole} className="flex gap-2 mb-4">
+                <Input
+                  value={newRoleName}
+                  onChange={(e) => setNewRoleName(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                  placeholder="Role name"
+                  autoFocus
+                />
+                <Button type="submit" variant="primary" disabled={creatingRole || !newRoleName.trim()}>Add</Button>
+                <Button type="button" variant="ghost" onClick={() => setNewRoleName('')}>Cancel</Button>
+              </form>
+            )}
+
+            {loadingRoles ? (
+              <div className="flex justify-center py-4">
+                <div className="w-5 h-5 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+              </div>
+            ) : roles.length === 0 ? (
+              <p className="text-sm text-zinc-500">No roles configured</p>
+            ) : (
+              <div className="flex flex-wrap gap-2">
+                {roles.map((role) => (
+                  <div key={role.id} className="flex items-center gap-1 bg-blue-900/30 border border-blue-700 px-3 py-1.5 rounded-lg text-sm group">
+                    <span className="text-blue-400">{role.name}</span>
+                    <span className="text-blue-400/50 text-xs">({role.user_count})</span>
+                    <button
+                      onClick={() => setDeleteRoleConfirm(role)}
+                      className="text-blue-400/50 hover:text-red-400 ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+
+          {/* Users Section */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold">Users ({endUsers.length})</h3>
+              <Button variant="ghost" size="sm" onClick={() => setShowInviteModal(true)}>
+                <Plus size={14} /> Add user
+              </Button>
+            </div>
+
+            {endUsers.length > 0 && (
+              <div className="mb-4">
+                <SearchInput value={userSearch} onChange={(e) => setUserSearch(e.target.value)} placeholder="Search users..." />
+              </div>
+            )}
+
+            {loadingUsers ? (
+              <div className="flex justify-center py-8">
+                <div className="w-5 h-5 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+              </div>
+            ) : endUsers.length === 0 ? (
+              <EmptyState icon={Users} title="No users yet" description="Users will appear here once they sign in, or you can add them manually" action={<Button variant="primary" onClick={() => setShowInviteModal(true)}><Plus size={14} /> Add first user</Button>} />
+            ) : (
+              <div className="space-y-2">
+                {endUsers.filter(u => u.email.toLowerCase().includes(userSearch.toLowerCase())).map((user) => (
                   <div
                     key={user.id}
-                    className="card"
+                    className="flex items-center justify-between p-3 bg-zinc-900 rounded-lg group hover:bg-zinc-800/80 transition-colors cursor-pointer"
                     onClick={() => router.push(`/domains/${domainId}/users/${user.id}`)}
-                    style={{
-                      display: 'flex',
-                      justifyContent: 'space-between',
-                      alignItems: 'center',
-                      cursor: 'pointer',
-                      transition: 'background-color 0.15s ease',
-                      marginBottom: 'var(--spacing-sm)',
-                    }}
-                    onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = 'var(--bg-tertiary)')}
-                    onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = '')}
                   >
                     <div>
-                      <div style={{ fontWeight: 600, marginBottom: 'var(--spacing-xs)' }}>{user.email}</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
-                        {user.last_login_at && (
-                          <span className="text-muted" style={{ fontSize: '12px' }}>
-                            Last login: {formatDate(user.last_login_at)}
-                          </span>
-                        )}
-                        {user.is_frozen && (
-                          <span style={{
-                            padding: '2px 6px',
-                            borderRadius: 'var(--radius-sm)',
-                            backgroundColor: 'var(--accent-red)',
-                            color: '#fff',
-                            fontSize: '11px',
-                            fontWeight: 500,
-                          }}>
-                            Frozen
-                          </span>
-                        )}
-                        {user.is_whitelisted && (
-                          <span style={{
-                            padding: '2px 6px',
-                            borderRadius: 'var(--radius-sm)',
-                            backgroundColor: 'var(--accent-green)',
-                            color: '#000',
-                            fontSize: '11px',
-                            fontWeight: 500,
-                          }}>
-                            Whitelisted
-                          </span>
-                        )}
-                        {user.roles && user.roles.map((role) => (
-                          <span
-                            key={role}
-                            style={{
-                              padding: '2px 6px',
-                              borderRadius: 'var(--radius-sm)',
-                              backgroundColor: 'var(--bg-tertiary)',
-                              color: 'var(--text-secondary)',
-                              fontSize: '11px',
-                              fontWeight: 500,
-                            }}
-                          >
-                            {role}
-                          </span>
-                        ))}
+                      <div className="font-medium">{user.email}</div>
+                      <div className="flex items-center gap-2 mt-1">
+                        {user.is_whitelisted && <Badge variant="info">Whitelisted</Badge>}
+                        {user.is_frozen && <Badge variant="error">Frozen</Badge>}
+                        {user.roles?.map(role => <Badge key={role} variant="default">{role}</Badge>)}
                       </div>
                     </div>
-                    <div style={{ display: 'flex', gap: 'var(--spacing-sm)', alignItems: 'center' }}>
-                      <div ref={openMenuId === user.id ? menuRef : null} style={{ position: 'relative' }}>
+                    <div className="flex items-center gap-3">
+                      <div className="text-sm text-zinc-500">
+                        {user.last_login_at ? formatDate(user.last_login_at) : 'Never'}
+                      </div>
+                      <div ref={openMenuId === user.id ? menuRef : null} className="relative">
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenMenuId(openMenuId === user.id ? null : user.id);
-                          }}
-                          style={{
-                            padding: 'var(--spacing-xs)',
-                            backgroundColor: 'transparent',
-                            border: 'none',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                          }}
+                          onClick={(e) => { e.stopPropagation(); setOpenMenuId(openMenuId === user.id ? null : user.id); }}
+                          className="opacity-0 group-hover:opacity-100 p-1 text-zinc-500 hover:text-white transition-all"
                         >
-                          <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
-                            <circle cx="12" cy="5" r="2" />
-                            <circle cx="12" cy="12" r="2" />
-                            <circle cx="12" cy="19" r="2" />
-                          </svg>
+                          <MoreVertical size={16} />
                         </button>
                         {openMenuId === user.id && (
-                          <div style={{
-                            position: 'absolute',
-                            top: '100%',
-                            right: 0,
-                            marginTop: 'var(--spacing-xs)',
-                            backgroundColor: 'var(--bg-secondary)',
-                            border: '1px solid var(--border-primary)',
-                            borderRadius: 'var(--radius-sm)',
-                            boxShadow: 'var(--shadow-md)',
-                            zIndex: 100,
-                            minWidth: '140px',
-                          }}>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                router.push(`/domains/${domainId}/users/${user.id}`);
-                              }}
-                              style={{
-                                width: '100%',
-                                padding: 'var(--spacing-sm) var(--spacing-md)',
-                                backgroundColor: 'transparent',
-                                border: 'none',
-                                color: 'var(--text-primary)',
-                                fontSize: '13px',
-                                textAlign: 'left',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              View details
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleUserAction(user.id, user.is_frozen ? 'unfreeze' : 'freeze');
-                              }}
-                              style={{
-                                width: '100%',
-                                padding: 'var(--spacing-sm) var(--spacing-md)',
-                                backgroundColor: 'transparent',
-                                border: 'none',
-                                color: 'var(--text-primary)',
-                                fontSize: '13px',
-                                textAlign: 'left',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              {user.is_frozen ? 'Unfreeze' : 'Freeze'}
-                            </button>
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleUserAction(user.id, user.is_whitelisted ? 'unwhitelist' : 'whitelist');
-                              }}
-                              style={{
-                                width: '100%',
-                                padding: 'var(--spacing-sm) var(--spacing-md)',
-                                backgroundColor: 'transparent',
-                                border: 'none',
-                                color: 'var(--text-primary)',
-                                fontSize: '13px',
-                                textAlign: 'left',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              {user.is_whitelisted ? 'Remove from whitelist' : 'Whitelist'}
-                            </button>
-                            <div style={{ borderTop: '1px solid var(--border-primary)', margin: '4px 0' }} />
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                setOpenMenuId(null);
-                                setDeleteUserConfirmId(user.id);
-                              }}
-                              style={{
-                                width: '100%',
-                                padding: 'var(--spacing-sm) var(--spacing-md)',
-                                backgroundColor: 'transparent',
-                                border: 'none',
-                                color: 'var(--accent-red)',
-                                fontSize: '13px',
-                                textAlign: 'left',
-                                cursor: 'pointer',
-                              }}
-                            >
-                              Delete
-                            </button>
+                          <div className="absolute top-full right-0 mt-1 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl min-w-[140px] overflow-hidden animate-scale-in" style={{ zIndex: zIndex.dropdown }}>
+                            <button onClick={(e) => { e.stopPropagation(); handleUserAction(user.id, user.is_frozen ? 'unfreeze' : 'freeze'); }} className="w-full px-4 py-2 text-sm text-left hover:bg-zinc-700">{user.is_frozen ? 'Unfreeze' : 'Freeze'}</button>
+                            <button onClick={(e) => { e.stopPropagation(); handleUserAction(user.id, user.is_whitelisted ? 'unwhitelist' : 'whitelist'); }} className="w-full px-4 py-2 text-sm text-left hover:bg-zinc-700">{user.is_whitelisted ? 'Remove whitelist' : 'Whitelist'}</button>
+                            <div className="border-t border-zinc-700" />
+                            <button onClick={(e) => { e.stopPropagation(); setOpenMenuId(null); setDeleteUserConfirmId(user.id); }} className="w-full px-4 py-2 text-sm text-left text-red-400 hover:bg-zinc-700">Delete</button>
                           </div>
                         )}
                       </div>
                     </div>
                   </div>
-                ))
-              )}
-            </>
-          )}
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
 
-      {/* API Keys Tab */}
-      {activeTab === 'api-keys' && domain.status === 'verified' && (
-        <>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--spacing-md)' }}>
-            <div>
-              <p className="text-muted" style={{ margin: 0, fontSize: '14px' }}>
-                Use API keys to authenticate server-to-server requests from your backend.
-              </p>
-            </div>
-            <button className="primary" onClick={() => setShowCreateKeyModal(true)}>
+      {/* API Tab */}
+      {activeTab === 'api' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-zinc-400">Use API keys to authenticate server-to-server requests.</p>
+            <Button variant="primary" onClick={() => setShowCreateKeyModal(true)}>
+              <Plus size={16} className="mr-1" />
               Create API Key
-            </button>
+            </Button>
           </div>
 
           {loadingApiKeys ? (
-            <div style={{ display: 'flex', justifyContent: 'center', padding: 'var(--spacing-xl)' }}>
-              <span className="spinner" />
+            <div className="flex justify-center py-8">
+              <div className="w-6 h-6 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
             </div>
           ) : apiKeys.length === 0 ? (
-            <div className="card" style={{ textAlign: 'center' }}>
-              <p className="text-muted">No API keys created yet.</p>
-            </div>
+            <EmptyState icon={Key} title="No API keys" description="Create an API key to get started." />
           ) : (
-            apiKeys.map((apiKey) => (
-              <div
-                key={apiKey.id}
-                className="card"
-                style={{
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  marginBottom: 'var(--spacing-sm)',
-                }}
-              >
-                <div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', marginBottom: 'var(--spacing-xs)' }}>
-                    <span style={{ fontWeight: 600 }}>{apiKey.name}</span>
-                    <code style={{
-                      backgroundColor: 'var(--bg-tertiary)',
-                      padding: '2px 6px',
-                      borderRadius: '4px',
-                      fontSize: '12px',
-                      color: 'var(--text-muted)',
-                    }}>
-                      {apiKey.key_prefix}...
-                    </code>
+            <div className="space-y-2">
+              {apiKeys.map((key) => (
+                <Card key={key.id} className="p-4 flex items-center justify-between">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-white">{key.name}</span>
+                      <code className="bg-zinc-800 px-2 py-0.5 rounded text-xs text-zinc-400">{key.key_prefix}...</code>
+                    </div>
+                    <div className="flex items-center gap-3 mt-1 text-xs text-zinc-500">
+                      {key.created_at && <span>Created {formatDate(key.created_at)}</span>}
+                      {key.last_used_at && <span>Last used {formatDate(key.last_used_at)}</span>}
+                    </div>
                   </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-md)' }}>
-                    {apiKey.created_at && (
-                      <span className="text-muted" style={{ fontSize: '12px' }}>
-                        Created {formatDate(apiKey.created_at)}
-                      </span>
-                    )}
-                    {apiKey.last_used_at && (
-                      <span className="text-muted" style={{ fontSize: '12px' }}>
-                        Last used {formatDate(apiKey.last_used_at)}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <HoldToConfirmButton
-                  label="Revoke"
-                  holdingLabel="Hold to revoke..."
-                  onConfirm={() => handleRevokeApiKeyDirect(apiKey.id)}
-                  variant="danger"
-                  duration={3000}
-                  style={{ fontSize: '13px', padding: '6px 12px' }}
-                />
-              </div>
-            ))
+                  <HoldButton onComplete={() => handleRevokeApiKey(key.id)} variant="danger" duration={3000}>Revoke</HoldButton>
+                </Card>
+              ))}
+            </div>
           )}
-        </>
+        </div>
       )}
 
+      {/* Settings Tab */}
+      {activeTab === 'settings' && (
+        <div className="space-y-6">
+          {/* Redirect URL */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h3 className="font-semibold">Redirect URL</h3>
+                <p className="text-sm text-zinc-400">Where users go after successful authentication</p>
+              </div>
+            </div>
+            <Input
+              value={redirectUrl}
+              onChange={(e) => setRedirectUrl(e.target.value)}
+              placeholder="https://yourapp.com/dashboard"
+            />
+            <p className="text-xs text-zinc-500 mt-2">Must be on {domain.domain} or a subdomain.</p>
+            <Button
+              variant="primary"
+              className="mt-4"
+              disabled={saving}
+              onClick={(e) => handleSaveConfig(e as unknown as React.FormEvent)}
+            >
+              {saving ? 'Saving...' : 'Save'}
+            </Button>
+          </Card>
 
-      {/* Delete User Confirmation Modal */}
+          {/* Whitelist Mode */}
+          <Card className="p-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold">Whitelist Mode</h3>
+                <p className="text-sm text-zinc-400">Only allow pre-approved email addresses to sign in</p>
+              </div>
+              <Toggle enabled={whitelistEnabled} onChange={handleWhitelistToggle} />
+            </div>
+          </Card>
+
+          {/* Danger Zone */}
+          <Card className="p-5 border-red-900/50">
+            <h3 className="font-semibold text-red-400 mb-4">Danger Zone</h3>
+            <div className="flex items-center justify-between p-4 bg-red-900/10 border border-red-900/30 rounded-lg">
+              <div>
+                <div className="font-medium">Delete this domain</div>
+                <div className="text-sm text-zinc-400">This action cannot be undone. All users and settings will be permanently deleted.</div>
+              </div>
+              <Button variant="danger" onClick={() => setShowDeleteDomainModal(true)}>
+                <Trash2 size={14} className="mr-1" /> Delete domain
+              </Button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      </div>
+      </div>
+
+      {/* Modals */}
+      <ConfirmModal isOpen={deleteUserConfirmId !== null} title="Delete User" message="This action cannot be undone." variant="danger" confirmLabel="Delete" onConfirm={() => deleteUserConfirmId && handleUserAction(deleteUserConfirmId, 'delete')} onCancel={() => setDeleteUserConfirmId(null)} />
+
       <ConfirmModal
-        isOpen={deleteUserConfirmId !== null}
-        title="Delete User"
-        message="Are you sure you want to delete this user? This cannot be undone."
-        confirmLabel="Delete"
-        cancelLabel="Cancel"
+        isOpen={deleteRoleConfirm !== null}
+        title="Delete Role"
+        message={deleteRoleConfirm ? `This will remove the "${deleteRoleConfirm.name}" role from ${deleteRoleConfirm.user_count} user${deleteRoleConfirm.user_count === 1 ? '' : 's'}.` : ''}
         variant="danger"
-        onConfirm={() => deleteUserConfirmId && handleUserAction(deleteUserConfirmId, 'delete')}
-        onCancel={() => setDeleteUserConfirmId(null)}
+        confirmLabel="Delete"
+        onConfirm={handleDeleteRole}
+        onCancel={() => setDeleteRoleConfirm(null)}
       />
 
-      {/* Whitelist Enable Modal - Custom 3-button modal */}
-      {showWhitelistModal && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={() => setShowWhitelistModal(false)}
-        >
-          <div
-            style={{
-              backgroundColor: 'var(--bg-secondary)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-primary)',
-              boxShadow: 'var(--shadow-lg)',
-              maxWidth: '450px',
-              width: '90%',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: 'var(--spacing-md)',
-                borderBottom: '1px solid var(--border-primary)',
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Enable Whitelist Mode</h3>
-              <button
-                onClick={() => setShowWhitelistModal(false)}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: '4px',
-                  color: 'var(--text-secondary)',
-                  fontSize: '18px',
-                  lineHeight: 1,
-                }}
-              >
-                &times;
-              </button>
-            </div>
+      <ConfirmModal isOpen={showDeleteDomainModal} title="Delete Domain" message="This will permanently delete this domain and all associated data." variant="danger" confirmLabel="Delete" confirmText={domain.domain} useHoldToConfirm onConfirm={handleDeleteDomain} onCancel={() => setShowDeleteDomainModal(false)} />
 
-            <div
-              style={{
-                padding: 'var(--spacing-lg) var(--spacing-md)',
-                color: 'var(--text-secondary)',
-                fontSize: '14px',
-                lineHeight: 1.5,
-              }}
-            >
-              When whitelist mode is enabled, only whitelisted users can sign in.
-              <br /><br />
-              Would you like to add all current users to the whitelist?
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 'var(--spacing-sm)',
-                padding: 'var(--spacing-md)',
-                borderTop: '1px solid var(--border-primary)',
-              }}
-            >
-              <button onClick={() => setShowWhitelistModal(false)}>
-                Cancel
-              </button>
-              <button onClick={() => handleWhitelistConfirm(false)}>
-                Enable Only
-              </button>
-              <button className="primary" onClick={() => handleWhitelistConfirm(true)}>
-                Whitelist All
-              </button>
-            </div>
+      {/* Whitelist Modal */}
+      <Modal open={showWhitelistModal} onClose={() => setShowWhitelistModal(false)} title="Enable Whitelist Mode">
+        <div className="space-y-4">
+          <p className="text-sm text-zinc-400">When whitelist mode is enabled, only whitelisted users can sign in. Would you like to add all current users to the whitelist?</p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setShowWhitelistModal(false)}>Cancel</Button>
+            <Button onClick={() => handleWhitelistConfirm(false)}>Enable Only</Button>
+            <Button variant="primary" onClick={() => handleWhitelistConfirm(true)}>Whitelist All</Button>
           </div>
         </div>
-      )}
+      </Modal>
 
-      {/* Invite User Modal */}
-      {showInviteModal && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={() => {
-            setShowInviteModal(false);
-            setInviteEmail('');
-            setInvitePreWhitelist(false);
-            setInviteError('');
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: 'var(--bg-secondary)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-primary)',
-              boxShadow: 'var(--shadow-lg)',
-              maxWidth: '450px',
-              width: '90%',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: 'var(--spacing-md)',
-                borderBottom: '1px solid var(--border-primary)',
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Invite User</h3>
-              <button
-                onClick={() => {
-                  setShowInviteModal(false);
-                  setInviteEmail('');
-                  setInvitePreWhitelist(false);
-                  setInviteError('');
-                }}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: '4px',
-                  color: 'var(--text-secondary)',
-                  fontSize: '18px',
-                  lineHeight: 1,
-                }}
-              >
-                &times;
-              </button>
-            </div>
-
-            <form onSubmit={handleInviteUser}>
-              <div style={{ padding: 'var(--spacing-lg) var(--spacing-md)' }}>
-                <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                  <label htmlFor="inviteEmail" style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: 'var(--spacing-xs)', display: 'block' }}>
-                    Email address
-                  </label>
-                  <input
-                    id="inviteEmail"
-                    type="email"
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                    placeholder="user@example.com"
-                    required
-                    autoFocus
-                  />
-                </div>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', cursor: 'pointer' }}>
-                  <input
-                    type="checkbox"
-                    checked={invitePreWhitelist}
-                    onChange={(e) => setInvitePreWhitelist(e.target.checked)}
-                    style={{ width: 16, height: 16 }}
-                  />
-                  <span style={{ fontSize: '14px' }}>Pre-approve (add to whitelist)</span>
-                </label>
-                <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)', marginLeft: '24px' }}>
-                  If whitelist mode is enabled, this user will be able to sign in immediately.
-                </p>
-
-                {inviteError && (
-                  <div className="message error" style={{ marginTop: 'var(--spacing-md)' }}>
-                    {inviteError}
-                  </div>
-                )}
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  gap: 'var(--spacing-sm)',
-                  padding: 'var(--spacing-md)',
-                  borderTop: '1px solid var(--border-primary)',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowInviteModal(false);
-                    setInviteEmail('');
-                    setInvitePreWhitelist(false);
-                    setInviteError('');
-                  }}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="primary" disabled={inviting || !inviteEmail.trim()}>
-                  {inviting ? 'Sending...' : 'Send Invitation'}
-                </button>
-              </div>
-            </form>
+      {/* Invite Modal */}
+      <Modal open={showInviteModal} onClose={() => { setShowInviteModal(false); setInviteEmail(''); setInvitePreWhitelist(false); }} title="Invite User">
+        <form onSubmit={handleInviteUser} className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm text-zinc-400">Email address</label>
+            <Input type="email" value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} placeholder="user@example.com" autoFocus required />
           </div>
-        </div>
-      )}
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" checked={invitePreWhitelist} onChange={(e) => setInvitePreWhitelist(e.target.checked)} className="w-4 h-4" />
+            <span className="text-sm">Pre-approve (add to whitelist)</span>
+          </label>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => { setShowInviteModal(false); setInviteEmail(''); }}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={inviting || !inviteEmail.trim()}>
+              {inviting ? 'Sending...' : 'Send Invitation'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
       {/* Create API Key Modal */}
-      {showCreateKeyModal && !newlyCreatedKey && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={() => {
-            setShowCreateKeyModal(false);
-            setNewKeyName('');
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: 'var(--bg-secondary)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-primary)',
-              boxShadow: 'var(--shadow-lg)',
-              maxWidth: '450px',
-              width: '90%',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: 'var(--spacing-md)',
-                borderBottom: '1px solid var(--border-primary)',
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>Create API Key</h3>
-              <button
-                onClick={() => {
-                  setShowCreateKeyModal(false);
-                  setNewKeyName('');
-                }}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: '4px',
-                  color: 'var(--text-secondary)',
-                  fontSize: '18px',
-                  lineHeight: 1,
-                }}
-              >
-                &times;
-              </button>
-            </div>
+      <Modal open={showCreateKeyModal && !newlyCreatedKey} onClose={() => { setShowCreateKeyModal(false); setNewKeyName(''); }} title="Create API Key">
+        <form onSubmit={handleCreateApiKey} className="space-y-4">
+          <div className="space-y-2">
+            <label className="text-sm text-zinc-400">Key name (optional)</label>
+            <Input value={newKeyName} onChange={(e) => setNewKeyName(e.target.value)} placeholder="e.g., Production API" autoFocus />
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button type="button" variant="ghost" onClick={() => { setShowCreateKeyModal(false); setNewKeyName(''); }}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={creatingKey}>
+              {creatingKey ? 'Creating...' : 'Create Key'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
 
-            <form onSubmit={handleCreateApiKey}>
-              <div style={{ padding: 'var(--spacing-lg) var(--spacing-md)' }}>
-                <div>
-                  <label htmlFor="keyName" style={{ fontSize: '13px', color: 'var(--text-muted)', marginBottom: 'var(--spacing-xs)', display: 'block' }}>
-                    Key name (optional)
-                  </label>
-                  <input
-                    id="keyName"
-                    type="text"
-                    value={newKeyName}
-                    onChange={(e) => setNewKeyName(e.target.value)}
-                    placeholder="e.g., Production API"
-                    autoFocus
-                  />
-                  <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
-                    A name to help you identify this key.
-                  </p>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  justifyContent: 'flex-end',
-                  gap: 'var(--spacing-sm)',
-                  padding: 'var(--spacing-md)',
-                  borderTop: '1px solid var(--border-primary)',
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowCreateKeyModal(false);
-                    setNewKeyName('');
-                  }}
-                >
-                  Cancel
-                </button>
-                <button type="submit" className="primary" disabled={creatingKey}>
-                  {creatingKey ? 'Creating...' : 'Create Key'}
-                </button>
-              </div>
-            </form>
+      {/* New Key Display Modal */}
+      <Modal open={!!newlyCreatedKey} onClose={() => { setNewlyCreatedKey(null); setShowCreateKeyModal(false); }} title="API Key Created">
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+            <AlertTriangle size={16} className="text-amber-500" />
+            <span className="text-sm text-amber-200">Copy this key now. You won&apos;t see it again!</span>
+          </div>
+          <div className="flex items-center gap-2 bg-zinc-800 p-3 rounded-lg">
+            <code className="flex-1 text-sm break-all">{newlyCreatedKey}</code>
+            <CopyButton text={newlyCreatedKey || ''} />
+          </div>
+          <div className="flex justify-end">
+            <Button variant="primary" onClick={() => { setNewlyCreatedKey(null); setShowCreateKeyModal(false); }}>Done</Button>
           </div>
         </div>
-      )}
-
-      {/* Show Newly Created Key Modal */}
-      {newlyCreatedKey && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: 'var(--bg-secondary)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-primary)',
-              boxShadow: 'var(--shadow-lg)',
-              maxWidth: '550px',
-              width: '90%',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: 'var(--spacing-md)',
-                borderBottom: '1px solid var(--border-primary)',
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600 }}>API Key Created</h3>
-            </div>
-
-            <div style={{ padding: 'var(--spacing-lg) var(--spacing-md)' }}>
-              <div className="message warning" style={{ marginBottom: 'var(--spacing-md)' }}>
-                Copy this key now. You won&apos;t be able to see it again!
-              </div>
-
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 'var(--spacing-sm)',
-                  backgroundColor: 'var(--bg-tertiary)',
-                  padding: 'var(--spacing-sm) var(--spacing-md)',
-                  borderRadius: 'var(--radius-sm)',
-                  border: '1px solid var(--border-primary)',
-                }}
-              >
-                <code style={{ flex: 1, fontSize: '13px', wordBreak: 'break-all' }}>
-                  {newlyCreatedKey}
-                </code>
-                <button
-                  onClick={() => copyToClipboard(newlyCreatedKey, 'newKey')}
-                  style={{ padding: '6px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
-                >
-                  {copiedField === 'newKey' ? 'Copied!' : 'Copy'}
-                </button>
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                padding: 'var(--spacing-md)',
-                borderTop: '1px solid var(--border-primary)',
-              }}
-            >
-              <button
-                className="primary"
-                onClick={() => {
-                  setNewlyCreatedKey(null);
-                  setShowCreateKeyModal(false);
-                }}
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Delete Domain Confirmation Modal */}
-      {showDeleteDomainModal && domain && (
-        <div
-          style={{
-            position: 'fixed',
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            backgroundColor: 'rgba(0, 0, 0, 0.6)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-          }}
-          onClick={() => {
-            setShowDeleteDomainModal(false);
-            setDeleteDomainConfirmText('');
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: 'var(--bg-secondary)',
-              borderRadius: 'var(--radius-md)',
-              border: '1px solid var(--border-primary)',
-              boxShadow: 'var(--shadow-lg)',
-              maxWidth: '450px',
-              width: '90%',
-            }}
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                padding: 'var(--spacing-md)',
-                borderBottom: '1px solid var(--border-primary)',
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: '16px', fontWeight: 600, color: 'var(--accent-red)' }}>
-                Delete Domain
-              </h3>
-              <button
-                onClick={() => {
-                  setShowDeleteDomainModal(false);
-                  setDeleteDomainConfirmText('');
-                }}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
-                  padding: '4px',
-                  color: 'var(--text-secondary)',
-                  fontSize: '18px',
-                  lineHeight: 1,
-                }}
-              >
-                &times;
-              </button>
-            </div>
-
-            <div style={{ padding: 'var(--spacing-lg) var(--spacing-md)' }}>
-              <p style={{ margin: 0, marginBottom: 'var(--spacing-md)', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                This will permanently delete <strong style={{ color: 'var(--text-primary)' }}>{domain.domain}</strong> and all associated data including users, API keys, and configuration.
-              </p>
-              <p style={{ margin: 0, marginBottom: 'var(--spacing-md)', color: 'var(--text-secondary)', fontSize: '14px' }}>
-                This action cannot be undone.
-              </p>
-
-              <div style={{ marginBottom: 'var(--spacing-md)' }}>
-                <label style={{ display: 'block', marginBottom: 'var(--spacing-xs)', fontSize: '13px', color: 'var(--text-muted)' }}>
-                  Type <strong style={{ color: 'var(--text-primary)' }}>{domain.domain}</strong> to confirm:
-                </label>
-                <input
-                  type="text"
-                  value={deleteDomainConfirmText}
-                  onChange={(e) => setDeleteDomainConfirmText(e.target.value)}
-                  placeholder={domain.domain}
-                  autoFocus
-                  style={{ width: '100%' }}
-                />
-              </div>
-            </div>
-
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'flex-end',
-                gap: 'var(--spacing-sm)',
-                padding: 'var(--spacing-md)',
-                borderTop: '1px solid var(--border-primary)',
-              }}
-            >
-              <button
-                onClick={() => {
-                  setShowDeleteDomainModal(false);
-                  setDeleteDomainConfirmText('');
-                }}
-              >
-                Cancel
-              </button>
-              <HoldToConfirmButton
-                label="Delete Domain"
-                holdingLabel="Hold to delete..."
-                onConfirm={() => {
-                  setShowDeleteDomainModal(false);
-                  setDeleteDomainConfirmText('');
-                  handleDeleteDomain();
-                }}
-                variant="danger"
-                duration={3000}
-                disabled={deleteDomainConfirmText !== domain.domain}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
-    </>
+      </Modal>
+    </div>
   );
 }
