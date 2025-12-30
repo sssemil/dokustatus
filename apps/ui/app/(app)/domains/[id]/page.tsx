@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import ConfirmModal from '@/components/ConfirmModal';
 import HoldToConfirmButton from '@/components/HoldToConfirmButton';
+import { GOOGLE_OAUTH_REDIRECT_URI } from '@/lib/domain-utils';
 
 type Domain = {
   id: string;
@@ -1199,6 +1200,67 @@ export default function DomainDetailPage() {
                       </div>
                     </div>
                   )}
+
+                  {/* Google Cloud Console Setup Instructions */}
+                  <div
+                    style={{
+                      marginBottom: 'var(--spacing-lg)',
+                      backgroundColor: 'var(--bg-tertiary)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: 'var(--spacing-md)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 'var(--spacing-md)' }}>
+                      <h3 style={{ margin: 0, fontSize: '14px', fontWeight: 600 }}>Google Cloud Console Setup</h3>
+                      <a
+                        href="https://console.cloud.google.com/apis/credentials"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ color: 'var(--accent-blue)', fontSize: '13px' }}
+                      >
+                        Open Console
+                      </a>
+                    </div>
+
+                    {/* Authorized Redirect URI */}
+                    <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: 'var(--spacing-xs)' }}>
+                        Authorized redirect URI (add this to your OAuth client)
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)' }}>
+                        <code style={{
+                          flex: 1,
+                          backgroundColor: 'var(--bg-secondary)',
+                          padding: '8px 12px',
+                          borderRadius: '4px',
+                          fontSize: '13px',
+                          wordBreak: 'break-all',
+                        }}>
+                          {GOOGLE_OAUTH_REDIRECT_URI}
+                        </code>
+                        <button
+                          type="button"
+                          onClick={() => copyToClipboard(GOOGLE_OAUTH_REDIRECT_URI, 'google_redirect_uri')}
+                          style={{ padding: '6px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
+                        >
+                          {copiedField === 'google_redirect_uri' ? 'Copied!' : 'Copy'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Setup Steps */}
+                    <div style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>
+                      <div style={{ fontWeight: 500, marginBottom: 'var(--spacing-xs)' }}>Setup steps:</div>
+                      <ol style={{ margin: 0, paddingLeft: 'var(--spacing-md)', lineHeight: 1.6 }}>
+                        <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)' }}>Google Cloud Console → APIs &amp; Services → Credentials</a></li>
+                        <li>Create a new project or select an existing one</li>
+                        <li>Configure the <strong>OAuth consent screen</strong> (External, add your app name and email)</li>
+                        <li>Create <strong>OAuth 2.0 Client ID</strong> (Web application)</li>
+                        <li>Add the redirect URI above to <strong>Authorized redirect URIs</strong></li>
+                        <li>Copy the <strong>Client ID</strong> and <strong>Client Secret</strong> and paste them below</li>
+                      </ol>
+                    </div>
+                  </div>
 
                   <div style={{ marginBottom: 'var(--spacing-md)' }}>
                     <label htmlFor="googleClientId">

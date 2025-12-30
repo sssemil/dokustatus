@@ -19,6 +19,9 @@ export const URLS = {
   profile: `https://${AUTH_INGRESS}/profile`,
 } as const;
 
+/** Google OAuth callback URL - must be configured in Google Cloud Console */
+export const GOOGLE_OAUTH_REDIRECT_URI = `https://${AUTH_INGRESS}/callback/google`;
+
 /**
  * Check if hostname is the main reauth.dev app
  */
