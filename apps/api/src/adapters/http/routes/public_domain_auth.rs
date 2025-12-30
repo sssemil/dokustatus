@@ -758,7 +758,7 @@ async fn google_start(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    let (client_id, _, _) = app_state
+    let (client_id, _, is_fallback) = app_state
         .domain_auth_use_cases
         .get_google_oauth_config(domain.id)
         .await?;
@@ -771,9 +771,14 @@ async fn google_start(
     let code_challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
 
     // Build Google OAuth URL
-    // The redirect_uri points to reauth.reauth.dev (the main app) because Google requires a fixed callback URL
-    let main_domain = &app_state.config.main_domain;
-    let redirect_uri = format!("https://reauth.{}/callback/google", main_domain);
+    // - Fallback credentials: use reauth.{main_domain}/callback/google (shared OAuth app)
+    // - Custom credentials: use reauth.{root_domain}/callback/google (user's own OAuth app)
+    let redirect_uri = if is_fallback {
+        let main_domain = &app_state.config.main_domain;
+        format!("https://reauth.{}/callback/google", main_domain)
+    } else {
+        format!("https://reauth.{}/callback/google", root_domain)
+    };
 
     // Use url crate for proper URL encoding
     let mut auth_url = url::Url::parse("https://accounts.google.com/o/oauth2/v2/auth").unwrap();
@@ -834,14 +839,19 @@ async fn google_exchange(
     }
 
     // Get OAuth credentials
-    let (client_id, client_secret, _using_fallback) = app_state
+    let (client_id, client_secret, is_fallback) = app_state
         .domain_auth_use_cases
         .get_google_oauth_config(domain.id)
         .await?;
 
     // Exchange code with Google
-    let main_domain = &app_state.config.main_domain;
-    let redirect_uri = format!("https://reauth.{}/callback/google", main_domain);
+    // Must use same redirect_uri as google_start (fallback vs custom)
+    let redirect_uri = if is_fallback {
+        let main_domain = &app_state.config.main_domain;
+        format!("https://reauth.{}/callback/google", main_domain)
+    } else {
+        format!("https://reauth.{}/callback/google", root_domain)
+    };
 
     let token_response = exchange_google_code(
         &payload.code,

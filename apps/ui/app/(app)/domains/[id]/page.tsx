@@ -4,7 +4,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import ConfirmModal from '@/components/ConfirmModal';
 import HoldToConfirmButton from '@/components/HoldToConfirmButton';
-import { GOOGLE_OAUTH_REDIRECT_URI } from '@/lib/domain-utils';
 
 type Domain = {
   id: string;
@@ -1236,11 +1235,11 @@ export default function DomainDetailPage() {
                           fontSize: '13px',
                           wordBreak: 'break-all',
                         }}>
-                          {GOOGLE_OAUTH_REDIRECT_URI}
+                          {`https://reauth.${domain?.domain}/callback/google`}
                         </code>
                         <button
                           type="button"
-                          onClick={() => copyToClipboard(GOOGLE_OAUTH_REDIRECT_URI, 'google_redirect_uri')}
+                          onClick={() => copyToClipboard(`https://reauth.${domain?.domain}/callback/google`, 'google_redirect_uri')}
                           style={{ padding: '6px 12px', fontSize: '12px', whiteSpace: 'nowrap' }}
                         >
                           {copiedField === 'google_redirect_uri' ? 'Copied!' : 'Copy'}
