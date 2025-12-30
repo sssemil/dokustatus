@@ -14,7 +14,9 @@ use crate::{
     adapters::http::app_state::AppState,
     app_error::{AppError, AppResult},
     application::{
-        jwt, use_cases::domain::extract_root_from_reauth_hostname, validators::is_valid_email,
+        jwt,
+        use_cases::{domain::extract_root_from_reauth_hostname, domain_auth::DomainEndUserProfile},
+        validators::is_valid_email,
     },
 };
 
@@ -24,6 +26,127 @@ fn append_cookie(headers: &mut HeaderMap, cookie: Cookie<'_>) -> Result<(), AppE
         .map_err(|_| AppError::Internal("Failed to build cookie header".into()))?;
     headers.append("set-cookie", value);
     Ok(())
+}
+
+/// Result of completing a login (magic link or OAuth)
+struct LoginCompletionResult {
+    headers: HeaderMap,
+    redirect_url: Option<String>,
+    waitlist_position: Option<i64>,
+}
+
+/// Unified login completion logic shared by verify_magic_link and google_complete.
+/// Handles waitlist check, token issuance, and cookie setting.
+async fn complete_login(
+    app_state: &AppState,
+    user: &DomainEndUserProfile,
+    root_domain: &str,
+) -> AppResult<LoginCompletionResult> {
+    // Get config for redirect URL and TTL settings
+    let config = app_state
+        .domain_auth_use_cases
+        .get_auth_config_for_domain(root_domain)
+        .await
+        .ok();
+
+    let access_ttl_secs = config
+        .as_ref()
+        .map(|c| c.access_token_ttl_secs)
+        .unwrap_or(86400);
+    let refresh_ttl_days = config
+        .as_ref()
+        .map(|c| c.refresh_token_ttl_days)
+        .unwrap_or(30);
+
+    // Check if user is on waitlist (whitelist enabled but user not whitelisted)
+    let whitelist_enabled = config
+        .as_ref()
+        .map(|c| c.whitelist_enabled)
+        .unwrap_or(false);
+    let on_waitlist = whitelist_enabled && !user.is_whitelisted;
+
+    // Get waitlist position if on waitlist
+    let waitlist_position = if on_waitlist {
+        app_state
+            .domain_auth_use_cases
+            .get_waitlist_position(user.domain_id, user.id)
+            .await
+            .ok()
+    } else {
+        None
+    };
+
+    // Only provide redirect_url if user is whitelisted (or whitelist not enabled)
+    let redirect_url = if on_waitlist {
+        None
+    } else {
+        Some(
+            config
+                .as_ref()
+                .and_then(|c| c.redirect_url.clone())
+                .unwrap_or_else(|| format!("https://{}", root_domain)),
+        )
+    };
+
+    // Issue access token (short-lived)
+    let access_token = jwt::issue_domain_end_user(
+        user.id,
+        user.domain_id,
+        root_domain,
+        user.roles.clone(),
+        &app_state.config.jwt_secret,
+        time::Duration::seconds(access_ttl_secs as i64),
+    )?;
+
+    // Issue refresh token (long-lived)
+    let refresh_token = jwt::issue_domain_end_user(
+        user.id,
+        user.domain_id,
+        root_domain,
+        user.roles.clone(),
+        &app_state.config.jwt_secret,
+        time::Duration::days(refresh_ttl_days as i64),
+    )?;
+
+    // Set cookies on root domain
+    let mut headers = HeaderMap::new();
+
+    let access_cookie = Cookie::build(("end_user_access_token", access_token))
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Lax)
+        .domain(format!(".{}", root_domain))
+        .path("/")
+        .max_age(time::Duration::seconds(access_ttl_secs as i64))
+        .build();
+
+    let refresh_cookie = Cookie::build(("end_user_refresh_token", refresh_token))
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Lax)
+        .domain(format!(".{}", root_domain))
+        .path("/")
+        .max_age(time::Duration::days(refresh_ttl_days as i64))
+        .build();
+
+    let email_cookie = Cookie::build(("end_user_email", user.email.clone()))
+        .http_only(false)
+        .secure(true)
+        .same_site(SameSite::Lax)
+        .domain(format!(".{}", root_domain))
+        .path("/")
+        .max_age(time::Duration::days(refresh_ttl_days as i64))
+        .build();
+
+    append_cookie(&mut headers, access_cookie)?;
+    append_cookie(&mut headers, refresh_cookie)?;
+    append_cookie(&mut headers, email_cookie)?;
+
+    Ok(LoginCompletionResult {
+        headers,
+        redirect_url,
+        waitlist_position,
+    })
 }
 
 #[derive(Serialize)]
@@ -79,7 +202,10 @@ pub fn router() -> Router<AppState> {
         .route("/{domain}/auth/verify-magic-link", post(verify_magic_link))
         .route("/{domain}/auth/google/start", post(google_start))
         .route("/{domain}/auth/google/exchange", post(google_exchange))
-        .route("/{domain}/auth/google/confirm-link", post(google_confirm_link))
+        .route(
+            "/{domain}/auth/google/confirm-link",
+            post(google_confirm_link),
+        )
         .route("/{domain}/auth/google/complete", post(google_complete))
         .route("/{domain}/auth/session", get(check_session))
         .route("/{domain}/auth/refresh", post(refresh_token))
@@ -176,116 +302,18 @@ async fn verify_magic_link(
 
     match end_user {
         Some(user) => {
-            // Get config for redirect URL and TTL settings
-            let config = app_state
-                .domain_auth_use_cases
-                .get_auth_config_for_domain(&root_domain)
-                .await
-                .ok();
-
-            let access_ttl_secs = config
-                .as_ref()
-                .map(|c| c.access_token_ttl_secs)
-                .unwrap_or(86400);
-            let refresh_ttl_days = config
-                .as_ref()
-                .map(|c| c.refresh_token_ttl_days)
-                .unwrap_or(30);
-
-            // Check if user is on waitlist (whitelist enabled but user not whitelisted)
-            let whitelist_enabled = config
-                .as_ref()
-                .map(|c| c.whitelist_enabled)
-                .unwrap_or(false);
-            let on_waitlist = whitelist_enabled && !user.is_whitelisted;
-
-            // Get waitlist position if on waitlist
-            let waitlist_position = if on_waitlist {
-                app_state
-                    .domain_auth_use_cases
-                    .get_waitlist_position(user.domain_id, user.id)
-                    .await
-                    .ok()
-            } else {
-                None
-            };
-
-            // Only provide redirect_url if user is whitelisted (or whitelist not enabled)
-            // Default to https://{domain} if not configured
-            let redirect_url = if on_waitlist {
-                None
-            } else {
-                Some(
-                    config
-                        .as_ref()
-                        .and_then(|c| c.redirect_url.clone())
-                        .unwrap_or_else(|| format!("https://{}", root_domain)),
-                )
-            };
-
-            // Issue access token (short-lived)
-            let access_token = jwt::issue_domain_end_user(
-                user.id,
-                user.domain_id,
-                &root_domain,
-                user.roles.clone(),
-                &app_state.config.jwt_secret,
-                time::Duration::seconds(access_ttl_secs as i64),
-            )?;
-
-            // Issue refresh token (long-lived)
-            let refresh_token = jwt::issue_domain_end_user(
-                user.id,
-                user.domain_id,
-                &root_domain,
-                user.roles.clone(),
-                &app_state.config.jwt_secret,
-                time::Duration::days(refresh_ttl_days as i64),
-            )?;
-
-            // Set cookies on root domain
-            let mut headers = HeaderMap::new();
-
-            let access_cookie = Cookie::build(("end_user_access_token", access_token))
-                .http_only(true)
-                .secure(true)
-                .same_site(SameSite::Lax)
-                .domain(format!(".{}", root_domain))
-                .path("/")
-                .max_age(time::Duration::seconds(access_ttl_secs as i64))
-                .build();
-
-            let refresh_cookie = Cookie::build(("end_user_refresh_token", refresh_token))
-                .http_only(true)
-                .secure(true)
-                .same_site(SameSite::Lax)
-                .domain(format!(".{}", root_domain))
-                .path("/")
-                .max_age(time::Duration::days(refresh_ttl_days as i64))
-                .build();
-
-            let email_cookie = Cookie::build(("end_user_email", user.email.clone()))
-                .http_only(false)
-                .secure(true)
-                .same_site(SameSite::Lax)
-                .domain(format!(".{}", root_domain))
-                .path("/")
-                .max_age(time::Duration::days(refresh_ttl_days as i64))
-                .build();
-
-            append_cookie(&mut headers, access_cookie)?;
-            append_cookie(&mut headers, refresh_cookie)?;
-            append_cookie(&mut headers, email_cookie)?;
+            // Use unified login completion logic (handles waitlist, tokens, cookies)
+            let result = complete_login(&app_state, &user, &root_domain).await?;
 
             Ok((
                 StatusCode::OK,
-                headers,
+                result.headers,
                 Json(VerifyMagicLinkResponse {
                     success: true,
-                    redirect_url,
+                    redirect_url: result.redirect_url,
                     end_user_id: Some(user.id.to_string()),
                     email: Some(user.email),
-                    waitlist_position,
+                    waitlist_position: result.waitlist_position,
                 }),
             ))
         }
@@ -689,20 +717,17 @@ enum GoogleExchangeResponse {
     },
     #[serde(rename = "needs_link_confirmation")]
     NeedsLinkConfirmation {
-        existing_user_id: String,
+        /// Token to confirm linking (server-derived, single-use, 5 min TTL)
+        link_token: String,
+        /// Email for UI display only (already verified)
         email: String,
-        google_id: String,
-        /// Domain for the completion redirect
-        domain: String,
     },
 }
 
 #[derive(Deserialize)]
 struct GoogleConfirmLinkPayload {
-    existing_user_id: String,
-    google_id: String,
-    /// Domain for the completion redirect (from the exchange response)
-    domain: String,
+    /// Token from the NeedsLinkConfirmation response
+    link_token: String,
 }
 
 #[derive(Serialize)]
@@ -752,7 +777,8 @@ async fn google_start(
 
     // Use url crate for proper URL encoding
     let mut auth_url = url::Url::parse("https://accounts.google.com/o/oauth2/v2/auth").unwrap();
-    auth_url.query_pairs_mut()
+    auth_url
+        .query_pairs_mut()
         .append_pair("client_id", &client_id)
         .append_pair("redirect_uri", &redirect_uri)
         .append_pair("response_type", "code")
@@ -827,7 +853,8 @@ async fn google_exchange(
     .await?;
 
     // Parse and validate id_token (with signature verification)
-    let (google_id, email, email_verified) = parse_google_id_token(&token_response.id_token, &client_id).await?;
+    let (google_id, email, email_verified) =
+        parse_google_id_token(&token_response.id_token, &client_id).await?;
 
     // Verify email is verified by Google
     if !email_verified {
@@ -868,16 +895,23 @@ async fn google_exchange(
             email,
             google_id,
         } => {
-            // User needs to confirm linking
+            // Generate a link confirmation token - stores server-derived data
+            // (existing_user_id, google_id, domain_id, domain) for later verification
+            let link_token = app_state
+                .domain_auth_use_cases
+                .create_google_link_confirmation_token(
+                    existing_user_id,
+                    &google_id,
+                    domain.id,
+                    root_domain,
+                )
+                .await?;
+
+            // Return only the token and email (for UI display)
             Ok((
                 StatusCode::OK,
                 HeaderMap::new(),
-                Json(GoogleExchangeResponse::NeedsLinkConfirmation {
-                    existing_user_id: existing_user_id.to_string(),
-                    email,
-                    google_id,
-                    domain: root_domain.to_string(),
-                }),
+                Json(GoogleExchangeResponse::NeedsLinkConfirmation { link_token, email }),
             ))
         }
     }
@@ -885,43 +919,54 @@ async fn google_exchange(
 
 /// POST /api/public/domain/{domain}/auth/google/confirm-link
 /// Confirms linking a Google account to an existing user.
+/// Consumes the link_token from the exchange response (single-use, server-derived data).
 /// Returns a completion URL to redirect to the correct domain for cookie setting.
 async fn google_confirm_link(
     State(app_state): State<AppState>,
     Path(_hostname): Path<String>,
     Json(payload): Json<GoogleConfirmLinkPayload>,
 ) -> AppResult<impl IntoResponse> {
-    // Use the domain from the payload (from the exchange response)
-    // This is the domain that initiated the OAuth flow
-    let root_domain = &payload.domain;
-
-    // Parse user ID
-    let existing_user_id = Uuid::parse_str(&payload.existing_user_id)
-        .map_err(|_| AppError::InvalidInput("Invalid user ID".into()))?;
-
-    // Verify the domain exists and get domain_id
-    let domain = app_state
+    // Consume the link confirmation token (single-use, contains server-derived data)
+    let link_data = app_state
         .domain_auth_use_cases
-        .get_domain_by_name(root_domain)
+        .consume_google_link_confirmation_token(&payload.link_token)
         .await?
-        .ok_or(AppError::NotFound)?;
+        .ok_or_else(|| AppError::InvalidInput("Invalid or expired link token".into()))?;
 
-    // Confirm the link
+    // Re-verify user at consume time (per Codex security review):
+    // 1. Check user still exists
     let user = app_state
         .domain_auth_use_cases
-        .confirm_google_link(existing_user_id, &payload.google_id)
+        .get_end_user_by_id(link_data.existing_user_id)
+        .await?
+        .ok_or_else(|| AppError::NotFound)?;
+
+    // 2. Check user belongs to correct domain (cross-tenant protection)
+    if user.domain_id != link_data.domain_id {
+        return Err(AppError::InvalidInput("User domain mismatch".into()));
+    }
+
+    // 3. Check user not frozen
+    if user.is_frozen {
+        return Err(AppError::AccountSuspended);
+    }
+
+    // 4. Confirm the link (this checks google_id not already linked to another user)
+    let linked_user = app_state
+        .domain_auth_use_cases
+        .confirm_google_link(link_data.existing_user_id, &link_data.google_id)
         .await?;
 
     // Generate a completion token for cross-domain cookie setting
     let completion_token = app_state
         .domain_auth_use_cases
-        .create_google_completion_token(user.id, domain.id, root_domain)
+        .create_google_completion_token(linked_user.id, link_data.domain_id, &link_data.domain)
         .await?;
 
     // Build completion URL - redirect to the domain's ingress to set cookies
     let completion_url = format!(
         "https://reauth.{}/google-complete?token={}",
-        root_domain, completion_token
+        link_data.domain, completion_token
     );
 
     Ok((
@@ -939,9 +984,12 @@ struct GoogleCompletePayload {
 #[derive(Serialize)]
 struct GoogleCompleteResponse {
     success: bool,
-    redirect_url: String,
+    /// Redirect URL (None if user is on waitlist)
+    redirect_url: Option<String>,
     end_user_id: String,
     email: String,
+    /// Waitlist position if user is on waitlist
+    waitlist_position: Option<i64>,
 }
 
 /// POST /api/public/domain/{domain}/auth/google/complete
@@ -974,88 +1022,18 @@ async fn google_complete(
         .await?
         .ok_or(AppError::NotFound)?;
 
-    // Get config for redirect URL and TTL settings
-    let config = app_state
-        .domain_auth_use_cases
-        .get_auth_config_for_domain(&root_domain)
-        .await
-        .ok();
-
-    let redirect_url = config
-        .as_ref()
-        .and_then(|c| c.redirect_url.clone())
-        .unwrap_or_else(|| format!("https://{}", root_domain));
-
-    let access_ttl_secs = config
-        .as_ref()
-        .map(|c| c.access_token_ttl_secs)
-        .unwrap_or(86400);
-    let refresh_ttl_days = config
-        .as_ref()
-        .map(|c| c.refresh_token_ttl_days)
-        .unwrap_or(30);
-
-    // Issue tokens
-    let access_token = jwt::issue_domain_end_user(
-        user.id,
-        user.domain_id,
-        &root_domain,
-        user.roles.clone(),
-        &app_state.config.jwt_secret,
-        time::Duration::seconds(access_ttl_secs as i64),
-    )?;
-
-    let refresh_token = jwt::issue_domain_end_user(
-        user.id,
-        user.domain_id,
-        &root_domain,
-        user.roles.clone(),
-        &app_state.config.jwt_secret,
-        time::Duration::days(refresh_ttl_days as i64),
-    )?;
-
-    // Set cookies on the correct domain
-    let mut headers = HeaderMap::new();
-
-    let access_cookie = Cookie::build(("end_user_access_token", access_token))
-        .http_only(true)
-        .secure(true)
-        .same_site(SameSite::Lax)
-        .domain(format!(".{}", root_domain))
-        .path("/")
-        .max_age(time::Duration::seconds(access_ttl_secs as i64))
-        .build();
-
-    let refresh_cookie = Cookie::build(("end_user_refresh_token", refresh_token))
-        .http_only(true)
-        .secure(true)
-        .same_site(SameSite::Lax)
-        .domain(format!(".{}", root_domain))
-        .path("/")
-        .max_age(time::Duration::days(refresh_ttl_days as i64))
-        .build();
-
-    let email_cookie = Cookie::build(("end_user_email", user.email.clone()))
-        .http_only(false)
-        .secure(true)
-        .same_site(SameSite::Lax)
-        .domain(format!(".{}", root_domain))
-        .path("/")
-        .max_age(time::Duration::days(refresh_ttl_days as i64))
-        .build();
-
-    append_cookie(&mut headers, access_cookie)?;
-    append_cookie(&mut headers, refresh_cookie)?;
-    append_cookie(&mut headers, email_cookie)?;
+    // Use unified login completion logic (handles waitlist, tokens, cookies)
+    let result = complete_login(&app_state, &user, &root_domain).await?;
 
     Ok((
         StatusCode::OK,
-        headers,
+        result.headers,
         Json(GoogleCompleteResponse {
             success: true,
-            redirect_url,
+            redirect_url: result.redirect_url,
             end_user_id: user.id.to_string(),
             email: user.email,
+            waitlist_position: result.waitlist_position,
         }),
     ))
 }
@@ -1102,7 +1080,9 @@ async fn exchange_google_code(
     if !response.status().is_success() {
         let error_text = response.text().await.unwrap_or_default();
         tracing::error!("Google token exchange failed: {}", error_text);
-        return Err(AppError::InvalidInput("Failed to authenticate with Google".into()));
+        return Err(AppError::InvalidInput(
+            "Failed to authenticate with Google".into(),
+        ));
     }
 
     response
@@ -1169,8 +1149,11 @@ async fn fetch_google_jwks() -> AppResult<GoogleJwks> {
 }
 
 /// Parse and verify Google id_token with signature verification
-async fn parse_google_id_token(id_token: &str, expected_client_id: &str) -> AppResult<(String, String, bool)> {
-    use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+async fn parse_google_id_token(
+    id_token: &str,
+    expected_client_id: &str,
+) -> AppResult<(String, String, bool)> {
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header};
 
     // Decode the header to get the key ID (kid)
     let header = decode_header(id_token)

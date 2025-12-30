@@ -5,7 +5,9 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    application::use_cases::domain_auth::{DomainAuthGoogleOAuthProfile, DomainAuthGoogleOAuthRepo},
+    application::use_cases::domain_auth::{
+        DomainAuthGoogleOAuthProfile, DomainAuthGoogleOAuthRepo,
+    },
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainAuthGoogleOAuthProfile {

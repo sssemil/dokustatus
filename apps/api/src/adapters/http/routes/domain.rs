@@ -441,10 +441,13 @@ async fn get_auth_config(
         .get_google_oauth_config_info(domain_id)
         .await?;
 
-    let google_oauth_response = google_oauth_config_info.as_ref().map(|c| GoogleOAuthConfigResponse {
-        client_id_prefix: c.client_id_prefix.clone(),
-        has_client_secret: c.has_client_secret,
-    });
+    let google_oauth_response =
+        google_oauth_config_info
+            .as_ref()
+            .map(|c| GoogleOAuthConfigResponse {
+                client_id_prefix: c.client_id_prefix.clone(),
+                has_client_secret: c.has_client_secret,
+            });
 
     let has_google_fallback = app_state.domain_auth_use_cases.has_google_oauth_fallback();
     let using_google_fallback = google_oauth_config_info.is_none() && has_google_fallback;

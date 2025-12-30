@@ -8,10 +8,10 @@ import { isMainApp as checkIsMainApp, getRootDomain } from '@/lib/domain-utils';
 type Status = 'loading' | 'needs_link' | 'success' | 'error';
 
 interface LinkConfirmationData {
-  existingUserId: string;
+  // Token containing server-derived data (single-use, 5 min TTL)
+  linkToken: string;
+  // Email for UI display only
   email: string;
-  googleId: string;
-  domain: string;
 }
 
 function GoogleCallbackHandler() {
@@ -72,10 +72,8 @@ function GoogleCallbackHandler() {
           } else if (data.status === 'needs_link_confirmation') {
             setStatus('needs_link');
             setLinkData({
-              existingUserId: data.existing_user_id,
+              linkToken: data.link_token,
               email: data.email,
-              googleId: data.google_id,
-              domain: data.domain,
             });
           }
         } else {
@@ -110,9 +108,7 @@ function GoogleCallbackHandler() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          existing_user_id: linkData.existingUserId,
-          google_id: linkData.googleId,
-          domain: linkData.domain, // Include the original domain for redirect
+          link_token: linkData.linkToken,
         }),
         credentials: 'include',
       });

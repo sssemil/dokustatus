@@ -5,11 +5,12 @@ import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { getRootDomain } from '@/lib/domain-utils';
 
-type Status = 'loading' | 'success' | 'error';
+type Status = 'loading' | 'success' | 'waitlist' | 'error';
 
 function GoogleCompleteHandler() {
   const [status, setStatus] = useState<Status>('loading');
   const [errorMessage, setErrorMessage] = useState('');
+  const [waitlistPosition, setWaitlistPosition] = useState<number | null>(null);
   const searchParams = useSearchParams();
 
   useEffect(() => {
@@ -36,16 +37,27 @@ function GoogleCompleteHandler() {
 
         if (res.ok) {
           const data = await res.json();
-          setStatus('success');
-          // Redirect to the configured redirect URL
-          setTimeout(() => {
-            if (data.redirect_url) {
-              window.location.href = data.redirect_url;
-            } else {
-              // Fallback to domain root
-              window.location.href = `https://${apiDomain}`;
-            }
-          }, 1000);
+
+          // Check if user is on waitlist
+          if (data.waitlist_position != null) {
+            setStatus('waitlist');
+            setWaitlistPosition(data.waitlist_position);
+            // Redirect to waitlist page after a short delay
+            setTimeout(() => {
+              window.location.href = `/waitlist?position=${data.waitlist_position}`;
+            }, 2000);
+          } else {
+            setStatus('success');
+            // Redirect to the configured redirect URL
+            setTimeout(() => {
+              if (data.redirect_url) {
+                window.location.href = data.redirect_url;
+              } else {
+                // Fallback to domain root
+                window.location.href = `https://${apiDomain}`;
+              }
+            }, 1000);
+          }
         } else {
           const errData = await res.json().catch(() => ({}));
           setStatus('error');
@@ -86,6 +98,25 @@ function GoogleCompleteHandler() {
             </div>
             <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>You&apos;re in!</h2>
             <p className="text-muted">Redirecting...</p>
+          </>
+        )}
+
+        {status === 'waitlist' && (
+          <>
+            <div style={{ marginBottom: 'var(--spacing-lg)' }}>
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" strokeWidth="2" style={{ margin: '0 auto' }}>
+                <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>You&apos;re on the waitlist!</h2>
+            <p className="text-muted">
+              {waitlistPosition != null
+                ? `Your position: #${waitlistPosition}`
+                : 'Checking your position...'}
+            </p>
+            <p className="text-muted" style={{ fontSize: '0.9em', marginTop: 'var(--spacing-sm)' }}>
+              Redirecting to waitlist page...
+            </p>
           </>
         )}
 

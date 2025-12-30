@@ -136,6 +136,18 @@ pub struct OAuthCompletionData {
     pub domain: String,
 }
 
+/// OAuth link confirmation data stored in Redis when a Google account needs
+/// to be linked to an existing user account (email match, no google_id yet).
+/// Server-derived data only - never trust client-provided values.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OAuthLinkConfirmationData {
+    pub existing_user_id: Uuid,
+    pub google_id: String,
+    pub domain_id: Uuid,
+    pub domain: String,
+    // Note: email already verified via id_token email_verified=true check in exchange
+}
+
 #[async_trait]
 pub trait OAuthStateStore: Send + Sync {
     /// Store state with domain and PKCE verifier. Single-use, expires after TTL.
@@ -156,6 +168,21 @@ pub trait OAuthStateStore: Send + Sync {
     ) -> AppResult<()>;
     /// Consume completion token atomically
     async fn consume_completion(&self, token: &str) -> AppResult<Option<OAuthCompletionData>>;
+
+    /// Store link confirmation token after OAuth exchange when user needs to confirm linking.
+    /// TTL: 5 minutes (short-lived, single-use)
+    async fn store_link_confirmation(
+        &self,
+        token: &str,
+        data: &OAuthLinkConfirmationData,
+        ttl_minutes: i64,
+    ) -> AppResult<()>;
+
+    /// Consume link confirmation token atomically (single-use)
+    async fn consume_link_confirmation(
+        &self,
+        token: &str,
+    ) -> AppResult<Option<OAuthLinkConfirmationData>>;
 }
 
 #[async_trait]
@@ -331,8 +358,8 @@ impl DomainAuthUseCases {
             .unwrap_or(magic_link_fallback_available);
 
         // Google OAuth is enabled by default if fallback is available
-        let google_oauth_fallback_available =
-            self.fallback_google_client_id.is_some() && self.fallback_google_client_secret.is_some();
+        let google_oauth_fallback_available = self.fallback_google_client_id.is_some()
+            && self.fallback_google_client_secret.is_some();
         let google_oauth_enabled = auth_config
             .as_ref()
             .map(|c| c.google_oauth_enabled)
@@ -1233,7 +1260,9 @@ impl DomainAuthUseCases {
         self.end_user_repo
             .set_google_id(existing_user_id, google_id)
             .await?;
-        self.end_user_repo.update_last_login(existing_user_id).await?;
+        self.end_user_repo
+            .update_last_login(existing_user_id)
+            .await?;
 
         // Return the updated user
         self.end_user_repo
@@ -1336,6 +1365,44 @@ impl DomainAuthUseCases {
         token: &str,
     ) -> AppResult<Option<OAuthCompletionData>> {
         self.oauth_state_store.consume_completion(token).await
+    }
+
+    /// Create a link confirmation token for when a Google account needs to be linked
+    /// to an existing user account (email match, no google_id yet).
+    /// All data is server-derived (never from client).
+    #[instrument(skip(self))]
+    pub async fn create_google_link_confirmation_token(
+        &self,
+        existing_user_id: Uuid,
+        google_id: &str,
+        domain_id: Uuid,
+        domain: &str,
+    ) -> AppResult<String> {
+        let token = generate_token();
+        let data = OAuthLinkConfirmationData {
+            existing_user_id,
+            google_id: google_id.to_string(),
+            domain_id,
+            domain: domain.to_string(),
+        };
+
+        self.oauth_state_store
+            .store_link_confirmation(&token, &data, 5) // 5 minute TTL (short-lived)
+            .await?;
+
+        Ok(token)
+    }
+
+    /// Consume a link confirmation token and return the stored data.
+    /// Returns None if token is invalid/expired/already consumed.
+    #[instrument(skip(self))]
+    pub async fn consume_google_link_confirmation_token(
+        &self,
+        token: &str,
+    ) -> AppResult<Option<OAuthLinkConfirmationData>> {
+        self.oauth_state_store
+            .consume_link_confirmation(token)
+            .await
     }
 }
 
