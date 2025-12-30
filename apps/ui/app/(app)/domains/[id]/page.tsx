@@ -30,6 +30,11 @@ type AuthConfig = {
   } | null;
   using_fallback: boolean;
   fallback_from_email: string | null;
+  google_oauth_config: {
+    client_id_prefix: string;
+    has_client_secret: boolean;
+  } | null;
+  using_google_fallback: boolean;
 };
 
 type EndUser = {
@@ -130,6 +135,9 @@ export default function DomainDetailPage() {
   const [redirectUrl, setRedirectUrl] = useState('');
   const [whitelistEnabled, setWhitelistEnabled] = useState(false);
   const [userSearch, setUserSearch] = useState('');
+  const [googleOAuthEnabled, setGoogleOAuthEnabled] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState('');
+  const [googleClientSecret, setGoogleClientSecret] = useState('');
 
   const fetchData = useCallback(async () => {
     try {
@@ -146,6 +154,7 @@ export default function DomainDetailPage() {
             const configData = await configRes.json();
             setAuthConfig(configData);
             setMagicLinkEnabled(configData.magic_link_enabled);
+            setGoogleOAuthEnabled(configData.google_oauth_enabled);
             setRedirectUrl(configData.redirect_url || '');
             setWhitelistEnabled(configData.whitelist_enabled);
             if (configData.magic_link_config) {
@@ -297,7 +306,7 @@ export default function DomainDetailPage() {
     try {
       const payload: Record<string, unknown> = {
         magic_link_enabled: magicLinkEnabled,
-        google_oauth_enabled: false,
+        google_oauth_enabled: googleOAuthEnabled,
         redirect_url: redirectUrl || null,
         whitelist_enabled: whitelistEnabled,
         whitelist_all_existing: whitelistAllExisting,
@@ -312,6 +321,11 @@ export default function DomainDetailPage() {
         }
       }
 
+      if (googleOAuthEnabled && googleClientId && googleClientSecret) {
+        payload.google_client_id = googleClientId;
+        payload.google_client_secret = googleClientSecret;
+      }
+
       const res = await fetch(`/api/domains/${domainId}/auth-config`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -322,6 +336,8 @@ export default function DomainDetailPage() {
       if (res.ok) {
         setSuccess('Configuration saved successfully');
         setResendApiKey('');
+        setGoogleClientId('');
+        setGoogleClientSecret('');
         fetchData();
       } else {
         const errData = await res.json().catch(() => ({}));
@@ -358,6 +374,30 @@ export default function DomainDetailPage() {
     }
   };
 
+  const handleRemoveGoogleOAuthConfig = async () => {
+    setError('');
+    setSuccess('');
+
+    try {
+      const res = await fetch(`/api/domains/${domainId}/auth-config/google-oauth`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+
+      if (res.ok) {
+        setSuccess('Custom Google OAuth configuration removed');
+        setGoogleClientId('');
+        setGoogleClientSecret('');
+        fetchData();
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setError(errData.message || 'Failed to remove configuration');
+      }
+    } catch {
+      setError('Network error. Please try again.');
+    }
+  };
+
   const handleWhitelistToggle = (enabled: boolean) => {
     if (enabled && !authConfig?.whitelist_enabled) {
       // Show whitelist modal to ask about existing users
@@ -379,7 +419,7 @@ export default function DomainDetailPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             magic_link_enabled: magicLinkEnabled,
-            google_oauth_enabled: false,
+            google_oauth_enabled: googleOAuthEnabled,
             redirect_url: redirectUrl || null,
             whitelist_enabled: true,
             whitelist_all_existing: true,
@@ -713,7 +753,7 @@ export default function DomainDetailPage() {
       )}
 
       {/* No Auth Methods Warning */}
-      {domain.status === 'verified' && !magicLinkEnabled && !authConfig?.google_oauth_enabled && (
+      {domain.status === 'verified' && !magicLinkEnabled && !googleOAuthEnabled && (
         <div className="message warning" style={{ marginBottom: 'var(--spacing-md)' }}>
           No login methods are enabled. Go to the Configuration tab to enable Magic Link or Google OAuth.
         </div>
@@ -1084,8 +1124,8 @@ export default function DomainDetailPage() {
               )}
             </div>
 
-            {/* Google OAuth Section (Placeholder) */}
-            <div className="card" style={{ marginBottom: 'var(--spacing-lg)', opacity: 0.6 }}>
+            {/* Google OAuth Section */}
+            <div className="card" style={{ marginBottom: 'var(--spacing-lg)' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <div>
                   <h2 style={{ marginBottom: 'var(--spacing-xs)' }}>Google OAuth</h2>
@@ -1093,18 +1133,116 @@ export default function DomainDetailPage() {
                     Allow users to sign in with their Google account.
                   </p>
                 </div>
-                <span
-                  style={{
-                    padding: '4px 8px',
-                    borderRadius: 'var(--radius-sm)',
-                    backgroundColor: 'var(--bg-tertiary)',
-                    color: 'var(--text-muted)',
-                    fontSize: '12px',
-                  }}
-                >
-                  Coming soon
-                </span>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--spacing-sm)', cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={googleOAuthEnabled}
+                    onChange={(e) => setGoogleOAuthEnabled(e.target.checked)}
+                    style={{ width: 18, height: 18 }}
+                  />
+                  <span>{googleOAuthEnabled ? 'Enabled' : 'Disabled'}</span>
+                </label>
               </div>
+
+              {googleOAuthEnabled && (
+                <div style={{ marginTop: 'var(--spacing-lg)', borderTop: '1px solid var(--border-primary)', paddingTop: 'var(--spacing-lg)' }}>
+                  {/* Show indicator for custom vs fallback config */}
+                  {authConfig?.google_oauth_config?.has_client_secret && (
+                    <>
+                      <div
+                        style={{
+                          marginBottom: 'var(--spacing-md)',
+                          padding: 'var(--spacing-sm) var(--spacing-md)',
+                          backgroundColor: 'rgba(34, 197, 94, 0.1)',
+                          border: '1px solid rgba(34, 197, 94, 0.3)',
+                          borderRadius: 'var(--radius-sm)',
+                        }}
+                      >
+                        <span style={{ color: 'rgb(34, 197, 94)' }}>Using your custom Google OAuth credentials</span>
+                        <span className="text-muted" style={{ marginLeft: 'var(--spacing-sm)' }}>
+                          (Client ID: {authConfig.google_oauth_config.client_id_prefix}...)
+                        </span>
+                      </div>
+                      {authConfig?.using_google_fallback !== undefined && (
+                        <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                          <HoldToConfirmButton
+                            label="Remove custom config"
+                            holdingLabel="Hold to remove..."
+                            onConfirm={handleRemoveGoogleOAuthConfig}
+                            variant="danger"
+                            duration={2000}
+                            style={{ fontSize: '13px', padding: '6px 12px' }}
+                          />
+                          <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
+                            Switch back to reauth&apos;s shared Google OAuth credentials
+                          </p>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  {!authConfig?.google_oauth_config?.has_client_secret && authConfig?.using_google_fallback && (
+                    <div
+                      style={{
+                        marginBottom: 'var(--spacing-md)',
+                        padding: 'var(--spacing-sm) var(--spacing-md)',
+                        backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                        border: '1px solid rgba(59, 130, 246, 0.3)',
+                        borderRadius: 'var(--radius-sm)',
+                      }}
+                    >
+                      <div style={{ fontWeight: 500, marginBottom: 4 }}>Using reauth&apos;s shared Google OAuth</div>
+                      <div className="text-muted" style={{ fontSize: '13px' }}>
+                        Users will see &quot;Sign in with Google&quot; powered by reauth.
+                      </div>
+                      <div className="text-muted" style={{ fontSize: '12px', marginTop: 4 }}>
+                        Add your own Google OAuth credentials below for custom branding.
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                    <label htmlFor="googleClientId">
+                      Google Client ID
+                      {authConfig?.using_google_fallback && !authConfig?.google_oauth_config?.has_client_secret && (
+                        <span className="text-muted" style={{ fontWeight: 'normal', marginLeft: 'var(--spacing-sm)' }}>(optional)</span>
+                      )}
+                    </label>
+                    <input
+                      id="googleClientId"
+                      type="text"
+                      value={googleClientId}
+                      onChange={(e) => setGoogleClientId(e.target.value)}
+                      placeholder={authConfig?.google_oauth_config?.has_client_secret ? `${authConfig.google_oauth_config.client_id_prefix}...` : 'Enter your Google Client ID'}
+                    />
+                    <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
+                      Get credentials from{' '}
+                      <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" style={{ color: 'var(--accent-blue)' }}>
+                        Google Cloud Console
+                      </a>
+                      {authConfig?.google_oauth_config?.has_client_secret && ' (leave blank to keep existing)'}
+                    </p>
+                  </div>
+
+                  <div style={{ marginBottom: 'var(--spacing-md)' }}>
+                    <label htmlFor="googleClientSecret">
+                      Google Client Secret
+                      {authConfig?.using_google_fallback && !authConfig?.google_oauth_config?.has_client_secret && (
+                        <span className="text-muted" style={{ fontWeight: 'normal', marginLeft: 'var(--spacing-sm)' }}>(optional)</span>
+                      )}
+                    </label>
+                    <input
+                      id="googleClientSecret"
+                      type="password"
+                      value={googleClientSecret}
+                      onChange={(e) => setGoogleClientSecret(e.target.value)}
+                      placeholder={authConfig?.google_oauth_config?.has_client_secret ? '••••••••••••••••' : 'Enter your Google Client Secret'}
+                    />
+                    <p className="text-muted" style={{ fontSize: '12px', marginTop: 'var(--spacing-xs)' }}>
+                      The client secret from your OAuth 2.0 credentials.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Redirect URL */}

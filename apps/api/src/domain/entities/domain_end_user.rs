@@ -6,6 +6,7 @@ pub struct DomainEndUser {
     pub domain_id: Uuid,
     pub email: String,
     pub roles: Vec<String>,
+    pub google_id: Option<String>,
     pub email_verified_at: Option<chrono::NaiveDateTime>,
     pub last_login_at: Option<chrono::NaiveDateTime>,
     pub is_frozen: bool,

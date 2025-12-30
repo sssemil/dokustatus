@@ -76,6 +76,8 @@ services:
       - postgres_password
       - redis_password
       - process_number_key
+      - fallback_google_client_id
+      - fallback_google_client_secret
     entrypoint:
       - /bin/sh
       - -c
@@ -93,6 +95,8 @@ services:
         export FALLBACK_RESEND_API_KEY="$$(cat /run/secrets/fallback_resend_api_key)"
         export FALLBACK_EMAIL_DOMAIN="${FALLBACK_EMAIL_DOMAIN:-mail.reauth.dev}"
         export PROCESS_NUMBER_KEY="$$(cat /run/secrets/process_number_key)"
+        export FALLBACK_GOOGLE_CLIENT_ID="$$(cat /run/secrets/fallback_google_client_id)"
+        export FALLBACK_GOOGLE_CLIENT_SECRET="$$(cat /run/secrets/fallback_google_client_secret)"
         exec reauth-api
     restart: unless-stopped
     networks:
@@ -216,6 +220,11 @@ secrets:
   # Fallback Resend API key for domains without custom email config
   fallback_resend_api_key:
     file: ./secrets/fallback_resend_api_key
+  # Fallback Google OAuth credentials for domains without custom OAuth config
+  fallback_google_client_id:
+    file: ./secrets/fallback_google_client_id
+  fallback_google_client_secret:
+    file: ./secrets/fallback_google_client_secret
   # Developer API keys for server-to-server authentication
   reauth_dev_api_key:
     file: ./secrets/reauth_dev_api_key

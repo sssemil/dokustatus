@@ -52,6 +52,21 @@ pub trait DomainAuthMagicLinkRepo: Send + Sync {
 }
 
 #[async_trait]
+pub trait DomainAuthGoogleOAuthRepo: Send + Sync {
+    async fn get_by_domain_id(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Option<DomainAuthGoogleOAuthProfile>>;
+    async fn upsert(
+        &self,
+        domain_id: Uuid,
+        client_id: &str,
+        client_secret_encrypted: &str,
+    ) -> AppResult<DomainAuthGoogleOAuthProfile>;
+    async fn delete(&self, domain_id: Uuid) -> AppResult<()>;
+}
+
+#[async_trait]
 pub trait DomainEndUserRepo: Send + Sync {
     async fn get_by_id(&self, id: Uuid) -> AppResult<Option<DomainEndUserProfile>>;
     async fn get_by_domain_and_email(
@@ -59,9 +74,22 @@ pub trait DomainEndUserRepo: Send + Sync {
         domain_id: Uuid,
         email: &str,
     ) -> AppResult<Option<DomainEndUserProfile>>;
+    async fn get_by_domain_and_google_id(
+        &self,
+        domain_id: Uuid,
+        google_id: &str,
+    ) -> AppResult<Option<DomainEndUserProfile>>;
     async fn upsert(&self, domain_id: Uuid, email: &str) -> AppResult<DomainEndUserProfile>;
+    async fn upsert_with_google_id(
+        &self,
+        domain_id: Uuid,
+        email: &str,
+        google_id: &str,
+    ) -> AppResult<DomainEndUserProfile>;
     async fn mark_verified(&self, id: Uuid) -> AppResult<DomainEndUserProfile>;
     async fn update_last_login(&self, id: Uuid) -> AppResult<()>;
+    async fn set_google_id(&self, id: Uuid, google_id: &str) -> AppResult<()>;
+    async fn clear_google_id(&self, id: Uuid) -> AppResult<()>;
     async fn list_by_domain(&self, domain_id: Uuid) -> AppResult<Vec<DomainEndUserProfile>>;
     async fn delete(&self, id: Uuid) -> AppResult<()>;
     async fn set_frozen(&self, id: Uuid, frozen: bool) -> AppResult<()>;
@@ -90,6 +118,44 @@ pub trait DomainMagicLinkStore: Send + Sync {
         token_hash: &str,
         session_id: &str,
     ) -> AppResult<Option<DomainMagicLinkData>>;
+}
+
+/// OAuth state data stored in Redis during the OAuth flow
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OAuthStateData {
+    pub domain: String,
+    pub code_verifier: String, // PKCE code_verifier for exchange
+}
+
+/// OAuth completion data stored in Redis after successful OAuth exchange
+/// Used to transfer auth state to the correct domain for cookie setting
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct OAuthCompletionData {
+    pub user_id: Uuid,
+    pub domain_id: Uuid,
+    pub domain: String,
+}
+
+#[async_trait]
+pub trait OAuthStateStore: Send + Sync {
+    /// Store state with domain and PKCE verifier. Single-use, expires after TTL.
+    async fn store_state(
+        &self,
+        state: &str,
+        data: &OAuthStateData,
+        ttl_minutes: i64,
+    ) -> AppResult<()>;
+    /// Consume state atomically (single-use) and return stored data
+    async fn consume_state(&self, state: &str) -> AppResult<Option<OAuthStateData>>;
+    /// Store completion token after successful OAuth exchange
+    async fn store_completion(
+        &self,
+        token: &str,
+        data: &OAuthCompletionData,
+        ttl_minutes: i64,
+    ) -> AppResult<()>;
+    /// Consume completion token atomically
+    async fn consume_completion(&self, token: &str) -> AppResult<Option<OAuthCompletionData>>;
 }
 
 #[async_trait]
@@ -133,11 +199,22 @@ pub struct DomainAuthMagicLinkProfile {
 }
 
 #[derive(Debug, Clone)]
+pub struct DomainAuthGoogleOAuthProfile {
+    pub id: Uuid,
+    pub domain_id: Uuid,
+    pub client_id: String,
+    pub client_secret_encrypted: String,
+    pub created_at: Option<NaiveDateTime>,
+    pub updated_at: Option<NaiveDateTime>,
+}
+
+#[derive(Debug, Clone)]
 pub struct DomainEndUserProfile {
     pub id: Uuid,
     pub domain_id: Uuid,
     pub email: String,
     pub roles: Vec<String>,
+    pub google_id: Option<String>,
     pub email_verified_at: Option<NaiveDateTime>,
     pub last_login_at: Option<NaiveDateTime>,
     pub is_frozen: bool,
@@ -174,36 +251,49 @@ pub struct DomainAuthUseCases {
     domain_repo: Arc<dyn DomainRepo>,
     auth_config_repo: Arc<dyn DomainAuthConfigRepo>,
     magic_link_config_repo: Arc<dyn DomainAuthMagicLinkRepo>,
+    google_oauth_config_repo: Arc<dyn DomainAuthGoogleOAuthRepo>,
     end_user_repo: Arc<dyn DomainEndUserRepo>,
     magic_link_store: Arc<dyn DomainMagicLinkStore>,
+    oauth_state_store: Arc<dyn OAuthStateStore>,
     email_sender: Arc<dyn DomainEmailSender>,
     cipher: ProcessCipher,
     fallback_resend_api_key: Option<String>,
     fallback_email_domain: Option<String>,
+    fallback_google_client_id: Option<String>,
+    fallback_google_client_secret: Option<String>,
 }
 
 impl DomainAuthUseCases {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         domain_repo: Arc<dyn DomainRepo>,
         auth_config_repo: Arc<dyn DomainAuthConfigRepo>,
         magic_link_config_repo: Arc<dyn DomainAuthMagicLinkRepo>,
+        google_oauth_config_repo: Arc<dyn DomainAuthGoogleOAuthRepo>,
         end_user_repo: Arc<dyn DomainEndUserRepo>,
         magic_link_store: Arc<dyn DomainMagicLinkStore>,
+        oauth_state_store: Arc<dyn OAuthStateStore>,
         email_sender: Arc<dyn DomainEmailSender>,
         cipher: ProcessCipher,
         fallback_resend_api_key: Option<String>,
         fallback_email_domain: Option<String>,
+        fallback_google_client_id: Option<String>,
+        fallback_google_client_secret: Option<String>,
     ) -> Self {
         Self {
             domain_repo,
             auth_config_repo,
             magic_link_config_repo,
+            google_oauth_config_repo,
             end_user_repo,
             magic_link_store,
+            oauth_state_store,
             email_sender,
             cipher,
             fallback_resend_api_key,
             fallback_email_domain,
+            fallback_google_client_id,
+            fallback_google_client_secret,
         }
     }
 
@@ -233,21 +323,26 @@ impl DomainAuthUseCases {
             .unwrap_or_else(|| format!("https://{}", domain.domain));
 
         // Magic link is enabled by default if fallback is available
-        let fallback_available =
+        let magic_link_fallback_available =
             self.fallback_resend_api_key.is_some() && self.fallback_email_domain.is_some();
         let magic_link_enabled = auth_config
             .as_ref()
             .map(|c| c.magic_link_enabled)
-            .unwrap_or(fallback_available);
+            .unwrap_or(magic_link_fallback_available);
+
+        // Google OAuth is enabled by default if fallback is available
+        let google_oauth_fallback_available =
+            self.fallback_google_client_id.is_some() && self.fallback_google_client_secret.is_some();
+        let google_oauth_enabled = auth_config
+            .as_ref()
+            .map(|c| c.google_oauth_enabled)
+            .unwrap_or(google_oauth_fallback_available);
 
         Ok(PublicDomainConfig {
             domain_id: domain.id,
             domain: domain.domain,
             magic_link_enabled,
-            google_oauth_enabled: auth_config
-                .as_ref()
-                .map(|c| c.google_oauth_enabled)
-                .unwrap_or(false),
+            google_oauth_enabled,
             redirect_url: Some(redirect_url),
         })
     }
@@ -938,6 +1033,330 @@ impl DomainAuthUseCases {
     ) -> AppResult<Option<DomainEndUserProfile>> {
         self.end_user_repo.get_by_id(user_id).await
     }
+
+    // ========================================================================
+    // Google OAuth Methods
+    // ========================================================================
+
+    /// Get Google OAuth config for a domain.
+    /// Returns (client_id, client_secret, using_fallback)
+    /// Tries domain-specific first, then falls back to global config.
+    pub async fn get_google_oauth_config(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<(String, String, bool)> {
+        // Try domain-specific config first
+        if let Some(config) = self
+            .google_oauth_config_repo
+            .get_by_domain_id(domain_id)
+            .await?
+        {
+            let client_secret = self.cipher.decrypt(&config.client_secret_encrypted)?;
+            return Ok((config.client_id, client_secret, false));
+        }
+
+        // Fall back to global config if available
+        if let (Some(client_id), Some(client_secret)) = (
+            &self.fallback_google_client_id,
+            &self.fallback_google_client_secret,
+        ) {
+            return Ok((client_id.clone(), client_secret.clone(), true));
+        }
+
+        Err(AppError::InvalidInput(
+            "Google OAuth not configured for this domain. Please add credentials.".into(),
+        ))
+    }
+
+    /// Check if Google OAuth fallback config is available
+    pub fn has_google_oauth_fallback(&self) -> bool {
+        self.fallback_google_client_id.is_some() && self.fallback_google_client_secret.is_some()
+    }
+
+    /// Create OAuth state for Google OAuth flow.
+    /// Returns (state_token, code_verifier) - caller builds the auth URL.
+    #[instrument(skip(self))]
+    pub async fn create_google_oauth_state(
+        &self,
+        domain_name: &str,
+    ) -> AppResult<(String, String)> {
+        // Verify domain exists and is verified
+        let domain = self
+            .domain_repo
+            .get_by_domain(domain_name)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        if domain.status != DomainStatus::Verified {
+            return Err(AppError::NotFound);
+        }
+
+        // Check if Google OAuth is enabled for this domain
+        let auth_config = self.auth_config_repo.get_by_domain_id(domain.id).await?;
+        let google_oauth_enabled = auth_config
+            .as_ref()
+            .map(|c| c.google_oauth_enabled)
+            .unwrap_or(self.has_google_oauth_fallback());
+
+        if !google_oauth_enabled {
+            return Err(AppError::InvalidInput(
+                "Google OAuth is not enabled for this domain".into(),
+            ));
+        }
+
+        // Generate state token and PKCE code verifier
+        let state = generate_token();
+        let code_verifier = generate_token();
+
+        // Store state in Redis
+        let state_data = OAuthStateData {
+            domain: domain_name.to_string(),
+            code_verifier: code_verifier.clone(),
+        };
+
+        self.oauth_state_store
+            .store_state(&state, &state_data, 10) // 10 minute TTL
+            .await?;
+
+        Ok((state, code_verifier))
+    }
+
+    /// Consume OAuth state and return stored data.
+    /// Returns None if state is invalid/expired/already consumed.
+    #[instrument(skip(self))]
+    pub async fn consume_google_oauth_state(
+        &self,
+        state: &str,
+    ) -> AppResult<Option<OAuthStateData>> {
+        self.oauth_state_store.consume_state(state).await
+    }
+
+    /// Get domain by name (for OAuth callback to look up domain from state)
+    pub async fn get_domain_by_name(
+        &self,
+        domain_name: &str,
+    ) -> AppResult<Option<crate::application::use_cases::domain::DomainProfile>> {
+        self.domain_repo.get_by_domain(domain_name).await
+    }
+
+    /// Check if Google OAuth is enabled for a domain
+    #[instrument(skip(self))]
+    pub async fn is_google_oauth_enabled(&self, domain_id: Uuid) -> AppResult<bool> {
+        let auth_config = self.auth_config_repo.get_by_domain_id(domain_id).await?;
+        Ok(auth_config
+            .as_ref()
+            .map(|c| c.google_oauth_enabled)
+            .unwrap_or(self.has_google_oauth_fallback()))
+    }
+
+    /// Find or create end user by Google ID (for OAuth login).
+    /// Returns the end user and a flag indicating if it's a new user.
+    #[instrument(skip(self))]
+    pub async fn find_or_create_end_user_by_google(
+        &self,
+        domain_id: Uuid,
+        google_id: &str,
+        email: &str,
+    ) -> AppResult<GoogleLoginResult> {
+        // First, try to find by google_id (existing linked account)
+        if let Some(user) = self
+            .end_user_repo
+            .get_by_domain_and_google_id(domain_id, google_id)
+            .await?
+        {
+            // Existing linked account - update last login and return
+            self.end_user_repo.update_last_login(user.id).await?;
+            return Ok(GoogleLoginResult::LoggedIn(user));
+        }
+
+        // Try to find by email
+        if let Some(user) = self
+            .end_user_repo
+            .get_by_domain_and_email(domain_id, email)
+            .await?
+        {
+            // User exists with this email
+            if user.google_id.is_some() {
+                // Already linked to a different Google account - conflict
+                return Err(AppError::InvalidInput(
+                    "This email is already linked to a different Google account".into(),
+                ));
+            }
+
+            // User exists but not linked - needs confirmation
+            return Ok(GoogleLoginResult::NeedsLinkConfirmation {
+                existing_user_id: user.id,
+                email: email.to_string(),
+                google_id: google_id.to_string(),
+            });
+        }
+
+        // No existing user - create new one with Google ID
+        let user = self
+            .end_user_repo
+            .upsert_with_google_id(domain_id, email, google_id)
+            .await?;
+        self.end_user_repo.update_last_login(user.id).await?;
+
+        Ok(GoogleLoginResult::LoggedIn(user))
+    }
+
+    /// Confirm linking a Google account to an existing user.
+    /// Called after user confirms the link in the UI.
+    #[instrument(skip(self))]
+    pub async fn confirm_google_link(
+        &self,
+        existing_user_id: Uuid,
+        google_id: &str,
+    ) -> AppResult<DomainEndUserProfile> {
+        // Get the user to verify it exists and get domain_id
+        let user = self
+            .end_user_repo
+            .get_by_id(existing_user_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        // Verify google_id is not already linked to another user
+        if let Some(existing) = self
+            .end_user_repo
+            .get_by_domain_and_google_id(user.domain_id, google_id)
+            .await?
+        {
+            if existing.id != existing_user_id {
+                return Err(AppError::InvalidInput(
+                    "This Google account is already linked to a different user".into(),
+                ));
+            }
+        }
+
+        // Link the Google account
+        self.end_user_repo
+            .set_google_id(existing_user_id, google_id)
+            .await?;
+        self.end_user_repo.update_last_login(existing_user_id).await?;
+
+        // Return the updated user
+        self.end_user_repo
+            .get_by_id(existing_user_id)
+            .await?
+            .ok_or(AppError::NotFound)
+    }
+
+    /// Update Google OAuth config for a domain (domain owner only)
+    #[instrument(skip(self, client_secret))]
+    pub async fn update_google_oauth_config(
+        &self,
+        end_user_id: Uuid,
+        domain_id: Uuid,
+        client_id: &str,
+        client_secret: &str,
+    ) -> AppResult<()> {
+        self.verify_domain_ownership(end_user_id, domain_id).await?;
+
+        let encrypted_secret = self.cipher.encrypt(client_secret)?;
+        self.google_oauth_config_repo
+            .upsert(domain_id, client_id, &encrypted_secret)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Delete Google OAuth config for a domain (domain owner only)
+    #[instrument(skip(self))]
+    pub async fn delete_google_oauth_config(
+        &self,
+        end_user_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<()> {
+        self.verify_domain_ownership(end_user_id, domain_id).await?;
+        self.google_oauth_config_repo.delete(domain_id).await
+    }
+
+    /// Get Google OAuth config info for dashboard display
+    pub async fn get_google_oauth_config_info(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Option<GoogleOAuthConfigInfo>> {
+        if let Some(config) = self
+            .google_oauth_config_repo
+            .get_by_domain_id(domain_id)
+            .await?
+        {
+            Ok(Some(GoogleOAuthConfigInfo {
+                client_id_prefix: config.client_id.chars().take(10).collect(),
+                has_client_secret: true,
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Unlink Google account from end user (for profile page)
+    #[instrument(skip(self))]
+    pub async fn unlink_google_account(&self, end_user_id: Uuid) -> AppResult<()> {
+        // Verify user exists
+        let _ = self
+            .end_user_repo
+            .get_by_id(end_user_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+
+        self.end_user_repo.clear_google_id(end_user_id).await
+    }
+
+    /// Create a completion token for cross-domain cookie setting.
+    /// After Google OAuth exchange on reauth.reauth.dev, we redirect to reauth.{domain}
+    /// with this token so cookies can be set on the correct domain.
+    #[instrument(skip(self))]
+    pub async fn create_google_completion_token(
+        &self,
+        user_id: Uuid,
+        domain_id: Uuid,
+        domain: &str,
+    ) -> AppResult<String> {
+        let token = generate_token();
+        let data = OAuthCompletionData {
+            user_id,
+            domain_id,
+            domain: domain.to_string(),
+        };
+
+        self.oauth_state_store
+            .store_completion(&token, &data, 5) // 5 minute TTL (short-lived)
+            .await?;
+
+        Ok(token)
+    }
+
+    /// Consume a completion token and return the stored data.
+    /// Returns None if token is invalid/expired/already consumed.
+    #[instrument(skip(self))]
+    pub async fn consume_google_completion_token(
+        &self,
+        token: &str,
+    ) -> AppResult<Option<OAuthCompletionData>> {
+        self.oauth_state_store.consume_completion(token).await
+    }
+}
+
+/// Result of a Google OAuth login attempt
+#[derive(Debug)]
+pub enum GoogleLoginResult {
+    /// Successfully logged in (existing or new user)
+    LoggedIn(DomainEndUserProfile),
+    /// User with this email exists but needs to confirm linking
+    NeedsLinkConfirmation {
+        existing_user_id: Uuid,
+        email: String,
+        google_id: String,
+    },
+}
+
+/// Google OAuth config info for dashboard display
+#[derive(Debug, Clone)]
+pub struct GoogleOAuthConfigInfo {
+    pub client_id_prefix: String,
+    pub has_client_secret: bool,
 }
 
 // ============================================================================

@@ -32,6 +32,10 @@ pub fn router() -> Router<AppState> {
             "/{domain_id}/auth-config/magic-link",
             delete(delete_magic_link_config),
         )
+        .route(
+            "/{domain_id}/auth-config/google-oauth",
+            delete(delete_google_oauth_config),
+        )
         .route("/{domain_id}/end-users", get(list_end_users))
         .route("/{domain_id}/end-users/invite", post(invite_end_user))
         .route("/{domain_id}/end-users/{user_id}", get(get_end_user))
@@ -384,12 +388,20 @@ struct AuthConfigResponse {
     magic_link_config: Option<MagicLinkConfigResponse>,
     using_fallback: bool,
     fallback_from_email: Option<String>,
+    google_oauth_config: Option<GoogleOAuthConfigResponse>,
+    using_google_fallback: bool,
 }
 
 #[derive(Serialize)]
 struct MagicLinkConfigResponse {
     from_email: String,
     has_api_key: bool,
+}
+
+#[derive(Serialize)]
+struct GoogleOAuthConfigResponse {
+    client_id_prefix: String,
+    has_client_secret: bool,
 }
 
 async fn get_auth_config(
@@ -410,7 +422,7 @@ async fn get_auth_config(
         .get_auth_config(user_id, domain_id)
         .await?;
 
-    // Check if using fallback or custom config
+    // Check if using fallback or custom config for magic link
     // Always compute fallback_from_email so UI can show "switch to shared service" option
     let has_custom_config = magic_link_config.is_some();
     let fallback_from_email = app_state
@@ -423,6 +435,20 @@ async fn get_auth_config(
         has_api_key: !c.resend_api_key_encrypted.is_empty(),
     });
 
+    // Get Google OAuth config info
+    let google_oauth_config_info = app_state
+        .domain_auth_use_cases
+        .get_google_oauth_config_info(domain_id)
+        .await?;
+
+    let google_oauth_response = google_oauth_config_info.as_ref().map(|c| GoogleOAuthConfigResponse {
+        client_id_prefix: c.client_id_prefix.clone(),
+        has_client_secret: c.has_client_secret,
+    });
+
+    let has_google_fallback = app_state.domain_auth_use_cases.has_google_oauth_fallback();
+    let using_google_fallback = google_oauth_config_info.is_none() && has_google_fallback;
+
     Ok(Json(AuthConfigResponse {
         magic_link_enabled: auth_config.magic_link_enabled,
         google_oauth_enabled: auth_config.google_oauth_enabled,
@@ -431,6 +457,8 @@ async fn get_auth_config(
         magic_link_config: magic_link_response,
         using_fallback,
         fallback_from_email,
+        google_oauth_config: google_oauth_response,
+        using_google_fallback,
     }))
 }
 
@@ -443,6 +471,8 @@ struct UpdateAuthConfigPayload {
     whitelist_all_existing: Option<bool>,
     resend_api_key: Option<String>,
     from_email: Option<String>,
+    google_client_id: Option<String>,
+    google_client_secret: Option<String>,
 }
 
 async fn update_auth_config(
@@ -468,6 +498,19 @@ async fn update_auth_config(
         )
         .await?;
 
+    // If Google OAuth credentials were provided, update them
+    if payload.google_client_id.is_some() && payload.google_client_secret.is_some() {
+        app_state
+            .domain_auth_use_cases
+            .update_google_oauth_config(
+                user_id,
+                domain_id,
+                payload.google_client_id.as_deref().unwrap(),
+                payload.google_client_secret.as_deref().unwrap(),
+            )
+            .await?;
+    }
+
     Ok(StatusCode::OK)
 }
 
@@ -481,6 +524,21 @@ async fn delete_magic_link_config(
     app_state
         .domain_auth_use_cases
         .delete_magic_link_config(user_id, domain_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_google_oauth_config(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, user_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .domain_auth_use_cases
+        .delete_google_oauth_config(user_id, domain_id)
         .await?;
 
     Ok(StatusCode::NO_CONTENT)

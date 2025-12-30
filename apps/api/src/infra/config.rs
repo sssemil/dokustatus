@@ -32,6 +32,10 @@ pub struct AppConfig {
     pub fallback_resend_api_key: Option<String>,
     /// Fallback email domain (e.g., "mail.reauth.dev"). Used with domain name to construct from email.
     pub fallback_email_domain: Option<String>,
+    /// Fallback Google OAuth client ID for domains without custom OAuth config.
+    pub fallback_google_client_id: Option<String>,
+    /// Fallback Google OAuth client secret for domains without custom OAuth config.
+    pub fallback_google_client_secret: Option<String>,
 }
 
 impl AppConfig {
@@ -69,6 +73,13 @@ impl AppConfig {
         let fallback_email_domain: Option<String> = std::env::var("FALLBACK_EMAIL_DOMAIN")
             .ok()
             .filter(|s| !s.is_empty());
+        let fallback_google_client_id: Option<String> = std::env::var("FALLBACK_GOOGLE_CLIENT_ID")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let fallback_google_client_secret: Option<String> =
+            std::env::var("FALLBACK_GOOGLE_CLIENT_SECRET")
+                .ok()
+                .filter(|s| !s.is_empty());
 
         Self {
             jwt_secret,
@@ -89,6 +100,8 @@ impl AppConfig {
             main_domain,
             fallback_resend_api_key,
             fallback_email_domain,
+            fallback_google_client_id,
+            fallback_google_client_secret,
         }
     }
 }

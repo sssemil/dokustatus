@@ -77,6 +77,10 @@ pub fn router() -> Router<AppState> {
             post(request_magic_link),
         )
         .route("/{domain}/auth/verify-magic-link", post(verify_magic_link))
+        .route("/{domain}/auth/google/start", post(google_start))
+        .route("/{domain}/auth/google/exchange", post(google_exchange))
+        .route("/{domain}/auth/google/confirm-link", post(google_confirm_link))
+        .route("/{domain}/auth/google/complete", post(google_complete))
         .route("/{domain}/auth/session", get(check_session))
         .route("/{domain}/auth/refresh", post(refresh_token))
         .route("/{domain}/auth/logout", post(logout))
@@ -656,4 +660,557 @@ fn ensure_login_session(
         .build();
 
     (jar.add(cookie), session_id)
+}
+
+// ============================================================================
+// Google OAuth Routes
+// ============================================================================
+
+#[derive(Serialize)]
+struct GoogleStartResponse {
+    state: String,
+    auth_url: String,
+}
+
+#[derive(Deserialize)]
+struct GoogleExchangePayload {
+    code: String,
+    state: String,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "status")]
+enum GoogleExchangeResponse {
+    /// User is authenticated - redirect to completion URL to set cookies
+    #[serde(rename = "logged_in")]
+    LoggedIn {
+        /// URL to complete the login (sets cookies on correct domain)
+        completion_url: String,
+    },
+    #[serde(rename = "needs_link_confirmation")]
+    NeedsLinkConfirmation {
+        existing_user_id: String,
+        email: String,
+        google_id: String,
+        /// Domain for the completion redirect
+        domain: String,
+    },
+}
+
+#[derive(Deserialize)]
+struct GoogleConfirmLinkPayload {
+    existing_user_id: String,
+    google_id: String,
+    /// Domain for the completion redirect (from the exchange response)
+    domain: String,
+}
+
+#[derive(Serialize)]
+struct GoogleConfirmLinkResponse {
+    /// URL to complete the OAuth flow on the correct domain
+    completion_url: String,
+}
+
+/// POST /api/public/domain/{domain}/auth/google/start
+/// Creates OAuth state and returns the Google authorization URL
+async fn google_start(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    // Extract root domain from reauth.* hostname
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Create OAuth state
+    let (state, code_verifier) = app_state
+        .domain_auth_use_cases
+        .create_google_oauth_state(&root_domain)
+        .await?;
+
+    // Get OAuth config to build auth URL
+    let domain = app_state
+        .domain_auth_use_cases
+        .get_domain_by_name(&root_domain)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let (client_id, _, _) = app_state
+        .domain_auth_use_cases
+        .get_google_oauth_config(domain.id)
+        .await?;
+
+    // Build PKCE code challenge (S256)
+    use base64::Engine;
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(code_verifier.as_bytes());
+    let code_challenge = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+    // Build Google OAuth URL
+    // The redirect_uri points to reauth.reauth.dev (the main app) because Google requires a fixed callback URL
+    let main_domain = &app_state.config.main_domain;
+    let redirect_uri = format!("https://reauth.{}/callback/google", main_domain);
+
+    // Use url crate for proper URL encoding
+    let mut auth_url = url::Url::parse("https://accounts.google.com/o/oauth2/v2/auth").unwrap();
+    auth_url.query_pairs_mut()
+        .append_pair("client_id", &client_id)
+        .append_pair("redirect_uri", &redirect_uri)
+        .append_pair("response_type", "code")
+        .append_pair("scope", "openid email")
+        .append_pair("state", &state)
+        .append_pair("code_challenge", &code_challenge)
+        .append_pair("code_challenge_method", "S256")
+        .append_pair("prompt", "select_account");
+
+    Ok(Json(GoogleStartResponse {
+        state,
+        auth_url: auth_url.to_string(),
+    }))
+}
+
+/// POST /api/public/domain/{domain}/auth/google/exchange
+/// Exchanges the authorization code for tokens and handles account matching
+/// Note: The {domain} in the path is ignored - we use the domain from the OAuth state
+/// to support the single callback URL pattern (all callbacks go to reauth.reauth.dev)
+async fn google_exchange(
+    State(app_state): State<AppState>,
+    Path(_hostname): Path<String>,
+    Json(payload): Json<GoogleExchangePayload>,
+) -> AppResult<impl IntoResponse> {
+    // Consume state - the domain comes FROM the state, not the URL
+    // This is because Google OAuth uses a single callback URL (reauth.reauth.dev)
+    // but the OAuth flow could have been initiated from any domain
+    let state_data = app_state
+        .domain_auth_use_cases
+        .consume_google_oauth_state(&payload.state)
+        .await?
+        .ok_or_else(|| AppError::InvalidInput("Invalid or expired OAuth state".into()))?;
+
+    // Use the domain from the state (this is the domain that initiated the OAuth flow)
+    let root_domain = &state_data.domain;
+
+    // Get domain
+    let domain = app_state
+        .domain_auth_use_cases
+        .get_domain_by_name(root_domain)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Verify Google OAuth is still enabled
+    if !app_state
+        .domain_auth_use_cases
+        .is_google_oauth_enabled(domain.id)
+        .await?
+    {
+        return Err(AppError::InvalidInput(
+            "Google OAuth is not enabled for this domain".into(),
+        ));
+    }
+
+    // Get OAuth credentials
+    let (client_id, client_secret, _using_fallback) = app_state
+        .domain_auth_use_cases
+        .get_google_oauth_config(domain.id)
+        .await?;
+
+    // Exchange code with Google
+    let main_domain = &app_state.config.main_domain;
+    let redirect_uri = format!("https://reauth.{}/callback/google", main_domain);
+
+    let token_response = exchange_google_code(
+        &payload.code,
+        &client_id,
+        &client_secret,
+        &redirect_uri,
+        &state_data.code_verifier,
+    )
+    .await?;
+
+    // Parse and validate id_token (with signature verification)
+    let (google_id, email, email_verified) = parse_google_id_token(&token_response.id_token, &client_id).await?;
+
+    // Verify email is verified by Google
+    if !email_verified {
+        return Err(AppError::InvalidInput(
+            "Google account email is not verified".into(),
+        ));
+    }
+
+    // Find or create end user
+    use crate::application::use_cases::domain_auth::GoogleLoginResult;
+    let result = app_state
+        .domain_auth_use_cases
+        .find_or_create_end_user_by_google(domain.id, &google_id, &email)
+        .await?;
+
+    match result {
+        GoogleLoginResult::LoggedIn(user) => {
+            // Generate a completion token - this will be used to set cookies on the correct domain
+            let completion_token = app_state
+                .domain_auth_use_cases
+                .create_google_completion_token(user.id, user.domain_id, root_domain)
+                .await?;
+
+            // Build completion URL - redirect to the domain's ingress to set cookies
+            let completion_url = format!(
+                "https://reauth.{}/google-complete?token={}",
+                root_domain, completion_token
+            );
+
+            Ok((
+                StatusCode::OK,
+                HeaderMap::new(),
+                Json(GoogleExchangeResponse::LoggedIn { completion_url }),
+            ))
+        }
+        GoogleLoginResult::NeedsLinkConfirmation {
+            existing_user_id,
+            email,
+            google_id,
+        } => {
+            // User needs to confirm linking
+            Ok((
+                StatusCode::OK,
+                HeaderMap::new(),
+                Json(GoogleExchangeResponse::NeedsLinkConfirmation {
+                    existing_user_id: existing_user_id.to_string(),
+                    email,
+                    google_id,
+                    domain: root_domain.to_string(),
+                }),
+            ))
+        }
+    }
+}
+
+/// POST /api/public/domain/{domain}/auth/google/confirm-link
+/// Confirms linking a Google account to an existing user.
+/// Returns a completion URL to redirect to the correct domain for cookie setting.
+async fn google_confirm_link(
+    State(app_state): State<AppState>,
+    Path(_hostname): Path<String>,
+    Json(payload): Json<GoogleConfirmLinkPayload>,
+) -> AppResult<impl IntoResponse> {
+    // Use the domain from the payload (from the exchange response)
+    // This is the domain that initiated the OAuth flow
+    let root_domain = &payload.domain;
+
+    // Parse user ID
+    let existing_user_id = Uuid::parse_str(&payload.existing_user_id)
+        .map_err(|_| AppError::InvalidInput("Invalid user ID".into()))?;
+
+    // Verify the domain exists and get domain_id
+    let domain = app_state
+        .domain_auth_use_cases
+        .get_domain_by_name(root_domain)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Confirm the link
+    let user = app_state
+        .domain_auth_use_cases
+        .confirm_google_link(existing_user_id, &payload.google_id)
+        .await?;
+
+    // Generate a completion token for cross-domain cookie setting
+    let completion_token = app_state
+        .domain_auth_use_cases
+        .create_google_completion_token(user.id, domain.id, root_domain)
+        .await?;
+
+    // Build completion URL - redirect to the domain's ingress to set cookies
+    let completion_url = format!(
+        "https://reauth.{}/google-complete?token={}",
+        root_domain, completion_token
+    );
+
+    Ok((
+        StatusCode::OK,
+        HeaderMap::new(),
+        Json(GoogleConfirmLinkResponse { completion_url }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct GoogleCompletePayload {
+    token: String,
+}
+
+#[derive(Serialize)]
+struct GoogleCompleteResponse {
+    success: bool,
+    redirect_url: String,
+    end_user_id: String,
+    email: String,
+}
+
+/// POST /api/public/domain/{domain}/auth/google/complete
+/// Completes the Google OAuth flow by consuming the completion token and setting cookies.
+/// This endpoint is called from reauth.{domain} (the correct domain for cookies).
+async fn google_complete(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    Json(payload): Json<GoogleCompletePayload>,
+) -> AppResult<impl IntoResponse> {
+    // Extract root domain from reauth.* hostname
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Consume completion token
+    let completion_data = app_state
+        .domain_auth_use_cases
+        .consume_google_completion_token(&payload.token)
+        .await?
+        .ok_or_else(|| AppError::InvalidInput("Invalid or expired completion token".into()))?;
+
+    // Verify domain matches (defense in depth)
+    if completion_data.domain != root_domain {
+        return Err(AppError::InvalidInput("Token domain mismatch".into()));
+    }
+
+    // Get the user
+    let user = app_state
+        .domain_auth_use_cases
+        .get_end_user_by_id(completion_data.user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Get config for redirect URL and TTL settings
+    let config = app_state
+        .domain_auth_use_cases
+        .get_auth_config_for_domain(&root_domain)
+        .await
+        .ok();
+
+    let redirect_url = config
+        .as_ref()
+        .and_then(|c| c.redirect_url.clone())
+        .unwrap_or_else(|| format!("https://{}", root_domain));
+
+    let access_ttl_secs = config
+        .as_ref()
+        .map(|c| c.access_token_ttl_secs)
+        .unwrap_or(86400);
+    let refresh_ttl_days = config
+        .as_ref()
+        .map(|c| c.refresh_token_ttl_days)
+        .unwrap_or(30);
+
+    // Issue tokens
+    let access_token = jwt::issue_domain_end_user(
+        user.id,
+        user.domain_id,
+        &root_domain,
+        user.roles.clone(),
+        &app_state.config.jwt_secret,
+        time::Duration::seconds(access_ttl_secs as i64),
+    )?;
+
+    let refresh_token = jwt::issue_domain_end_user(
+        user.id,
+        user.domain_id,
+        &root_domain,
+        user.roles.clone(),
+        &app_state.config.jwt_secret,
+        time::Duration::days(refresh_ttl_days as i64),
+    )?;
+
+    // Set cookies on the correct domain
+    let mut headers = HeaderMap::new();
+
+    let access_cookie = Cookie::build(("end_user_access_token", access_token))
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Lax)
+        .domain(format!(".{}", root_domain))
+        .path("/")
+        .max_age(time::Duration::seconds(access_ttl_secs as i64))
+        .build();
+
+    let refresh_cookie = Cookie::build(("end_user_refresh_token", refresh_token))
+        .http_only(true)
+        .secure(true)
+        .same_site(SameSite::Lax)
+        .domain(format!(".{}", root_domain))
+        .path("/")
+        .max_age(time::Duration::days(refresh_ttl_days as i64))
+        .build();
+
+    let email_cookie = Cookie::build(("end_user_email", user.email.clone()))
+        .http_only(false)
+        .secure(true)
+        .same_site(SameSite::Lax)
+        .domain(format!(".{}", root_domain))
+        .path("/")
+        .max_age(time::Duration::days(refresh_ttl_days as i64))
+        .build();
+
+    append_cookie(&mut headers, access_cookie)?;
+    append_cookie(&mut headers, refresh_cookie)?;
+    append_cookie(&mut headers, email_cookie)?;
+
+    Ok((
+        StatusCode::OK,
+        headers,
+        Json(GoogleCompleteResponse {
+            success: true,
+            redirect_url,
+            end_user_id: user.id.to_string(),
+            email: user.email,
+        }),
+    ))
+}
+
+// ============================================================================
+// Google OAuth Helper Functions
+// ============================================================================
+
+#[derive(Deserialize)]
+struct GoogleTokenResponse {
+    #[allow(dead_code)]
+    access_token: String,
+    id_token: String,
+    #[allow(dead_code)]
+    token_type: String,
+    #[allow(dead_code)]
+    expires_in: Option<i64>,
+}
+
+/// Exchange authorization code with Google for tokens
+async fn exchange_google_code(
+    code: &str,
+    client_id: &str,
+    client_secret: &str,
+    redirect_uri: &str,
+    code_verifier: &str,
+) -> AppResult<GoogleTokenResponse> {
+    let client = reqwest::Client::new();
+
+    let response = client
+        .post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("code", code),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("redirect_uri", redirect_uri),
+            ("grant_type", "authorization_code"),
+            ("code_verifier", code_verifier),
+        ])
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to exchange code with Google: {}", e)))?;
+
+    if !response.status().is_success() {
+        let error_text = response.text().await.unwrap_or_default();
+        tracing::error!("Google token exchange failed: {}", error_text);
+        return Err(AppError::InvalidInput("Failed to authenticate with Google".into()));
+    }
+
+    response
+        .json::<GoogleTokenResponse>()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to parse Google token response: {}", e)))
+}
+
+/// Google OIDC claims from id_token
+#[derive(Debug, serde::Deserialize)]
+struct GoogleIdTokenClaims {
+    /// Google user ID (stable identifier)
+    sub: String,
+    /// User's email address
+    email: String,
+    /// Whether the email has been verified by Google
+    #[serde(default)]
+    email_verified: bool,
+    /// Issuer (validated by jsonwebtoken)
+    #[allow(dead_code)]
+    iss: String,
+    /// Audience (validated by jsonwebtoken)
+    #[allow(dead_code)]
+    aud: String,
+    /// Authorized party (if present, should match client_id)
+    #[serde(default)]
+    azp: Option<String>,
+}
+
+/// Google JWKs response
+#[derive(Debug, serde::Deserialize)]
+struct GoogleJwks {
+    keys: Vec<GoogleJwk>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct GoogleJwk {
+    kid: String,
+    n: String,
+    e: String,
+    #[allow(dead_code)]
+    kty: String,
+    #[allow(dead_code)]
+    alg: Option<String>,
+}
+
+/// Fetch Google's public keys for JWT verification
+async fn fetch_google_jwks() -> AppResult<GoogleJwks> {
+    let client = reqwest::Client::new();
+    let response = client
+        .get("https://www.googleapis.com/oauth2/v3/certs")
+        .send()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to fetch Google JWKs: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err(AppError::Internal("Failed to fetch Google JWKs".into()));
+    }
+
+    response
+        .json::<GoogleJwks>()
+        .await
+        .map_err(|e| AppError::Internal(format!("Failed to parse Google JWKs: {}", e)))
+}
+
+/// Parse and verify Google id_token with signature verification
+async fn parse_google_id_token(id_token: &str, expected_client_id: &str) -> AppResult<(String, String, bool)> {
+    use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+
+    // Decode the header to get the key ID (kid)
+    let header = decode_header(id_token)
+        .map_err(|e| AppError::InvalidInput(format!("Invalid id_token header: {}", e)))?;
+
+    let kid = header
+        .kid
+        .ok_or_else(|| AppError::InvalidInput("Missing kid in id_token header".into()))?;
+
+    // Fetch Google's JWKs
+    let jwks = fetch_google_jwks().await?;
+
+    // Find the matching key
+    let jwk = jwks
+        .keys
+        .iter()
+        .find(|k| k.kid == kid)
+        .ok_or_else(|| AppError::InvalidInput("No matching key found in Google JWKs".into()))?;
+
+    // Create decoding key from JWK
+    let decoding_key = DecodingKey::from_rsa_components(&jwk.n, &jwk.e)
+        .map_err(|e| AppError::Internal(format!("Failed to create decoding key: {}", e)))?;
+
+    // Set up validation
+    let mut validation = Validation::new(Algorithm::RS256);
+    validation.set_audience(&[expected_client_id]);
+    validation.set_issuer(&["https://accounts.google.com", "accounts.google.com"]);
+
+    // Decode and verify the token
+    let token_data = decode::<GoogleIdTokenClaims>(id_token, &decoding_key, &validation)
+        .map_err(|e| AppError::InvalidInput(format!("Invalid id_token: {}", e)))?;
+
+    let claims = token_data.claims;
+
+    // Additional validation: check azp if present
+    if let Some(ref azp) = claims.azp {
+        if azp != expected_client_id {
+            return Err(AppError::InvalidInput("Invalid id_token azp claim".into()));
+        }
+    }
+
+    Ok((claims.sub, claims.email, claims.email_verified))
 }
