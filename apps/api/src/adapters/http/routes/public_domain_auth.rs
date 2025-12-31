@@ -1773,7 +1773,8 @@ async fn handle_webhook_for_mode(
             }
         }
         // Invoice events for payment history tracking
-        "invoice.created" | "invoice.paid" | "invoice.updated" | "invoice.finalized" => {
+        // Note: invoice.payment_succeeded is the newer event name (some Stripe configs use it)
+        "invoice.created" | "invoice.paid" | "invoice.payment_succeeded" | "invoice.updated" | "invoice.finalized" => {
             let invoice = &event["data"]["object"];
 
             // Try to sync the invoice to our payments table
@@ -1883,6 +1884,68 @@ async fn handle_webhook_for_mode(
                     tracing::warn!("Could not update payment status for refund on invoice {}: {}", invoice_id, e);
                 }
             }
+        }
+        "charge.succeeded" => {
+            // Backup confirmation of payment - sync invoice if we have one
+            let charge = &event["data"]["object"];
+            if let Some(invoice_id) = charge["invoice"].as_str() {
+                // Fetch and sync the invoice data
+                tracing::debug!("Charge succeeded for invoice {}, invoice event should handle sync", invoice_id);
+            }
+        }
+        "charge.failed" => {
+            // Payment failed - update invoice status if we have one
+            let charge = &event["data"]["object"];
+            if let Some(invoice_id) = charge["invoice"].as_str() {
+                let failure_message = charge["failure_message"].as_str().map(|s| s.to_string());
+                if let Err(e) = app_state
+                    .billing_use_cases
+                    .update_payment_status(
+                        invoice_id,
+                        crate::domain::entities::payment_status::PaymentStatus::Failed,
+                        None,
+                        failure_message,
+                    )
+                    .await
+                {
+                    tracing::warn!("Could not update payment status for failed charge on invoice {}: {}", invoice_id, e);
+                }
+            }
+        }
+        "charge.dispute.created" => {
+            // Dispute opened - log for awareness (could add dispute tracking later)
+            let dispute = &event["data"]["object"];
+            let charge_id = dispute["charge"].as_str().unwrap_or("unknown");
+            let amount = dispute["amount"].as_i64().unwrap_or(0);
+            tracing::warn!(
+                "Dispute opened for charge {} (amount: {} cents) on domain {}",
+                charge_id, amount, domain.domain
+            );
+        }
+        "charge.dispute.closed" => {
+            let dispute = &event["data"]["object"];
+            let status = dispute["status"].as_str().unwrap_or("unknown");
+            let charge_id = dispute["charge"].as_str().unwrap_or("unknown");
+            tracing::info!("Dispute closed for charge {} with status: {}", charge_id, status);
+        }
+        "checkout.session.async_payment_failed" => {
+            // Async payment (bank transfer, etc.) failed
+            let session = &event["data"]["object"];
+            let session_id = session["id"].as_str().unwrap_or("unknown");
+            tracing::warn!("Async payment failed for checkout session {}", session_id);
+        }
+        "checkout.session.expired" => {
+            // Checkout was abandoned
+            let session = &event["data"]["object"];
+            let session_id = session["id"].as_str().unwrap_or("unknown");
+            tracing::debug!("Checkout session {} expired", session_id);
+        }
+        "customer.subscription.trial_will_end" => {
+            // Trial ending soon - could trigger notification
+            let subscription = &event["data"]["object"];
+            let sub_id = subscription["id"].as_str().unwrap_or("unknown");
+            let trial_end = subscription["trial_end"].as_i64();
+            tracing::info!("Trial will end for subscription {}: {:?}", sub_id, trial_end);
         }
         _ => {
             tracing::debug!("Unhandled webhook event type: {}", event_type);
