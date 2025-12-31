@@ -131,13 +131,13 @@ body {
 :where(.light) .bg-zinc-900\/50 { background-color: rgb(250 250 250 / 0.5); }
 :where(.light) .bg-zinc-800 { background-color: white; }
 :where(.light) .bg-zinc-800\/50 { background-color: var(--color-zinc-100); }
-:where(.light) .bg-zinc-700 { background-color: var(--color-zinc-200); }
-:where(.light) .bg-zinc-600 { background-color: var(--color-zinc-300); }
+:where(.light) .bg-zinc-700 { background-color: var(--color-zinc-100); }
+:where(.light) .bg-zinc-600 { background-color: var(--color-zinc-200); }
 
 /* Borders */
-:where(.light) .border-zinc-800 { border-color: var(--color-zinc-200); }
-:where(.light) .border-zinc-700 { border-color: var(--color-zinc-300); }
-:where(.light) .border-zinc-600 { border-color: var(--color-zinc-300); }
+:where(.light) .border-zinc-800 { border-color: var(--color-zinc-300); }
+:where(.light) .border-zinc-700 { border-color: var(--color-zinc-400); }
+:where(.light) .border-zinc-600 { border-color: var(--color-zinc-400); }
 
 /* Spinner accent - border-t-white needs to be visible on light bg */
 :where(.light) .border-t-white { border-top-color: var(--color-zinc-900); }
