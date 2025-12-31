@@ -121,3 +121,110 @@ body {
 .light .scrollbar-thin::-webkit-scrollbar-thumb:hover {
   background-color: rgb(161 161 170);
 }
+
+/* ========== LIGHT MODE OVERRIDES ========== */
+/* Scoped to .light only - dark mode unchanged */
+
+/* Background surfaces */
+:where(.light) .bg-zinc-950 { background-color: white; }
+:where(.light) .bg-zinc-900 { background-color: var(--color-zinc-50); }
+:where(.light) .bg-zinc-900\/50 { background-color: rgb(250 250 250 / 0.5); }
+:where(.light) .bg-zinc-800 { background-color: white; }
+:where(.light) .bg-zinc-800\/50 { background-color: var(--color-zinc-100); }
+:where(.light) .bg-zinc-700 { background-color: var(--color-zinc-200); }
+:where(.light) .bg-zinc-600 { background-color: var(--color-zinc-300); }
+
+/* Borders */
+:where(.light) .border-zinc-800 { border-color: var(--color-zinc-200); }
+:where(.light) .border-zinc-700 { border-color: var(--color-zinc-300); }
+:where(.light) .border-zinc-600 { border-color: var(--color-zinc-300); }
+
+/* Spinner accent - border-t-white needs to be visible on light bg */
+:where(.light) .border-t-white { border-top-color: var(--color-zinc-900); }
+
+/* Text colors */
+:where(.light) .text-white { color: var(--color-zinc-900); }
+:where(.light) .text-white\/70 { color: rgb(24 24 27 / 0.7); } /* zinc-900 with 70% opacity */
+:where(.light) .text-zinc-200 { color: var(--color-zinc-800); }
+:where(.light) .text-zinc-300 { color: var(--color-zinc-700); }
+:where(.light) .text-zinc-400 { color: var(--color-zinc-600); }
+:where(.light) .text-zinc-500 { color: var(--color-zinc-500); }
+:where(.light) .text-zinc-600 { color: var(--color-zinc-400); }
+
+/* Hover states */
+:where(.light) .hover\:bg-zinc-900:hover { background-color: var(--color-zinc-100); }
+:where(.light) .hover\:bg-zinc-800:hover { background-color: var(--color-zinc-100); }
+:where(.light) .hover\:bg-zinc-800\/50:hover { background-color: var(--color-zinc-100); }
+:where(.light) .hover\:bg-zinc-700:hover { background-color: var(--color-zinc-200); }
+:where(.light) .hover\:bg-zinc-600:hover { background-color: var(--color-zinc-200); }
+:where(.light) .hover\:text-white:hover { color: var(--color-zinc-900); }
+:where(.light) .hover\:text-zinc-300:hover { color: var(--color-zinc-700); }
+:where(.light) .hover\:border-zinc-600:hover { border-color: var(--color-zinc-400); }
+
+/* Focus ring offset */
+:where(.light) .focus-visible\:ring-offset-zinc-950 {
+  --tw-ring-offset-color: white;
+}
+
+/* Placeholder text */
+:where(.light) .placeholder-zinc-500::placeholder {
+  color: var(--color-zinc-400);
+}
+
+/* Divide colors */
+:where(.light) .divide-zinc-800 > :not(:first-child) {
+  border-color: var(--color-zinc-200);
+}
+
+/* ========== SEMANTIC COLOR OVERRIDES FOR LIGHT MODE ========== */
+
+/* Amber/Warning colors - need darker text and lighter backgrounds */
+:where(.light) .text-amber-400 { color: var(--color-amber-600); }
+:where(.light) .text-amber-500 { color: var(--color-amber-600); }
+:where(.light) .bg-amber-900\/10 { background-color: var(--color-amber-100); }
+:where(.light) .bg-amber-900\/20 { background-color: var(--color-amber-100); }
+:where(.light) .bg-amber-900\/30 { background-color: var(--color-amber-100); }
+:where(.light) .bg-amber-900\/50 { background-color: var(--color-amber-100); }
+:where(.light) .border-amber-600\/30 { border-color: var(--color-amber-300); }
+:where(.light) .border-amber-700 { border-color: var(--color-amber-300); }
+:where(.light) .border-amber-500\/20 { border-color: var(--color-amber-300); }
+
+/* Emerald/Success colors - need darker text and lighter backgrounds */
+:where(.light) .text-emerald-400 { color: var(--color-emerald-600); }
+:where(.light) .bg-emerald-900\/30 { background-color: var(--color-emerald-100); }
+:where(.light) .bg-emerald-900\/50 { background-color: var(--color-emerald-100); }
+:where(.light) .bg-emerald-500\/10 { background-color: var(--color-emerald-100); }
+:where(.light) .border-emerald-700 { border-color: var(--color-emerald-300); }
+:where(.light) .border-emerald-500\/20 { border-color: var(--color-emerald-300); }
+
+/* Red/Error colors - need darker text and lighter backgrounds */
+:where(.light) .text-red-400 { color: var(--color-red-600); }
+:where(.light) .bg-red-900\/30 { background-color: var(--color-red-100); }
+:where(.light) .bg-red-900\/50 { background-color: var(--color-red-100); }
+:where(.light) .border-red-700 { border-color: var(--color-red-300); }
+
+/* Blue/Info colors - need darker text and lighter backgrounds */
+:where(.light) .text-blue-200 { color: var(--color-blue-700); }
+:where(.light) .text-blue-300 { color: var(--color-blue-600); }
+:where(.light) .text-blue-300\/70 { color: rgb(37 99 235 / 0.8); } /* blue-600 with some transparency */
+:where(.light) .text-blue-400 { color: var(--color-blue-600); }
+:where(.light) .bg-blue-500\/10 { background-color: var(--color-blue-100); }
+:where(.light) .bg-blue-900\/50 { background-color: var(--color-blue-100); }
+:where(.light) .border-blue-500\/20 { border-color: var(--color-blue-300); }
+:where(.light) .border-blue-700 { border-color: var(--color-blue-300); }
+
+/* Yellow colors (used in some places) */
+:where(.light) .text-yellow-300 { color: var(--color-yellow-700); }
+:where(.light) .bg-yellow-500\/5 { background-color: var(--color-yellow-50); }
+:where(.light) .bg-yellow-500\/10 { background-color: var(--color-yellow-100); }
+:where(.light) .bg-yellow-500\/20 { background-color: var(--color-yellow-100); }
+:where(.light) .border-yellow-500\/20 { border-color: var(--color-yellow-300); }
+:where(.light) .border-yellow-500\/30 { border-color: var(--color-yellow-300); }
+:where(.light) .border-yellow-500\/50 { border-color: var(--color-yellow-400); }
+
+/* Green colors (used in some places) */
+:where(.light) .text-green-300 { color: var(--color-green-700); }
+:where(.light) .bg-green-500\/5 { background-color: var(--color-green-50); }
+:where(.light) .bg-green-500\/20 { background-color: var(--color-green-100); }
+:where(.light) .border-green-500\/30 { border-color: var(--color-green-300); }
+:where(.light) .border-green-500\/50 { border-color: var(--color-green-400); }

@@ -35,10 +35,16 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
   const initials = email.charAt(0).toUpperCase();
 
   const themes = [
-    { id: 'light' as const, icon: Sun },
-    { id: 'dark' as const, icon: Moon },
-    { id: 'system' as const, icon: Monitor },
+    { id: 'light' as const, icon: Sun, label: 'Light' },
+    { id: 'dark' as const, icon: Moon, label: 'Dark' },
+    { id: 'system' as const, icon: Monitor, label: 'System' },
   ];
+
+  const calculatePillLeft = (activeIndex: number): string => {
+    // flex-[2] for active (50%), flex-1 for inactive (25% each)
+    const positions = ['0%', '25%', '50%'];
+    return positions[activeIndex];
+  };
 
   return (
     <div ref={menuRef} className="relative">
@@ -87,14 +93,15 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
             My profile
           </button>
 
-          {/* Theme toggle */}
-          <div className="border-t border-zinc-700 px-3 py-2.5 flex items-center justify-center">
-            <div className="relative flex bg-zinc-900 rounded-lg p-1">
-              {/* Sliding pill indicator */}
+          {/* Theme toggle - full width */}
+          <div className="border-t border-zinc-700 px-2 py-2">
+            <div className="relative flex bg-zinc-900 rounded-lg p-1 w-full overflow-hidden">
+              {/* Sliding pill - pointer-events-none to not block clicks */}
               <div
-                className="absolute top-1 h-[calc(100%-8px)] w-[calc(33.333%-2px)] bg-zinc-700 rounded-md shadow-sm transition-all duration-200 ease-out"
+                className="absolute top-1 bottom-1 bg-zinc-700 rounded-md pointer-events-none transition-[left] duration-300 ease-out"
                 style={{
-                  left: `calc(${themes.findIndex(t => t.id === theme) * 33.333}% + 4px)`,
+                  width: '50%',
+                  left: calculatePillLeft(themes.findIndex(t => t.id === theme)),
                 }}
               />
               {themes.map((t) => {
@@ -103,13 +110,22 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
                   <button
                     key={t.id}
                     onClick={() => setTheme(t.id)}
+                    aria-label={`${t.label} theme`}
                     className={`
-                      relative z-10 p-2 rounded-md transition-colors duration-200
-                      ${isActive ? 'text-white' : 'text-zinc-500 hover:text-zinc-300'}
+                      relative z-10 flex items-center justify-center py-1.5 rounded-md
+                      transition-[flex-grow,color] duration-300 ease-out
+                      ${isActive ? 'flex-[2] text-white' : 'flex-1 text-zinc-500 hover:text-zinc-300'}
                     `}
-                    title={t.id.charAt(0).toUpperCase() + t.id.slice(1)}
                   >
-                    <t.icon size={16} />
+                    <t.icon size={14} />
+                    {/* Label with margin instead of gap - avoids gap on 0-width element */}
+                    <span className={`
+                      text-xs font-medium overflow-hidden whitespace-nowrap
+                      transition-[opacity,max-width,margin] duration-300 ease-out
+                      ${isActive ? 'opacity-100 max-w-[60px] ml-1.5' : 'opacity-0 max-w-0 ml-0'}
+                    `}>
+                      {t.label}
+                    </span>
                   </button>
                 );
               })}

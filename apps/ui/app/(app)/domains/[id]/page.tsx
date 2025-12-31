@@ -1352,12 +1352,19 @@ export default function DomainDetailPage() {
                     onChange={(e) => setStripeWebhookSecret(e.target.value)}
                     placeholder="whsec_..."
                   />
-                  <p className="text-xs text-zinc-500">
-                    Configure your {editingMode} webhook endpoint at{' '}
-                    <code className="bg-zinc-800 px-1 rounded">
-                      https://reauth.{domain?.domain}/api/public/domain/reauth.{domain?.domain}/billing/webhook/{editingMode}
-                    </code>
-                  </p>
+                  <div className="mt-2">
+                    <p className="text-xs text-zinc-500 mb-2">
+                      Configure your {editingMode} webhook endpoint in Stripe:
+                    </p>
+                    <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-700 rounded-lg p-2">
+                      <code className="text-xs text-zinc-300 flex-1 overflow-x-auto whitespace-nowrap">
+                        https://reauth.{domain?.domain}/api/public/domain/reauth.{domain?.domain}/billing/webhook/{editingMode}
+                      </code>
+                      <CopyButton
+                        text={`https://reauth.${domain?.domain}/api/public/domain/reauth.${domain?.domain}/billing/webhook/${editingMode}`}
+                      />
+                    </div>
+                  </div>
                 </div>
                 <Button type="submit" variant="primary" disabled={savingBillingConfig}>
                   {savingBillingConfig ? 'Saving...' : `Save ${editingMode === 'test' ? 'Test' : 'Live'} Configuration`}
