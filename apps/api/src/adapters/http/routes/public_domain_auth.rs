@@ -246,6 +246,8 @@ pub fn router() -> Router<AppState> {
         .route("/{domain}/billing/portal", post(create_portal))
         .route("/{domain}/billing/cancel", post(cancel_subscription))
         .route("/{domain}/billing/payments", get(get_user_payments))
+        .route("/{domain}/billing/plan-change/preview", get(preview_plan_change))
+        .route("/{domain}/billing/plan-change", post(change_plan))
         // Mode-specific webhook endpoints
         .route("/{domain}/billing/webhook/test", post(handle_webhook_test))
         .route("/{domain}/billing/webhook/live", post(handle_webhook_live))
@@ -1524,6 +1526,141 @@ async fn get_user_payments(
         page: paginated.page,
         per_page: paginated.per_page,
         total_pages: paginated.total_pages,
+    }))
+}
+
+// ============================================================================
+// Plan Change (Upgrade/Downgrade) Types
+// ============================================================================
+
+/// Query params for plan change preview
+#[derive(Debug, Deserialize)]
+struct PlanChangePreviewQuery {
+    plan_code: String,
+}
+
+/// Response for plan change preview
+#[derive(Debug, Serialize)]
+struct PlanChangePreviewResponse {
+    prorated_amount_cents: i64,
+    currency: String,
+    period_end: i64,
+    new_plan_name: String,
+    new_plan_price_cents: i64,
+    change_type: String,
+    effective_at: i64,
+}
+
+/// Request body for plan change
+#[derive(Debug, Deserialize)]
+struct PlanChangeRequest {
+    plan_code: String,
+}
+
+/// Response for plan change
+#[derive(Debug, Serialize)]
+struct PlanChangeResponse {
+    success: bool,
+    change_type: String,
+    invoice_id: Option<String>,
+    amount_charged_cents: Option<i64>,
+    currency: Option<String>,
+    client_secret: Option<String>,
+    hosted_invoice_url: Option<String>,
+    payment_intent_status: Option<String>,
+    new_plan: PlanChangeNewPlanResponse,
+    effective_at: i64,
+    schedule_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PlanChangeNewPlanResponse {
+    code: String,
+    name: String,
+    price_cents: i32,
+    currency: String,
+    interval: String,
+    interval_count: i32,
+    features: Vec<String>,
+}
+
+/// GET /api/public/domain/{domain}/billing/plan-change/preview
+/// Preview the cost of upgrading or downgrading a subscription
+async fn preview_plan_change(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    Query(query): Query<PlanChangePreviewQuery>,
+    cookies: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get user from token
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+
+    // Get preview from use cases
+    let preview = app_state
+        .billing_use_cases
+        .preview_plan_change(domain_id, user_id, &query.plan_code)
+        .await?;
+
+    Ok(Json(PlanChangePreviewResponse {
+        prorated_amount_cents: preview.prorated_amount_cents,
+        currency: preview.currency,
+        period_end: preview.period_end,
+        new_plan_name: preview.new_plan_name,
+        new_plan_price_cents: preview.new_plan_price_cents,
+        change_type: preview.change_type.as_str().to_string(),
+        effective_at: preview.effective_at,
+    }))
+}
+
+/// POST /api/public/domain/{domain}/billing/plan-change
+/// Execute a plan change (upgrade or downgrade)
+async fn change_plan(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    headers: HeaderMap,
+    cookies: CookieJar,
+    Json(payload): Json<PlanChangeRequest>,
+) -> AppResult<impl IntoResponse> {
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get user from token
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+
+    // Get or generate idempotency key
+    let idempotency_key = headers
+        .get("Idempotency-Key")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    // Execute plan change
+    let result = app_state
+        .billing_use_cases
+        .change_plan(domain_id, user_id, &payload.plan_code, &idempotency_key)
+        .await?;
+
+    Ok(Json(PlanChangeResponse {
+        success: result.success,
+        change_type: result.change_type.as_str().to_string(),
+        invoice_id: result.invoice_id,
+        amount_charged_cents: result.amount_charged_cents,
+        currency: result.currency,
+        client_secret: result.client_secret,
+        hosted_invoice_url: result.hosted_invoice_url,
+        payment_intent_status: result.payment_intent_status,
+        new_plan: PlanChangeNewPlanResponse {
+            code: result.new_plan.code,
+            name: result.new_plan.name,
+            price_cents: result.new_plan.price_cents,
+            currency: result.new_plan.currency,
+            interval: result.new_plan.interval,
+            interval_count: result.new_plan.interval_count,
+            features: result.new_plan.features,
+        },
+        effective_at: result.effective_at,
+        schedule_id: result.schedule_id,
     }))
 }
 

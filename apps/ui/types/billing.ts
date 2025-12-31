@@ -312,3 +312,56 @@ export function formatPaymentDateTime(timestamp: number | null): string {
     minute: '2-digit',
   });
 }
+
+// ============================================================================
+// Plan Change Types (Upgrade/Downgrade)
+// ============================================================================
+
+export type PlanChangeType = 'upgrade' | 'downgrade';
+
+export interface PlanChangePreview {
+  prorated_amount_cents: number;
+  currency: string;
+  period_end: number; // Unix timestamp
+  new_plan_name: string;
+  new_plan_price_cents: number;
+  change_type: PlanChangeType;
+  effective_at: number; // Unix timestamp
+}
+
+export interface PlanChangeNewPlan {
+  code: string;
+  name: string;
+  price_cents: number;
+  currency: string;
+  interval: string;
+  interval_count: number;
+  features: string[];
+}
+
+export interface PlanChangeResult {
+  success: boolean;
+  change_type: PlanChangeType;
+  invoice_id: string | null;
+  amount_charged_cents: number | null;
+  currency: string | null;
+  client_secret: string | null;  // For Stripe.js confirmCardPayment()
+  hosted_invoice_url: string | null;  // Fallback for redirect flow
+  payment_intent_status: 'succeeded' | 'requires_action' | 'requires_payment_method' | null;
+  new_plan: PlanChangeNewPlan;
+  effective_at: number; // Unix timestamp
+  schedule_id: string | null; // For downgrades - can be canceled later
+}
+
+// Plan change helper functions
+export function getPlanChangeTypeLabel(changeType: PlanChangeType): string {
+  return changeType === 'upgrade' ? 'Upgrade' : 'Downgrade';
+}
+
+export function formatEffectiveDate(timestamp: number): string {
+  return new Date(timestamp * 1000).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+}

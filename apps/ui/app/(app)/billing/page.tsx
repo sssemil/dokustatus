@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, CreditCard, Check, ExternalLink, Receipt, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
 import { Card, Button, Badge, HoldButton, Table } from '@/components/ui';
+import { PlanChangeModal } from '@/components/billing';
 import { useToast } from '@/contexts/ToastContext';
 import { useAppContext } from '../layout';
 import { getRootDomain } from '@/lib/domain-utils';
@@ -54,6 +55,11 @@ export default function BillingPage() {
   const [loadingPayments, setLoadingPayments] = useState(false);
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const [canceling, setCanceling] = useState(false);
+
+  // Plan change modal state
+  const [planChangeModalOpen, setPlanChangeModalOpen] = useState(false);
+  const [selectedPlanForChange, setSelectedPlanForChange] = useState<SubscriptionPlan | null>(null);
+  const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
 
   const apiDomain = typeof window !== 'undefined' ? getRootDomain(window.location.hostname) : '';
 
@@ -108,7 +114,25 @@ export default function BillingPage() {
     fetchData();
   }, [fetchData]);
 
+  const hasActiveSubscription = subscription && subscription.status !== 'none' && subscription.status !== 'canceled';
+
+  // Get current plan for the modal
+  const currentPlan = hasActiveSubscription && subscription?.plan_code
+    ? plans.find((p) => p.code === subscription.plan_code)
+    : null;
+
   const handleSubscribe = async (planCode: string) => {
+    // If user has an active subscription, open the plan change modal instead
+    if (hasActiveSubscription) {
+      const plan = plans.find((p) => p.code === planCode);
+      if (plan) {
+        setSelectedPlanForChange(plan);
+        setPlanChangeModalOpen(true);
+      }
+      return;
+    }
+
+    // Otherwise, proceed with checkout for new subscription
     setSubscribing(planCode);
     try {
       const currentUrl = window.location.href;
@@ -135,6 +159,11 @@ export default function BillingPage() {
     } finally {
       setSubscribing(null);
     }
+  };
+
+  const handlePlanChangeSuccess = () => {
+    addToast('Plan changed successfully!', 'success');
+    fetchData();
   };
 
   const handleManageSubscription = async () => {
@@ -194,8 +223,6 @@ export default function BillingPage() {
       </div>
     );
   }
-
-  const hasActiveSubscription = subscription && subscription.status !== 'none' && subscription.status !== 'canceled';
 
   return (
     <div className="space-y-6">
@@ -436,7 +463,9 @@ export default function BillingPage() {
                       disabled={subscribing === plan.code}
                     >
                       {subscribing === plan.code ? 'Processing...' :
-                       hasActiveSubscription ? 'Switch to this plan' : 'Subscribe'}
+                       hasActiveSubscription && currentPlan
+                         ? (plan.price_cents > currentPlan.price_cents ? 'Upgrade' : 'Downgrade')
+                         : 'Subscribe'}
                     </Button>
                   )}
                 </div>
@@ -455,6 +484,22 @@ export default function BillingPage() {
             Subscription plans have not been configured for this domain yet.
           </p>
         </Card>
+      )}
+
+      {/* Plan Change Modal */}
+      {currentPlan && selectedPlanForChange && (
+        <PlanChangeModal
+          open={planChangeModalOpen}
+          onClose={() => {
+            setPlanChangeModalOpen(false);
+            setSelectedPlanForChange(null);
+          }}
+          currentPlan={currentPlan}
+          newPlan={selectedPlanForChange}
+          apiDomain={apiDomain}
+          stripePublishableKey={stripePublishableKey}
+          onSuccess={handlePlanChangeSuccess}
+        />
       )}
     </div>
   );

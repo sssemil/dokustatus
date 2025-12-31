@@ -278,6 +278,52 @@ pub struct PlanDistribution {
 }
 
 // ============================================================================
+// Plan Change Types (Upgrade/Downgrade)
+// ============================================================================
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlanChangeType {
+    Upgrade,   // Immediate with proration
+    Downgrade, // Scheduled for period end
+}
+
+impl PlanChangeType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PlanChangeType::Upgrade => "upgrade",
+            PlanChangeType::Downgrade => "downgrade",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanChangePreview {
+    pub prorated_amount_cents: i64,
+    pub currency: String,
+    pub period_end: i64,
+    pub new_plan_name: String,
+    pub new_plan_price_cents: i64,
+    pub change_type: PlanChangeType,
+    pub effective_at: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PlanChangeResult {
+    pub success: bool,
+    pub change_type: PlanChangeType,
+    pub invoice_id: Option<String>,
+    pub amount_charged_cents: Option<i64>,
+    pub currency: Option<String>,
+    pub client_secret: Option<String>,
+    pub hosted_invoice_url: Option<String>,
+    pub payment_intent_status: Option<String>,
+    pub new_plan: SubscriptionPlanProfile,
+    pub effective_at: i64,
+    pub schedule_id: Option<String>,
+}
+
+// ============================================================================
 // Repository Traits
 // ============================================================================
 
@@ -990,6 +1036,382 @@ impl DomainBillingUseCases {
         }).await?;
 
         self.subscription_repo.revoke(sub.id).await
+    }
+
+    // ========================================================================
+    // Plan Change (Upgrade/Downgrade)
+    // ========================================================================
+
+    /// Preview what an upgrade/downgrade would cost
+    pub async fn preview_plan_change(
+        &self,
+        domain_id: Uuid,
+        user_id: Uuid,
+        new_plan_code: &str,
+    ) -> AppResult<PlanChangePreview> {
+        use crate::infra::stripe_client::StripeClient;
+
+        let mode = self.get_active_mode(domain_id).await?;
+
+        // Get user's current subscription
+        let sub = self.subscription_repo.get_by_user_and_mode(domain_id, mode, user_id).await?
+            .ok_or(AppError::InvalidInput("No active subscription found".into()))?;
+
+        // Validate subscription state
+        self.validate_subscription_for_plan_change(&sub)?;
+
+        // Get current plan
+        let current_plan = self.plan_repo.get_by_id(sub.plan_id).await?
+            .ok_or(AppError::Internal("Current plan not found".into()))?;
+
+        // Get new plan
+        let new_plan = self.plan_repo.get_by_domain_and_code(domain_id, mode, new_plan_code).await?
+            .ok_or(AppError::InvalidInput(format!("Plan '{}' not found", new_plan_code)))?;
+
+        // Validate new plan
+        self.validate_new_plan(&current_plan, &new_plan)?;
+
+        // Determine change type based on price
+        let change_type = if new_plan.price_cents > current_plan.price_cents {
+            PlanChangeType::Upgrade
+        } else {
+            PlanChangeType::Downgrade
+        };
+
+        let period_end = sub.current_period_end
+            .map(|dt| dt.and_utc().timestamp())
+            .unwrap_or(0);
+
+        // For upgrades, get the exact proration amount from Stripe
+        let prorated_amount_cents = if change_type == PlanChangeType::Upgrade {
+            // Need Stripe subscription details
+            let stripe_subscription_id = sub.stripe_subscription_id.as_ref()
+                .ok_or(AppError::InvalidInput("Cannot preview change for manually granted subscription".into()))?;
+
+            let stripe_secret = self.get_stripe_secret_key_for_mode(domain_id, mode).await?;
+            let stripe = StripeClient::new(stripe_secret);
+
+            // Get the subscription to find the subscription item ID
+            let stripe_sub = stripe.get_subscription(stripe_subscription_id).await?;
+            let subscription_item_id = stripe_sub.subscription_item_id()
+                .ok_or(AppError::Internal("Subscription has no items".into()))?;
+
+            let new_price_id = new_plan.stripe_price_id.as_ref()
+                .ok_or(AppError::InvalidInput("New plan not configured in Stripe yet".into()))?;
+
+            // Preview using Stripe's upcoming invoice API
+            let preview = stripe.preview_subscription_change(
+                &sub.stripe_customer_id,
+                stripe_subscription_id,
+                &subscription_item_id,
+                new_price_id,
+            ).await?;
+
+            preview.amount_due
+        } else {
+            // For downgrades, no charge (change happens at period end)
+            0
+        };
+
+        // Effective date: now for upgrades, period_end for downgrades
+        let effective_at = if change_type == PlanChangeType::Upgrade {
+            chrono::Utc::now().timestamp()
+        } else {
+            period_end
+        };
+
+        Ok(PlanChangePreview {
+            prorated_amount_cents,
+            currency: new_plan.currency.clone(),
+            period_end,
+            new_plan_name: new_plan.name.clone(),
+            new_plan_price_cents: new_plan.price_cents as i64,
+            change_type,
+            effective_at,
+        })
+    }
+
+    /// Execute plan change (upgrade or downgrade)
+    pub async fn change_plan(
+        &self,
+        domain_id: Uuid,
+        user_id: Uuid,
+        new_plan_code: &str,
+        idempotency_key: &str,
+    ) -> AppResult<PlanChangeResult> {
+        use crate::infra::stripe_client::StripeClient;
+
+        let mode = self.get_active_mode(domain_id).await?;
+
+        // Get user's current subscription
+        let sub = self.subscription_repo.get_by_user_and_mode(domain_id, mode, user_id).await?
+            .ok_or(AppError::InvalidInput("No active subscription found".into()))?;
+
+        // Validate subscription state
+        self.validate_subscription_for_plan_change(&sub)?;
+
+        // Get current plan
+        let current_plan = self.plan_repo.get_by_id(sub.plan_id).await?
+            .ok_or(AppError::Internal("Current plan not found".into()))?;
+
+        // Get new plan
+        let new_plan = self.plan_repo.get_by_domain_and_code(domain_id, mode, new_plan_code).await?
+            .ok_or(AppError::InvalidInput(format!("Plan '{}' not found", new_plan_code)))?;
+
+        // Validate new plan
+        self.validate_new_plan(&current_plan, &new_plan)?;
+
+        // Need Stripe subscription details
+        let stripe_subscription_id = sub.stripe_subscription_id.as_ref()
+            .ok_or(AppError::InvalidInput("Cannot change plan for manually granted subscription".into()))?;
+
+        let stripe_secret = self.get_stripe_secret_key_for_mode(domain_id, mode).await?;
+        let stripe = StripeClient::new(stripe_secret);
+
+        // Get the subscription to find the subscription item ID
+        let stripe_sub = stripe.get_subscription(stripe_subscription_id).await?;
+        let subscription_item_id = stripe_sub.subscription_item_id()
+            .ok_or(AppError::Internal("Subscription has no items".into()))?;
+
+        // If there's an existing schedule, cancel it first
+        if let Some(schedule_id) = &stripe_sub.schedule {
+            stripe.cancel_schedule(schedule_id).await?;
+        }
+
+        let new_price_id = new_plan.stripe_price_id.as_ref()
+            .ok_or(AppError::InvalidInput("New plan not configured in Stripe yet".into()))?;
+
+        let current_price_id = current_plan.stripe_price_id.as_ref()
+            .ok_or(AppError::Internal("Current plan not configured in Stripe".into()))?;
+
+        // Determine change type based on price
+        let change_type = if new_plan.price_cents > current_plan.price_cents {
+            PlanChangeType::Upgrade
+        } else {
+            PlanChangeType::Downgrade
+        };
+
+        let period_end = sub.current_period_end
+            .map(|dt| dt.and_utc().timestamp())
+            .unwrap_or(0);
+
+        match change_type {
+            PlanChangeType::Upgrade => {
+                // For upgrades, verify customer has a payment method
+                let customer = stripe.get_customer(&sub.stripe_customer_id).await?;
+                if !customer.has_payment_method() {
+                    return Err(AppError::InvalidInput(
+                        "No payment method on file. Please add a payment method first.".into()
+                    ));
+                }
+
+                // Check if on trial
+                let end_trial = sub.status == SubscriptionStatus::Trialing;
+
+                // Upgrade immediately with proration
+                let updated_sub = stripe.upgrade_subscription(
+                    stripe_subscription_id,
+                    &subscription_item_id,
+                    new_price_id,
+                    stripe_sub.quantity(),
+                    end_trial,
+                    idempotency_key,
+                ).await?;
+
+                // Extract payment details from the updated subscription
+                let payment_intent_status = updated_sub.payment_intent_status();
+                let client_secret = updated_sub.client_secret();
+                let hosted_invoice_url = updated_sub.hosted_invoice_url();
+                let invoice_id = updated_sub.invoice_id();
+                let (amount_charged_cents, currency) = updated_sub.amount_charged()
+                    .map(|(a, c)| (Some(a), Some(c)))
+                    .unwrap_or((None, None));
+
+                // Log the plan change event
+                self.event_repo.create(&CreateSubscriptionEventInput {
+                    subscription_id: sub.id,
+                    event_type: "plan_change".to_string(),
+                    previous_status: Some(sub.status),
+                    new_status: Some(sub.status), // Status may not change immediately
+                    stripe_event_id: None,
+                    metadata: serde_json::json!({
+                        "change_type": "upgrade",
+                        "from_plan": current_plan.code,
+                        "to_plan": new_plan.code,
+                        "amount_charged_cents": amount_charged_cents,
+                        "payment_intent_status": payment_intent_status,
+                    }),
+                    created_by: Some(user_id),
+                }).await?;
+
+                // Only update local plan if payment succeeded immediately.
+                // For requires_action/requires_payment_method, the webhook will update after payment completes.
+                // This prevents the DB from being out of sync if payment ultimately fails.
+                if payment_intent_status.as_deref() == Some("succeeded") {
+                    self.subscription_repo.update_plan(sub.id, new_plan.id).await?;
+                }
+
+                Ok(PlanChangeResult {
+                    success: payment_intent_status.as_deref() == Some("succeeded"),
+                    change_type,
+                    invoice_id,
+                    amount_charged_cents,
+                    currency,
+                    client_secret,
+                    hosted_invoice_url,
+                    payment_intent_status,
+                    new_plan: new_plan,
+                    effective_at: chrono::Utc::now().timestamp(),
+                    schedule_id: None,
+                })
+            }
+            PlanChangeType::Downgrade => {
+                // Schedule downgrade for period end using Subscription Schedules
+                let schedule = stripe.schedule_downgrade(
+                    stripe_subscription_id,
+                    current_price_id,
+                    new_price_id,
+                    period_end,
+                    idempotency_key,
+                ).await?;
+
+                // Log the plan change event
+                self.event_repo.create(&CreateSubscriptionEventInput {
+                    subscription_id: sub.id,
+                    event_type: "plan_change_scheduled".to_string(),
+                    previous_status: Some(sub.status),
+                    new_status: Some(sub.status),
+                    stripe_event_id: None,
+                    metadata: serde_json::json!({
+                        "change_type": "downgrade",
+                        "from_plan": current_plan.code,
+                        "to_plan": new_plan.code,
+                        "effective_at": period_end,
+                        "schedule_id": schedule.id,
+                    }),
+                    created_by: Some(user_id),
+                }).await?;
+
+                Ok(PlanChangeResult {
+                    success: true,
+                    change_type,
+                    invoice_id: None,
+                    amount_charged_cents: None,
+                    currency: None,
+                    client_secret: None,
+                    hosted_invoice_url: None,
+                    payment_intent_status: None,
+                    new_plan: new_plan,
+                    effective_at: period_end,
+                    schedule_id: Some(schedule.id),
+                })
+            }
+        }
+    }
+
+    /// Validate that a subscription is in a state that allows plan changes
+    fn validate_subscription_for_plan_change(&self, sub: &UserSubscriptionProfile) -> AppResult<()> {
+        // Check if manually granted
+        if sub.manually_granted {
+            return Err(AppError::InvalidInput(
+                "Cannot change plan for manually granted subscriptions".into()
+            ));
+        }
+
+        // Check if has Stripe subscription ID
+        if sub.stripe_subscription_id.is_none() {
+            return Err(AppError::InvalidInput(
+                "Cannot change plan: subscription not linked to Stripe".into()
+            ));
+        }
+
+        // Validate status
+        match sub.status {
+            SubscriptionStatus::Active | SubscriptionStatus::Trialing => Ok(()),
+            SubscriptionStatus::Canceled if sub.cancel_at_period_end => {
+                // Allow re-subscribing if just cancel_at_period_end
+                Ok(())
+            }
+            SubscriptionStatus::PastDue => {
+                Err(AppError::InvalidInput(
+                    "Cannot change plan while payment is past due. Please update your payment method first.".into()
+                ))
+            }
+            SubscriptionStatus::Incomplete => {
+                Err(AppError::InvalidInput(
+                    "Cannot change plan: please complete the current payment first.".into()
+                ))
+            }
+            SubscriptionStatus::IncompleteExpired => {
+                Err(AppError::InvalidInput(
+                    "Subscription has expired. Please subscribe again.".into()
+                ))
+            }
+            SubscriptionStatus::Unpaid => {
+                Err(AppError::InvalidInput(
+                    "Cannot change plan while subscription is unpaid. Please update your payment method.".into()
+                ))
+            }
+            SubscriptionStatus::Paused => {
+                Err(AppError::InvalidInput(
+                    "Cannot change plan while subscription is paused.".into()
+                ))
+            }
+            SubscriptionStatus::Canceled => {
+                Err(AppError::InvalidInput(
+                    "Cannot change plan on a canceled subscription. Please subscribe again.".into()
+                ))
+            }
+        }
+    }
+
+    /// Validate that the new plan is acceptable for a plan change
+    fn validate_new_plan(
+        &self,
+        current_plan: &SubscriptionPlanProfile,
+        new_plan: &SubscriptionPlanProfile,
+    ) -> AppResult<()> {
+        // Must be different plan
+        if current_plan.id == new_plan.id {
+            return Err(AppError::InvalidInput(
+                "Already subscribed to this plan".into()
+            ));
+        }
+
+        // New plan must be public
+        if !new_plan.is_public {
+            return Err(AppError::InvalidInput(
+                "This plan is not available for subscription".into()
+            ));
+        }
+
+        // New plan must not be archived
+        if new_plan.is_archived {
+            return Err(AppError::InvalidInput(
+                "This plan is no longer available".into()
+            ));
+        }
+
+        // Must have same interval (can't switch between monthly and yearly)
+        if current_plan.interval != new_plan.interval {
+            return Err(AppError::InvalidInput(
+                format!(
+                    "Cannot switch between {} and {} billing. Please cancel and resubscribe.",
+                    current_plan.interval, new_plan.interval
+                )
+            ));
+        }
+
+        // Must have same interval count
+        if current_plan.interval_count != new_plan.interval_count {
+            return Err(AppError::InvalidInput(
+                format!(
+                    "Cannot switch between different billing frequencies. Please cancel and resubscribe."
+                )
+            ));
+        }
+
+        Ok(())
     }
 
     // ========================================================================

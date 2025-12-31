@@ -244,6 +244,147 @@ impl StripeClient {
         }
     }
 
+    /// Preview the cost of upgrading/changing a subscription using Stripe's upcoming invoice API
+    pub async fn preview_subscription_change(
+        &self,
+        customer_id: &str,
+        subscription_id: &str,
+        subscription_item_id: &str,
+        new_price_id: &str,
+    ) -> AppResult<StripeUpcomingInvoice> {
+        let params: Vec<(&str, String)> = vec![
+            ("customer", customer_id.to_string()),
+            ("subscription", subscription_id.to_string()),
+            ("subscription_items[0][id]", subscription_item_id.to_string()),
+            ("subscription_items[0][price]", new_price_id.to_string()),
+            ("subscription_proration_behavior", "always_invoice".to_string()),
+        ];
+
+        let response = self.client
+            .get(format!("{}/invoices/upcoming", STRIPE_API_BASE))
+            .header("Authorization", self.auth_header())
+            .query(&params)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
+
+        self.handle_response(response).await
+    }
+
+    /// Upgrade subscription immediately with proration
+    pub async fn upgrade_subscription(
+        &self,
+        subscription_id: &str,
+        subscription_item_id: &str,
+        new_price_id: &str,
+        quantity: i64,
+        end_trial: bool,
+        idempotency_key: &str,
+    ) -> AppResult<StripeSubscription> {
+        let mut params: Vec<(String, String)> = vec![
+            ("items[0][id]".to_string(), subscription_item_id.to_string()),
+            ("items[0][price]".to_string(), new_price_id.to_string()),
+            ("items[0][quantity]".to_string(), quantity.to_string()),
+            ("proration_behavior".to_string(), "always_invoice".to_string()),
+            ("payment_behavior".to_string(), "default_incomplete".to_string()),
+            ("cancel_at_period_end".to_string(), "false".to_string()),
+            // Expand latest_invoice and payment_intent to get client_secret for SCA
+            ("expand[0]".to_string(), "latest_invoice.payment_intent".to_string()),
+        ];
+
+        if end_trial {
+            params.push(("trial_end".to_string(), "now".to_string()));
+        }
+
+        let response = self.client
+            .post(format!("{}/subscriptions/{}", STRIPE_API_BASE, subscription_id))
+            .header("Authorization", self.auth_header())
+            .header("Idempotency-Key", idempotency_key)
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
+
+        self.handle_response(response).await
+    }
+
+    /// Schedule a downgrade for the end of the current billing period using Subscription Schedules
+    pub async fn schedule_downgrade(
+        &self,
+        subscription_id: &str,
+        current_price_id: &str,
+        new_price_id: &str,
+        current_period_end: i64,
+        idempotency_key: &str,
+    ) -> AppResult<StripeSubscriptionSchedule> {
+        // First, create a schedule from the existing subscription
+        let create_response = self.client
+            .post(format!("{}/subscription_schedules", STRIPE_API_BASE))
+            .header("Authorization", self.auth_header())
+            .header("Idempotency-Key", format!("{}-create", idempotency_key))
+            .form(&[("from_subscription", subscription_id)])
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
+
+        let schedule: StripeSubscriptionSchedule = self.handle_response(create_response).await?;
+
+        // Now update the schedule with the phase change
+        let params: Vec<(String, String)> = vec![
+            // End behavior: release means the subscription continues after the schedule ends
+            ("end_behavior".to_string(), "release".to_string()),
+            // Phase 1: current plan until period end (already handled by from_subscription)
+            // Phase 2: new plan starting at period end
+            ("phases[0][items][0][price]".to_string(), current_price_id.to_string()),
+            ("phases[0][end_date]".to_string(), current_period_end.to_string()),
+            ("phases[1][items][0][price]".to_string(), new_price_id.to_string()),
+            ("phases[1][iterations]".to_string(), "1".to_string()),
+        ];
+
+        let update_response = self.client
+            .post(format!("{}/subscription_schedules/{}", STRIPE_API_BASE, schedule.id))
+            .header("Authorization", self.auth_header())
+            .header("Idempotency-Key", format!("{}-update", idempotency_key))
+            .form(&params)
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
+
+        // If update fails, cancel the orphaned schedule to clean up
+        match self.handle_response::<StripeSubscriptionSchedule>(update_response).await {
+            Ok(updated_schedule) => Ok(updated_schedule),
+            Err(e) => {
+                // Best-effort cleanup: cancel the schedule we just created
+                let _ = self.cancel_schedule(&schedule.id).await;
+                Err(e)
+            }
+        }
+    }
+
+    /// Cancel a pending subscription schedule (releases the subscription back to normal)
+    pub async fn cancel_schedule(&self, schedule_id: &str) -> AppResult<StripeSubscriptionSchedule> {
+        let response = self.client
+            .post(format!("{}/subscription_schedules/{}/cancel", STRIPE_API_BASE, schedule_id))
+            .header("Authorization", self.auth_header())
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
+
+        self.handle_response(response).await
+    }
+
+    /// Get a customer to check for default payment method
+    pub async fn get_customer(&self, customer_id: &str) -> AppResult<StripeCustomerFull> {
+        let response = self.client
+            .get(format!("{}/customers/{}", STRIPE_API_BASE, customer_id))
+            .header("Authorization", self.auth_header())
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
+
+        self.handle_response(response).await
+    }
+
     // ========================================================================
     // Refunds
     // ========================================================================
@@ -477,6 +618,42 @@ pub struct StripeSubscription {
     pub trial_start: Option<i64>,
     pub trial_end: Option<i64>,
     pub items: StripeSubscriptionItems,
+    pub latest_invoice: Option<StripeLatestInvoice>,
+    pub schedule: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum StripeLatestInvoice {
+    Id(String),
+    Expanded(Box<StripeLatestInvoiceExpanded>),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripeLatestInvoiceExpanded {
+    pub id: String,
+    pub status: Option<String>,
+    pub amount_due: i64,
+    pub amount_paid: i64,
+    pub currency: String,
+    pub hosted_invoice_url: Option<String>,
+    pub payment_intent: Option<StripePaymentIntentRef>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum StripePaymentIntentRef {
+    Id(String),
+    Expanded(Box<StripePaymentIntent>),
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripePaymentIntent {
+    pub id: String,
+    pub status: String,
+    pub client_secret: Option<String>,
+    pub amount: i64,
+    pub currency: String,
 }
 
 impl StripeSubscription {
@@ -486,6 +663,69 @@ impl StripeSubscription {
             .first()
             .map(|item| item.price.id.clone())
             .unwrap_or_default()
+    }
+
+    /// Get the first subscription item ID
+    pub fn subscription_item_id(&self) -> Option<String> {
+        self.items.data.first().map(|item| item.id.clone())
+    }
+
+    /// Get the quantity from the first subscription item
+    pub fn quantity(&self) -> i64 {
+        self.items
+            .data
+            .first()
+            .and_then(|item| item.quantity)
+            .unwrap_or(1)
+    }
+
+    /// Get the payment intent status from the latest invoice (for upgrades)
+    pub fn payment_intent_status(&self) -> Option<String> {
+        match &self.latest_invoice {
+            Some(StripeLatestInvoice::Expanded(invoice)) => match &invoice.payment_intent {
+                Some(StripePaymentIntentRef::Expanded(pi)) => Some(pi.status.clone()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Get the client secret for SCA confirmation
+    pub fn client_secret(&self) -> Option<String> {
+        match &self.latest_invoice {
+            Some(StripeLatestInvoice::Expanded(invoice)) => match &invoice.payment_intent {
+                Some(StripePaymentIntentRef::Expanded(pi)) => pi.client_secret.clone(),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// Get the hosted invoice URL for fallback SCA flow
+    pub fn hosted_invoice_url(&self) -> Option<String> {
+        match &self.latest_invoice {
+            Some(StripeLatestInvoice::Expanded(invoice)) => invoice.hosted_invoice_url.clone(),
+            _ => None,
+        }
+    }
+
+    /// Get the invoice ID from the latest invoice
+    pub fn invoice_id(&self) -> Option<String> {
+        match &self.latest_invoice {
+            Some(StripeLatestInvoice::Id(id)) => Some(id.clone()),
+            Some(StripeLatestInvoice::Expanded(invoice)) => Some(invoice.id.clone()),
+            None => None,
+        }
+    }
+
+    /// Get the amount charged from the latest invoice
+    pub fn amount_charged(&self) -> Option<(i64, String)> {
+        match &self.latest_invoice {
+            Some(StripeLatestInvoice::Expanded(invoice)) => {
+                Some((invoice.amount_due, invoice.currency.clone()))
+            }
+            _ => None,
+        }
     }
 }
 
@@ -498,6 +738,7 @@ pub struct StripeSubscriptionItems {
 pub struct StripeSubscriptionItem {
     pub id: String,
     pub price: StripePrice,
+    pub quantity: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -565,5 +806,89 @@ impl StripeWebhookEvent {
 
     pub fn get_invoice(&self) -> Option<StripeInvoice> {
         serde_json::from_value(self.data.object.clone()).ok()
+    }
+}
+
+// ============================================================================
+// Upcoming Invoice (for proration preview)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct StripeUpcomingInvoice {
+    pub amount_due: i64,
+    pub amount_remaining: i64,
+    pub currency: String,
+    pub customer: String,
+    pub subscription: Option<String>,
+    pub lines: StripeInvoiceLines,
+    pub total: i64,
+    pub subtotal: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripeInvoiceLines {
+    pub data: Vec<StripeInvoiceLine>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripeInvoiceLine {
+    pub id: String,
+    pub amount: i64,
+    pub description: Option<String>,
+    pub proration: bool,
+    pub price: Option<StripePrice>,
+}
+
+// ============================================================================
+// Subscription Schedule (for downgrades)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct StripeSubscriptionSchedule {
+    pub id: String,
+    pub status: String,
+    pub subscription: Option<String>,
+    pub current_phase: Option<StripeSchedulePhase>,
+    pub phases: Vec<StripeSchedulePhase>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripeSchedulePhase {
+    pub start_date: i64,
+    pub end_date: Option<i64>,
+    pub items: Vec<StripeSchedulePhaseItem>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripeSchedulePhaseItem {
+    pub price: String,
+    pub quantity: Option<i64>,
+}
+
+// ============================================================================
+// Customer (full details including payment method)
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+pub struct StripeCustomerFull {
+    pub id: String,
+    pub email: Option<String>,
+    pub invoice_settings: Option<StripeInvoiceSettings>,
+    pub default_source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StripeInvoiceSettings {
+    pub default_payment_method: Option<String>,
+}
+
+impl StripeCustomerFull {
+    pub fn has_payment_method(&self) -> bool {
+        self.default_source.is_some()
+            || self
+                .invoice_settings
+                .as_ref()
+                .and_then(|s| s.default_payment_method.as_ref())
+                .is_some()
     }
 }
