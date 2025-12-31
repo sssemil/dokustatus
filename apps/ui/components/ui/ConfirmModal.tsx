@@ -52,24 +52,22 @@ export function ConfirmModal({
   };
 
   return (
-    <Modal open={isOpen} onClose={onCancel} title={title} size="sm">
+    <Modal open={isOpen} onClose={onCancel} title={title} size="sm" variant={variant}>
       <div className="space-y-4">
-        {/* Warning icon for danger variant */}
-        {variant === 'danger' && (
-          <div className="flex items-center gap-3 p-3 bg-red-500/10 border border-red-500/20 rounded-lg">
+        {/* Warning message */}
+        {variant === 'danger' ? (
+          <div className="flex items-center gap-3">
             <AlertTriangle size={20} className="text-red-400 flex-shrink-0" />
-            <p className="text-sm text-red-200">{message}</p>
+            <p className="text-sm text-red-100">{message}</p>
           </div>
-        )}
-
-        {variant !== 'danger' && (
+        ) : (
           <p className="text-sm text-zinc-400">{message}</p>
         )}
 
         {/* Type to confirm input */}
         {confirmText && (
           <div className="space-y-2">
-            <label className="block text-sm text-zinc-400">
+            <label className={`block text-sm ${variant === 'danger' ? 'text-red-200' : 'text-zinc-400'}`}>
               Type <span className="font-medium text-white">{confirmText}</span> to confirm:
             </label>
             <Input

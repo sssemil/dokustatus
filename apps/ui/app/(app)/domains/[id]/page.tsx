@@ -1806,6 +1806,7 @@ export default function DomainDetailPage() {
         message={deleteRoleConfirm ? `This will remove the "${deleteRoleConfirm.name}" role from ${deleteRoleConfirm.user_count} user${deleteRoleConfirm.user_count === 1 ? '' : 's'}.` : ''}
         variant="danger"
         confirmLabel="Delete"
+        useHoldToConfirm
         onConfirm={handleDeleteRole}
         onCancel={() => setDeleteRoleConfirm(null)}
       />
