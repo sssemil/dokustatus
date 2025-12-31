@@ -230,6 +230,8 @@ secrets:
     file: ./secrets/reauth_dev_api_key
   anypost_api_key:
     file: ./secrets/anypost_api_key
+  # NOTE: No Stripe secrets here - each domain must configure their own Stripe account.
+  # We cannot accept payments on behalf of other developers.
 
 networks:
   reauth-net:

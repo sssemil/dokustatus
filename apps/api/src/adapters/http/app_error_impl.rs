@@ -41,6 +41,7 @@ impl IntoResponse for AppError {
                 error_resp(StatusCode::BAD_REQUEST, ErrorCode::TooManyDocuments, None)
             }
             AppError::NotFound => error_resp(StatusCode::NOT_FOUND, ErrorCode::NotFound, None),
+            AppError::Forbidden => error_resp(StatusCode::FORBIDDEN, ErrorCode::Forbidden, None),
             AppError::SessionMismatch => error_resp(
                 StatusCode::UNAUTHORIZED,
                 ErrorCode::SessionMismatch,

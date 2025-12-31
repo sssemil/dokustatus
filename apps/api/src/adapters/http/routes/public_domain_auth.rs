@@ -15,7 +15,11 @@ use crate::{
     app_error::{AppError, AppResult},
     application::{
         jwt,
-        use_cases::{domain::extract_root_from_reauth_hostname, domain_auth::DomainEndUserProfile},
+        use_cases::{
+            domain::extract_root_from_reauth_hostname,
+            domain_auth::DomainEndUserProfile,
+            domain_billing::SubscriptionClaims,
+        },
         validators::is_valid_email,
     },
 };
@@ -88,12 +92,20 @@ async fn complete_login(
         )
     };
 
+    // Fetch subscription claims for JWT
+    let subscription_claims = app_state
+        .billing_use_cases
+        .get_subscription_claims(user.domain_id, user.id)
+        .await
+        .unwrap_or_else(|_| SubscriptionClaims::none());
+
     // Issue access token (short-lived)
     let access_token = jwt::issue_domain_end_user(
         user.id,
         user.domain_id,
         root_domain,
         user.roles.clone(),
+        subscription_claims.clone(),
         &app_state.config.jwt_secret,
         time::Duration::seconds(access_ttl_secs as i64),
     )?;
@@ -104,6 +116,7 @@ async fn complete_login(
         user.domain_id,
         root_domain,
         user.roles.clone(),
+        subscription_claims,
         &app_state.config.jwt_secret,
         time::Duration::days(refresh_ttl_days as i64),
     )?;
@@ -181,6 +194,17 @@ struct VerifyMagicLinkResponse {
     waitlist_position: Option<i64>,
 }
 
+/// Subscription info returned in session response (matches SDK types)
+#[derive(Serialize)]
+struct SessionSubscriptionInfo {
+    status: String,
+    plan_code: Option<String>,
+    plan_name: Option<String>,
+    current_period_end: Option<i64>,
+    cancel_at_period_end: Option<bool>,
+    trial_ends_at: Option<i64>,
+}
+
 #[derive(Serialize)]
 struct SessionResponse {
     valid: bool,
@@ -191,6 +215,8 @@ struct SessionResponse {
     google_linked: Option<bool>,
     error: Option<String>,
     error_code: Option<String>,
+    /// Subscription info (if billing is configured)
+    subscription: Option<SessionSubscriptionInfo>,
 }
 
 pub fn router() -> Router<AppState> {
@@ -213,6 +239,15 @@ pub fn router() -> Router<AppState> {
         .route("/{domain}/auth/refresh", post(refresh_token))
         .route("/{domain}/auth/logout", post(logout))
         .route("/{domain}/auth/account", delete(delete_account))
+        // Billing routes
+        .route("/{domain}/billing/plans", get(get_public_plans))
+        .route("/{domain}/billing/subscription", get(get_user_subscription))
+        .route("/{domain}/billing/checkout", post(create_checkout))
+        .route("/{domain}/billing/portal", post(create_portal))
+        .route("/{domain}/billing/cancel", post(cancel_subscription))
+        // Mode-specific webhook endpoints
+        .route("/{domain}/billing/webhook/test", post(handle_webhook_test))
+        .route("/{domain}/billing/webhook/live", post(handle_webhook_live))
 }
 
 /// GET /api/public/domain/{domain}/config
@@ -370,6 +405,7 @@ async fn check_session(
                                 google_linked: Some(user.google_id.is_some()),
                                 error: Some("Your account has been suspended".to_string()),
                                 error_code: Some("ACCOUNT_SUSPENDED".to_string()),
+                                subscription: None, // Don't show subscription for suspended accounts
                             }));
                         }
 
@@ -397,11 +433,19 @@ async fn check_session(
                                 valid: true,
                                 end_user_id: Some(claims.sub.clone()),
                                 email: Some(user.email.clone()),
-                                roles: Some(claims.roles),
+                                roles: Some(claims.roles.clone()),
                                 waitlist_position,
                                 google_linked: Some(user.google_id.is_some()),
                                 error: None,
                                 error_code: None,
+                                subscription: Some(SessionSubscriptionInfo {
+                                    status: claims.subscription.status.clone(),
+                                    plan_code: claims.subscription.plan_code.clone(),
+                                    plan_name: claims.subscription.plan_name.clone(),
+                                    current_period_end: claims.subscription.current_period_end,
+                                    cancel_at_period_end: claims.subscription.cancel_at_period_end,
+                                    trial_ends_at: claims.subscription.trial_ends_at,
+                                }),
                             }));
                         }
 
@@ -410,11 +454,19 @@ async fn check_session(
                             valid: true,
                             end_user_id: Some(claims.sub.clone()),
                             email: Some(user.email),
-                            roles: Some(claims.roles),
+                            roles: Some(claims.roles.clone()),
                             waitlist_position: None,
                             google_linked: Some(user.google_id.is_some()),
                             error: None,
                             error_code: None,
+                            subscription: Some(SessionSubscriptionInfo {
+                                status: claims.subscription.status.clone(),
+                                plan_code: claims.subscription.plan_code.clone(),
+                                plan_name: claims.subscription.plan_name.clone(),
+                                current_period_end: claims.subscription.current_period_end,
+                                cancel_at_period_end: claims.subscription.cancel_at_period_end,
+                                trial_ends_at: claims.subscription.trial_ends_at,
+                            }),
                         }));
                     }
                 }
@@ -429,6 +481,7 @@ async fn check_session(
                     google_linked: None,
                     error: Some("Session verification failed".to_string()),
                     error_code: Some("SESSION_VERIFICATION_FAILED".to_string()),
+                    subscription: None,
                 }));
             }
         }
@@ -450,6 +503,7 @@ async fn check_session(
                     google_linked: None,
                     error: None,
                     error_code: None,
+                    subscription: None,
                 }));
             }
         }
@@ -464,6 +518,7 @@ async fn check_session(
         google_linked: None,
         error: None,
         error_code: None,
+        subscription: None,
     }))
 }
 
@@ -519,12 +574,20 @@ async fn refresh_token(
         .map(|c| c.access_token_ttl_secs)
         .unwrap_or(86400);
 
+    // Fetch fresh subscription claims for the new token
+    let subscription_claims = app_state
+        .billing_use_cases
+        .get_subscription_claims(domain_id, end_user_id)
+        .await
+        .unwrap_or_else(|_| SubscriptionClaims::none());
+
     // Issue new access token
     let access_token = jwt::issue_domain_end_user(
         end_user_id,
         domain_id,
         &root_domain,
         claims.roles,
+        subscription_claims,
         &app_state.config.jwt_secret,
         time::Duration::seconds(access_ttl_secs as i64),
     )?;
@@ -1054,6 +1117,608 @@ async fn google_complete(
             waitlist_position: result.waitlist_position,
         }),
     ))
+}
+
+// ============================================================================
+// Billing Routes
+// ============================================================================
+
+#[derive(Serialize)]
+struct PublicPlanResponse {
+    id: Uuid,
+    code: String,
+    name: String,
+    description: Option<String>,
+    price_cents: i32,
+    currency: String,
+    interval: String,
+    interval_count: i32,
+    trial_days: i32,
+    features: Vec<String>,
+    display_order: i32,
+}
+
+/// GET /api/public/domain/{domain}/billing/plans
+/// Returns public subscription plans for a domain
+async fn get_public_plans(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    let domain = app_state
+        .domain_auth_use_cases
+        .get_domain_by_name(&root_domain)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let plans = app_state
+        .billing_use_cases
+        .get_public_plans(domain.id)
+        .await?;
+
+    let response: Vec<PublicPlanResponse> = plans
+        .into_iter()
+        .map(|p| PublicPlanResponse {
+            id: p.id,
+            code: p.code,
+            name: p.name,
+            description: p.description,
+            price_cents: p.price_cents,
+            currency: p.currency,
+            interval: p.interval,
+            interval_count: p.interval_count,
+            trial_days: p.trial_days,
+            features: p.features,
+            display_order: p.display_order,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+#[derive(Serialize)]
+struct UserSubscriptionResponse {
+    id: Option<Uuid>,
+    plan_code: Option<String>,
+    plan_name: Option<String>,
+    status: String,
+    current_period_end: Option<i64>,
+    trial_end: Option<i64>,
+    cancel_at_period_end: Option<bool>,
+}
+
+/// GET /api/public/domain/{domain}/billing/subscription
+/// Returns the current user's subscription status
+async fn get_user_subscription(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    cookies: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get user from token
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+
+    let sub = app_state
+        .billing_use_cases
+        .get_user_subscription_with_plan(domain_id, user_id)
+        .await?;
+
+    match sub {
+        Some((subscription, plan)) => Ok(Json(UserSubscriptionResponse {
+            id: Some(subscription.id),
+            plan_code: Some(plan.code),
+            plan_name: Some(plan.name),
+            status: subscription.status.as_str().to_string(),
+            current_period_end: subscription.current_period_end.map(|dt| dt.and_utc().timestamp()),
+            trial_end: subscription.trial_end.map(|dt| dt.and_utc().timestamp()),
+            cancel_at_period_end: Some(subscription.cancel_at_period_end),
+        })),
+        None => Ok(Json(UserSubscriptionResponse {
+            id: None,
+            plan_code: None,
+            plan_name: None,
+            status: "none".to_string(),
+            current_period_end: None,
+            trial_end: None,
+            cancel_at_period_end: None,
+        })),
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateCheckoutPayload {
+    plan_code: String,
+    success_url: String,
+    cancel_url: String,
+}
+
+#[derive(Serialize)]
+struct CheckoutResponse {
+    checkout_url: String,
+}
+
+/// POST /api/public/domain/{domain}/billing/checkout
+/// Creates a Stripe checkout session for subscribing to a plan
+async fn create_checkout(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    cookies: CookieJar,
+    Json(payload): Json<CreateCheckoutPayload>,
+) -> AppResult<impl IntoResponse> {
+    use crate::infra::stripe_client::StripeClient;
+    use std::collections::HashMap;
+
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get user from token
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+
+    // Get user details
+    let user = app_state
+        .domain_auth_use_cases
+        .get_end_user_by_id(user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Get the plan
+    let mut plan = app_state
+        .billing_use_cases
+        .get_plan_by_code(domain_id, &payload.plan_code)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Verify plan is public (users can only subscribe to public plans)
+    if !plan.is_public {
+        return Err(AppError::NotFound);
+    }
+
+    // Get Stripe client
+    let secret_key = app_state
+        .billing_use_cases
+        .get_stripe_secret_key(domain_id)
+        .await?;
+    let stripe = StripeClient::new(secret_key);
+
+    // Lazily create Stripe product/price if not set
+    if plan.stripe_product_id.is_none() || plan.stripe_price_id.is_none() {
+        // Create Stripe product if needed
+        let product_id = if let Some(ref id) = plan.stripe_product_id {
+            id.clone()
+        } else {
+            let product = stripe
+                .create_product(&plan.name, plan.description.as_deref())
+                .await?;
+            product.id
+        };
+
+        // Create Stripe price if needed
+        let price_id = if let Some(ref id) = plan.stripe_price_id {
+            id.clone()
+        } else {
+            // Convert interval to Stripe format (month/year)
+            let stripe_interval = match plan.interval.as_str() {
+                "monthly" => "month",
+                "yearly" => "year",
+                other => other, // Allow custom intervals
+            };
+            let price = stripe
+                .create_price(
+                    &product_id,
+                    plan.price_cents as i64,
+                    &plan.currency,
+                    stripe_interval,
+                    plan.interval_count,
+                )
+                .await?;
+            price.id
+        };
+
+        // Update plan with Stripe IDs
+        app_state
+            .billing_use_cases
+            .set_stripe_ids(plan.id, &product_id, &price_id)
+            .await?;
+
+        plan.stripe_product_id = Some(product_id);
+        plan.stripe_price_id = Some(price_id.clone());
+    }
+
+    let price_id = plan.stripe_price_id.as_ref().unwrap();
+
+    // Get or create customer
+    let mut metadata = HashMap::new();
+    metadata.insert("user_id".to_string(), user_id.to_string());
+    metadata.insert("domain_id".to_string(), domain_id.to_string());
+    let customer = stripe
+        .get_or_create_customer(&user.email, Some(metadata))
+        .await?;
+
+    // Create checkout session
+    let session = stripe
+        .create_checkout_session(
+            &customer.id,
+            &price_id,
+            &payload.success_url,
+            &payload.cancel_url,
+            Some(&user_id.to_string()),
+            Some(plan.trial_days),
+        )
+        .await?;
+
+    let checkout_url = session.url.ok_or(AppError::Internal(
+        "Stripe checkout session missing URL".into(),
+    ))?;
+
+    Ok(Json(CheckoutResponse { checkout_url }))
+}
+
+#[derive(Deserialize)]
+struct CreatePortalPayload {
+    return_url: String,
+}
+
+#[derive(Serialize)]
+struct PortalResponse {
+    portal_url: String,
+}
+
+/// POST /api/public/domain/{domain}/billing/portal
+/// Creates a Stripe customer portal session
+async fn create_portal(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    cookies: CookieJar,
+    Json(payload): Json<CreatePortalPayload>,
+) -> AppResult<impl IntoResponse> {
+    use crate::infra::stripe_client::StripeClient;
+
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get user from token
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+
+    // Get user's subscription to find Stripe customer ID
+    let subscription = app_state
+        .billing_use_cases
+        .get_user_subscription(domain_id, user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Get Stripe client
+    let secret_key = app_state
+        .billing_use_cases
+        .get_stripe_secret_key(domain_id)
+        .await?;
+    let stripe = StripeClient::new(secret_key);
+
+    // Create portal session
+    let portal = stripe
+        .create_portal_session(&subscription.stripe_customer_id, &payload.return_url)
+        .await?;
+
+    Ok(Json(PortalResponse {
+        portal_url: portal.url,
+    }))
+}
+
+/// POST /api/public/domain/{domain}/billing/cancel
+/// Cancels the user's subscription at period end
+async fn cancel_subscription(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    cookies: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    use crate::infra::stripe_client::StripeClient;
+
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get user from token
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+
+    // Get user's subscription
+    let subscription = app_state
+        .billing_use_cases
+        .get_user_subscription(domain_id, user_id)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Get Stripe subscription ID
+    let stripe_subscription_id = subscription
+        .stripe_subscription_id
+        .ok_or(AppError::InvalidInput("No active Stripe subscription".into()))?;
+
+    // Get Stripe client
+    let secret_key = app_state
+        .billing_use_cases
+        .get_stripe_secret_key(domain_id)
+        .await?;
+    let stripe = StripeClient::new(secret_key);
+
+    // Cancel at period end
+    stripe
+        .cancel_subscription(&stripe_subscription_id, true)
+        .await?;
+
+    Ok(StatusCode::OK)
+}
+
+use crate::domain::entities::stripe_mode::StripeMode;
+
+/// POST /api/public/domain/{domain}/billing/webhook/test
+/// Handles Stripe webhook events for test mode
+async fn handle_webhook_test(
+    state: State<AppState>,
+    path: Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> AppResult<impl IntoResponse> {
+    handle_webhook_for_mode(state, path, headers, body, StripeMode::Test).await
+}
+
+/// POST /api/public/domain/{domain}/billing/webhook/live
+/// Handles Stripe webhook events for live mode
+async fn handle_webhook_live(
+    state: State<AppState>,
+    path: Path<String>,
+    headers: HeaderMap,
+    body: String,
+) -> AppResult<impl IntoResponse> {
+    handle_webhook_for_mode(state, path, headers, body, StripeMode::Live).await
+}
+
+/// Internal webhook handler that processes events for a specific mode
+async fn handle_webhook_for_mode(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    headers: HeaderMap,
+    body: String,
+    stripe_mode: StripeMode,
+) -> AppResult<impl IntoResponse> {
+    use crate::domain::entities::user_subscription::SubscriptionStatus;
+    use crate::infra::stripe_client::StripeClient;
+
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get domain
+    let domain = app_state
+        .domain_auth_use_cases
+        .get_domain_by_name(&root_domain)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Get webhook secret for the specific mode
+    let webhook_secret = app_state
+        .billing_use_cases
+        .get_stripe_webhook_secret_for_mode(domain.id, stripe_mode)
+        .await?;
+
+    // Get Stripe signature
+    let signature = headers
+        .get("stripe-signature")
+        .and_then(|v| v.to_str().ok())
+        .ok_or(AppError::InvalidInput("Missing Stripe signature".into()))?;
+
+    // Verify signature
+    StripeClient::verify_webhook_signature(&body, signature, &webhook_secret)?;
+
+    // Parse event
+    let event: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| AppError::InvalidInput(format!("Invalid webhook payload: {}", e)))?;
+
+    let event_type = event["type"].as_str().unwrap_or("");
+    let event_id = event["id"].as_str().unwrap_or("");
+
+    // Check idempotency
+    if app_state
+        .billing_use_cases
+        .is_event_processed(event_id)
+        .await?
+    {
+        return Ok(StatusCode::OK);
+    }
+
+    // Handle event types
+    match event_type {
+        "checkout.session.completed" => {
+            let session = &event["data"]["object"];
+            let customer_id = session["customer"].as_str().unwrap_or("");
+            let subscription_id = session["subscription"].as_str();
+            let client_reference_id = session["client_reference_id"].as_str();
+
+            if let (Some(sub_id), Some(user_id_str)) = (subscription_id, client_reference_id) {
+                if let Ok(user_id) = Uuid::parse_str(user_id_str) {
+                    // Get the Stripe subscription to find the price ID
+                    let secret_key = app_state
+                        .billing_use_cases
+                        .get_stripe_secret_key(domain.id)
+                        .await?;
+                    let stripe = StripeClient::new(secret_key);
+
+                    if let Ok(stripe_sub) = stripe.get_subscription(sub_id).await {
+                        // Use the webhook mode for plan lookup
+
+                        // Find plan by Stripe price ID - search ALL plans (not just public)
+                        // because plan visibility can change after purchase
+                        let plan = app_state
+                            .billing_use_cases
+                            .get_plan_by_stripe_price_id(domain.id, stripe_mode, &stripe_sub.price_id())
+                            .await?;
+
+                        if let Some(plan) = plan {
+                            use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
+
+                            // Map Stripe status to our SubscriptionStatus - don't assume Active
+                            let status = match stripe_sub.status.as_str() {
+                                "active" => SubscriptionStatus::Active,
+                                "past_due" => SubscriptionStatus::PastDue,
+                                "canceled" => SubscriptionStatus::Canceled,
+                                "trialing" => SubscriptionStatus::Trialing,
+                                "incomplete" => SubscriptionStatus::Incomplete,
+                                "incomplete_expired" => SubscriptionStatus::IncompleteExpired,
+                                "unpaid" => SubscriptionStatus::Unpaid,
+                                "paused" => SubscriptionStatus::Paused,
+                                // Default to Incomplete - never grant access by default
+                                _ => SubscriptionStatus::Incomplete,
+                            };
+
+                            let input = CreateSubscriptionInput {
+                                domain_id: domain.id,
+                                stripe_mode,
+                                end_user_id: user_id,
+                                plan_id: plan.id,
+                                stripe_customer_id: customer_id.to_string(),
+                                stripe_subscription_id: Some(sub_id.to_string()),
+                                status,
+                                current_period_start: Some(chrono::NaiveDateTime::from_timestamp_opt(
+                                    stripe_sub.current_period_start,
+                                    0,
+                                ).unwrap_or_default()),
+                                current_period_end: Some(chrono::NaiveDateTime::from_timestamp_opt(
+                                    stripe_sub.current_period_end,
+                                    0,
+                                ).unwrap_or_default()),
+                                trial_start: stripe_sub.trial_start.and_then(|ts|
+                                    chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
+                                ),
+                                trial_end: stripe_sub.trial_end.and_then(|ts|
+                                    chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
+                                ),
+                            };
+
+                            let created_sub = app_state
+                                .billing_use_cases
+                                .create_or_update_subscription(&input)
+                                .await?;
+
+                            // Log event with actual status
+                            app_state
+                                .billing_use_cases
+                                .log_webhook_event(
+                                    created_sub.id,
+                                    event_type,
+                                    None,
+                                    Some(status),
+                                    event_id,
+                                    serde_json::json!({"customer_id": customer_id, "stripe_status": &stripe_sub.status}),
+                                )
+                                .await?;
+                        }
+                    }
+                }
+            }
+        }
+        "customer.subscription.updated" | "customer.subscription.deleted" => {
+            let subscription = &event["data"]["object"];
+            let stripe_sub_id = subscription["id"].as_str().unwrap_or("");
+            let status_str = subscription["status"].as_str().unwrap_or("");
+
+            let new_status = match status_str {
+                "active" => SubscriptionStatus::Active,
+                "past_due" => SubscriptionStatus::PastDue,
+                "canceled" => SubscriptionStatus::Canceled,
+                "trialing" => SubscriptionStatus::Trialing,
+                "incomplete" => SubscriptionStatus::Incomplete,
+                "incomplete_expired" => SubscriptionStatus::IncompleteExpired,
+                "unpaid" => SubscriptionStatus::Unpaid,
+                "paused" => SubscriptionStatus::Paused,
+                // Default to Incomplete for unknown statuses - never grant access by default
+                _ => SubscriptionStatus::Incomplete,
+            };
+
+            // Extract price_id from subscription items to handle plan upgrades/downgrades
+            let stripe_price_id = subscription["items"]["data"]
+                .as_array()
+                .and_then(|items| items.first())
+                .and_then(|item| item["price"]["id"].as_str());
+
+            // Look up plan by stripe_price_id to handle plan changes
+            // Use the webhook mode for plan lookup
+            let plan_id = if let Some(price_id) = stripe_price_id {
+                app_state
+                    .billing_use_cases
+                    .get_plan_by_stripe_price_id(domain.id, stripe_mode, price_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .map(|p| p.id)
+            } else {
+                None
+            };
+
+            use crate::application::use_cases::domain_billing::StripeSubscriptionUpdate;
+
+            let update = StripeSubscriptionUpdate {
+                status: new_status,
+                plan_id,  // Update plan if it changed (upgrade/downgrade via Stripe portal)
+                stripe_subscription_id: None,  // Already set, don't overwrite
+                current_period_start: subscription["current_period_start"]
+                    .as_i64()
+                    .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+                current_period_end: subscription["current_period_end"]
+                    .as_i64()
+                    .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+                cancel_at_period_end: subscription["cancel_at_period_end"].as_bool().unwrap_or(false),
+                canceled_at: subscription["canceled_at"]
+                    .as_i64()
+                    .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+                trial_start: subscription["trial_start"]
+                    .as_i64()
+                    .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+                trial_end: subscription["trial_end"]
+                    .as_i64()
+                    .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+            };
+
+            if let Ok(updated_sub) = app_state
+                .billing_use_cases
+                .update_subscription_from_stripe(stripe_sub_id, &update)
+                .await
+            {
+                app_state
+                    .billing_use_cases
+                    .log_webhook_event(
+                        updated_sub.id,
+                        event_type,
+                        None,
+                        Some(new_status),
+                        event_id,
+                        serde_json::json!({"stripe_status": status_str}),
+                    )
+                    .await?;
+            }
+        }
+        _ => {
+            tracing::debug!("Unhandled webhook event type: {}", event_type);
+        }
+    }
+
+    Ok(StatusCode::OK)
+}
+
+/// Helper to extract current user from cookies
+fn get_current_user(
+    app_state: &AppState,
+    cookies: &CookieJar,
+    root_domain: &str,
+) -> AppResult<(Uuid, Uuid)> {
+    let token = cookies
+        .get("end_user_access_token")
+        .or_else(|| cookies.get("end_user_refresh_token"))
+        .ok_or(AppError::InvalidCredentials)?;
+
+    let claims = jwt::verify_domain_end_user(token.value(), &app_state.config.jwt_secret)
+        .map_err(|_| AppError::InvalidCredentials)?;
+
+    if claims.domain != root_domain {
+        return Err(AppError::InvalidCredentials);
+    }
+
+    let user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::InvalidCredentials)?;
+    let domain_id = Uuid::parse_str(&claims.domain_id).map_err(|_| AppError::InvalidCredentials)?;
+
+    Ok((user_id, domain_id))
 }
 
 /// POST /api/public/domain/{domain}/auth/google/unlink

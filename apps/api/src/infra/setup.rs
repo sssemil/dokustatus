@@ -8,6 +8,10 @@ use crate::{
         DomainAuthConfigRepo, DomainAuthGoogleOAuthRepo, DomainAuthMagicLinkRepo,
         DomainAuthUseCases, DomainEndUserRepo,
     },
+    application::use_cases::domain_billing::{
+        BillingStripeConfigRepo, DomainBillingUseCases, SubscriptionEventRepo,
+        SubscriptionPlanRepo, UserSubscriptionRepo,
+    },
     application::use_cases::domain_roles::DomainRolesUseCases,
     infra::{
         config::AppConfig, crypto::ProcessCipher, domain_email::DomainEmailSender,
@@ -87,7 +91,24 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     );
 
     let domain_roles_use_cases =
-        DomainRolesUseCases::new(domain_repo_arc, role_repo_arc, end_user_repo_arc);
+        DomainRolesUseCases::new(domain_repo_arc.clone(), role_repo_arc, end_user_repo_arc);
+
+    // Billing use cases
+    let billing_stripe_config_repo = postgres_arc.clone() as Arc<dyn BillingStripeConfigRepo>;
+    let subscription_plan_repo = postgres_arc.clone() as Arc<dyn SubscriptionPlanRepo>;
+    let user_subscription_repo = postgres_arc.clone() as Arc<dyn UserSubscriptionRepo>;
+    let subscription_event_repo = postgres_arc.clone() as Arc<dyn SubscriptionEventRepo>;
+
+    let billing_cipher = ProcessCipher::from_env()?;
+    // NOTE: No fallback Stripe credentials - each domain must configure their own Stripe account.
+    let billing_use_cases = DomainBillingUseCases::new(
+        domain_repo_arc,
+        billing_stripe_config_repo,
+        subscription_plan_repo,
+        user_subscription_repo,
+        subscription_event_repo,
+        billing_cipher,
+    );
 
     Ok(AppState {
         config: Arc::new(config),
@@ -95,6 +116,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         domain_auth_use_cases: Arc::new(domain_auth_use_cases),
         api_key_use_cases: Arc::new(api_key_use_cases),
         domain_roles_use_cases: Arc::new(domain_roles_use_cases),
+        billing_use_cases: Arc::new(billing_use_cases),
         rate_limiter,
     })
 }

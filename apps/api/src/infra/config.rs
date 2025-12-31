@@ -36,6 +36,8 @@ pub struct AppConfig {
     pub fallback_google_client_id: Option<String>,
     /// Fallback Google OAuth client secret for domains without custom OAuth config.
     pub fallback_google_client_secret: Option<String>,
+    // NOTE: No fallback Stripe credentials - we cannot accept payments on behalf of other developers.
+    // Each domain must configure their own Stripe account.
 }
 
 impl AppConfig {
@@ -80,6 +82,7 @@ impl AppConfig {
             std::env::var("FALLBACK_GOOGLE_CLIENT_SECRET")
                 .ok()
                 .filter(|s| !s.is_empty());
+        // NOTE: No fallback Stripe credentials - each domain must configure their own Stripe account.
 
         Self {
             jwt_secret,

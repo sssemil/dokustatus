@@ -5,8 +5,13 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import {
   ExternalLink, Globe, Trash2, RefreshCw, AlertTriangle,
-  Mail, Key, Users, Shield, Settings, MoreVertical, Plus, Check, ChevronRight
+  Mail, Key, Users, Shield, Settings, MoreVertical, Plus, Check, ChevronRight,
+  CreditCard, DollarSign, TrendingUp
 } from 'lucide-react';
+import {
+  StripeConfigStatus, StripeMode, SubscriptionPlan, UserSubscription, BillingAnalytics,
+  formatPrice, formatInterval, getStatusBadgeColor, getStatusLabel, getModeLabel, getModeBadgeColor
+} from '@/types/billing';
 import {
   Card, Button, Badge, Input, Toggle, Tabs, Modal, ConfirmModal,
   CopyButton, CodeBlock, EmptyState, HoldButton, SearchInput
@@ -55,8 +60,8 @@ type EndUser = {
 type Role = { id: string; name: string; user_count: number; created_at: string | null };
 type ApiKey = { id: string; key_prefix: string; name: string; last_used_at: string | null; created_at: string | null };
 
-type Tab = 'overview' | 'auth' | 'users' | 'api' | 'settings';
-const VALID_TABS: Tab[] = ['overview', 'auth', 'users', 'api', 'settings'];
+type Tab = 'overview' | 'auth' | 'users' | 'api' | 'billing' | 'settings';
+const VALID_TABS: Tab[] = ['overview', 'auth', 'users', 'api', 'billing', 'settings'];
 
 export default function DomainDetailPage() {
   const params = useParams();
@@ -124,6 +129,33 @@ export default function DomainDetailPage() {
   // Whitelist modal
   const [showWhitelistModal, setShowWhitelistModal] = useState(false);
 
+  // Billing state
+  const [billingConfig, setBillingConfig] = useState<StripeConfigStatus | null>(null);
+  const [billingPlans, setBillingPlans] = useState<SubscriptionPlan[]>([]);
+  const [billingAnalytics, setBillingAnalytics] = useState<BillingAnalytics | null>(null);
+  const [loadingBilling, setLoadingBilling] = useState(false);
+  const [editingMode, setEditingMode] = useState<StripeMode>('test');
+  const [stripeSecretKey, setStripeSecretKey] = useState('');
+  const [stripePublishableKey, setStripePublishableKey] = useState('');
+  const [stripeWebhookSecret, setStripeWebhookSecret] = useState('');
+  const [savingBillingConfig, setSavingBillingConfig] = useState(false);
+  const [switchingMode, setSwitchingMode] = useState(false);
+
+  // Plan modal state
+  const [showPlanModal, setShowPlanModal] = useState(false);
+  const [editingPlan, setEditingPlan] = useState<SubscriptionPlan | null>(null);
+  const [planCode, setPlanCode] = useState('');
+  const [planName, setPlanName] = useState('');
+  const [planDescription, setPlanDescription] = useState('');
+  const [planPriceCents, setPlanPriceCents] = useState('');
+  const [planInterval, setPlanInterval] = useState('monthly');
+  const [planIntervalCount, setPlanIntervalCount] = useState('1');
+  const [planTrialDays, setPlanTrialDays] = useState('0');
+  const [planFeatures, setPlanFeatures] = useState<string[]>([]);
+  const [planIsPublic, setPlanIsPublic] = useState(true);
+  const [savingPlan, setSavingPlan] = useState(false);
+  const [newFeature, setNewFeature] = useState('');
+
   // Tab change handler
   const handleTabChange = useCallback((tab: Tab) => {
     setActiveTab(tab);
@@ -187,9 +219,25 @@ export default function DomainDetailPage() {
     } catch { /* ignore */ } finally { setLoadingApiKeys(false); }
   }, [domainId, domain]);
 
+  const fetchBillingData = useCallback(async () => {
+    if (!domain) return;
+    setLoadingBilling(true);
+    try {
+      const [configRes, plansRes, analyticsRes] = await Promise.all([
+        fetch(`/api/domains/${domainId}/billing/config`, { credentials: 'include' }),
+        fetch(`/api/domains/${domainId}/billing/plans`, { credentials: 'include' }),
+        fetch(`/api/domains/${domainId}/billing/analytics`, { credentials: 'include' }),
+      ]);
+      if (configRes.ok) setBillingConfig(await configRes.json());
+      if (plansRes.ok) setBillingPlans(await plansRes.json());
+      if (analyticsRes.ok) setBillingAnalytics(await analyticsRes.json());
+    } catch { /* ignore */ } finally { setLoadingBilling(false); }
+  }, [domainId, domain]);
+
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => { if ((activeTab === 'users' || activeTab === 'overview') && domain) { fetchEndUsers(); fetchRoles(); } }, [activeTab, domain, fetchEndUsers, fetchRoles]);
   useEffect(() => { if ((activeTab === 'api' || activeTab === 'overview') && domain) fetchApiKeys(); }, [activeTab, domain, fetchApiKeys]);
+  useEffect(() => { if (activeTab === 'billing' && domain) fetchBillingData(); }, [activeTab, domain, fetchBillingData]);
 
   // Poll for verification status
   useEffect(() => {
@@ -450,6 +498,186 @@ export default function DomainDetailPage() {
     }
   };
 
+  // Billing handlers
+  const handleSaveBillingConfig = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!stripeSecretKey || !stripePublishableKey || !stripeWebhookSecret) {
+      addToast('All fields are required', 'error');
+      return;
+    }
+    setSavingBillingConfig(true);
+    try {
+      const res = await fetch(`/api/domains/${domainId}/billing/config`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode: editingMode,
+          secret_key: stripeSecretKey,
+          publishable_key: stripePublishableKey,
+          webhook_secret: stripeWebhookSecret,
+        }),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        addToast(`Stripe ${editingMode} mode configuration saved`, 'success');
+        setStripeSecretKey('');
+        setStripePublishableKey('');
+        setStripeWebhookSecret('');
+        fetchBillingData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to save configuration', 'error');
+      }
+    } catch {
+      addToast('Network error', 'error');
+    } finally {
+      setSavingBillingConfig(false);
+    }
+  };
+
+  const handleRemoveBillingConfig = async (mode: StripeMode) => {
+    try {
+      const res = await fetch(`/api/domains/${domainId}/billing/config`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        addToast(`Stripe ${mode} mode configuration removed`, 'success');
+        fetchBillingData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to remove configuration', 'error');
+      }
+    } catch {
+      addToast('Network error', 'error');
+    }
+  };
+
+  const handleSwitchBillingMode = async (mode: StripeMode) => {
+    setSwitchingMode(true);
+    try {
+      const res = await fetch(`/api/domains/${domainId}/billing/mode`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        addToast(`Switched to ${mode} mode`, 'success');
+        fetchBillingData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to switch mode', 'error');
+      }
+    } catch {
+      addToast('Network error', 'error');
+    } finally {
+      setSwitchingMode(false);
+    }
+  };
+
+  const openPlanModal = (plan?: SubscriptionPlan) => {
+    if (plan) {
+      setEditingPlan(plan);
+      setPlanCode(plan.code);
+      setPlanName(plan.name);
+      setPlanDescription(plan.description || '');
+      setPlanPriceCents(String(plan.price_cents));
+      setPlanInterval(plan.interval);
+      setPlanIntervalCount(String(plan.interval_count));
+      setPlanTrialDays(String(plan.trial_days));
+      setPlanFeatures([...plan.features]);
+      setPlanIsPublic(plan.is_public);
+    } else {
+      setEditingPlan(null);
+      setPlanCode('');
+      setPlanName('');
+      setPlanDescription('');
+      setPlanPriceCents('');
+      setPlanInterval('monthly');
+      setPlanIntervalCount('1');
+      setPlanTrialDays('0');
+      setPlanFeatures([]);
+      setPlanIsPublic(true);
+    }
+    setShowPlanModal(true);
+  };
+
+  const handleSavePlan = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!planCode || !planName || !planPriceCents) {
+      addToast('Code, name, and price are required', 'error');
+      return;
+    }
+    setSavingPlan(true);
+    try {
+      const payload = {
+        code: planCode,
+        name: planName,
+        description: planDescription || null,
+        price_cents: parseInt(planPriceCents, 10),
+        currency: 'USD',
+        interval: planInterval,
+        interval_count: parseInt(planIntervalCount, 10),
+        trial_days: parseInt(planTrialDays, 10),
+        features: planFeatures,
+        is_public: planIsPublic,
+      };
+      const url = editingPlan
+        ? `/api/domains/${domainId}/billing/plans/${editingPlan.id}`
+        : `/api/domains/${domainId}/billing/plans`;
+      const method = editingPlan ? 'PATCH' : 'POST';
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        addToast(editingPlan ? 'Plan updated' : 'Plan created', 'success');
+        setShowPlanModal(false);
+        fetchBillingData();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to save plan', 'error');
+      }
+    } catch {
+      addToast('Network error', 'error');
+    } finally {
+      setSavingPlan(false);
+    }
+  };
+
+  const handleArchivePlan = async (planId: string) => {
+    try {
+      const res = await fetch(`/api/domains/${domainId}/billing/plans/${planId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (res.ok) {
+        addToast('Plan archived', 'success');
+        fetchBillingData();
+      } else {
+        addToast('Failed to archive plan', 'error');
+      }
+    } catch {
+      addToast('Network error', 'error');
+    }
+  };
+
+  const addFeature = () => {
+    if (newFeature.trim()) {
+      setPlanFeatures([...planFeatures, newFeature.trim()]);
+      setNewFeature('');
+    }
+  };
+
+  const removeFeature = (index: number) => {
+    setPlanFeatures(planFeatures.filter((_, i) => i !== index));
+  };
+
   // Helpers
   const formatDate = (dateString: string | null) => {
     if (!dateString) return '';
@@ -495,6 +723,7 @@ export default function DomainDetailPage() {
     { id: 'auth' as Tab, label: 'Auth' },
     { id: 'users' as Tab, label: 'Users' },
     { id: 'api' as Tab, label: 'API' },
+    { id: 'billing' as Tab, label: 'Billing' },
     { id: 'settings' as Tab, label: 'Settings' },
   ];
 
@@ -948,6 +1177,258 @@ export default function DomainDetailPage() {
         </div>
       )}
 
+      {/* Billing Tab */}
+      {activeTab === 'billing' && (
+        <div className="space-y-6">
+          {/* Analytics Cards */}
+          {billingAnalytics && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <Card className="p-4 text-center">
+                <div className="text-sm text-zinc-400 mb-1">MRR</div>
+                <div className="text-2xl font-bold text-green-400">{formatPrice(billingAnalytics.mrr_cents)}</div>
+              </Card>
+              <Card className="p-4 text-center">
+                <div className="text-sm text-zinc-400 mb-1">Active</div>
+                <div className="text-2xl font-bold">{billingAnalytics.active_subscribers}</div>
+              </Card>
+              <Card className="p-4 text-center">
+                <div className="text-sm text-zinc-400 mb-1">Trialing</div>
+                <div className="text-2xl font-bold text-blue-400">{billingAnalytics.trialing_subscribers}</div>
+              </Card>
+              <Card className="p-4 text-center">
+                <div className="text-sm text-zinc-400 mb-1">Past Due</div>
+                <div className="text-2xl font-bold text-yellow-400">{billingAnalytics.past_due_subscribers}</div>
+              </Card>
+            </div>
+          )}
+
+          {/* Stripe Configuration */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <CreditCard size={20} className="text-purple-400" />
+                  Stripe Configuration
+                </h2>
+                <p className="text-sm text-zinc-400 mt-1">Connect your Stripe account to accept payments.</p>
+              </div>
+              {billingConfig && (
+                <div className="flex items-center gap-2">
+                  <Badge variant={billingConfig.active_mode === 'test' ? 'warning' : 'success'}>
+                    {billingConfig.active_mode === 'test' ? '🧪 Test Mode' : '🔴 Live Mode'}
+                  </Badge>
+                </div>
+              )}
+            </div>
+
+            {/* Active Mode Toggle */}
+            {billingConfig && (billingConfig.test || billingConfig.live) && (
+              <div className="flex items-center gap-4 mb-6 p-3 bg-zinc-800/50 rounded-lg">
+                <span className="text-sm text-zinc-300">Active Mode:</span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                      billingConfig.active_mode === 'test'
+                        ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                        : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'
+                    }`}
+                    onClick={() => billingConfig.test && handleSwitchBillingMode('test')}
+                    disabled={!billingConfig.test || switchingMode || billingConfig.active_mode === 'test'}
+                  >
+                    Test {billingConfig.test && '✓'}
+                  </button>
+                  <button
+                    type="button"
+                    className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                      billingConfig.active_mode === 'live'
+                        ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                        : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'
+                    }`}
+                    onClick={() => billingConfig.live && handleSwitchBillingMode('live')}
+                    disabled={!billingConfig.live || switchingMode || billingConfig.active_mode === 'live'}
+                  >
+                    Live {billingConfig.live && '✓'}
+                  </button>
+                </div>
+                {switchingMode && <span className="text-xs text-zinc-500">Switching...</span>}
+              </div>
+            )}
+
+            {/* Mode Configuration Status */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {/* Test Mode */}
+              <div className={`p-4 rounded-lg border ${editingMode === 'test' ? 'border-yellow-500/50 bg-yellow-500/5' : 'border-zinc-700 bg-zinc-800/30'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-zinc-300">Test Mode</span>
+                    {billingConfig?.test ? (
+                      <Badge variant="success">Connected</Badge>
+                    ) : (
+                      <Badge variant="default">Not configured</Badge>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditingMode('test')}
+                    className={`text-xs px-2 py-1 rounded ${editingMode === 'test' ? 'bg-yellow-500/20 text-yellow-300' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  >
+                    {editingMode === 'test' ? 'Editing' : 'Edit'}
+                  </button>
+                </div>
+                {billingConfig?.test && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-500">Key: {billingConfig.test.publishable_key_last4}</span>
+                    <HoldButton onComplete={() => handleRemoveBillingConfig('test')} variant="danger" duration={2000}>
+                      Disconnect
+                    </HoldButton>
+                  </div>
+                )}
+              </div>
+
+              {/* Live Mode */}
+              <div className={`p-4 rounded-lg border ${editingMode === 'live' ? 'border-green-500/50 bg-green-500/5' : 'border-zinc-700 bg-zinc-800/30'}`}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium text-zinc-300">Live Mode</span>
+                    {billingConfig?.live ? (
+                      <Badge variant="success">Connected</Badge>
+                    ) : (
+                      <Badge variant="default">Not configured</Badge>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setEditingMode('live')}
+                    className={`text-xs px-2 py-1 rounded ${editingMode === 'live' ? 'bg-green-500/20 text-green-300' : 'text-zinc-400 hover:text-zinc-200'}`}
+                  >
+                    {editingMode === 'live' ? 'Editing' : 'Edit'}
+                  </button>
+                </div>
+                {billingConfig?.live && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs text-zinc-500">Key: {billingConfig.live.publishable_key_last4}</span>
+                    <HoldButton onComplete={() => handleRemoveBillingConfig('live')} variant="danger" duration={2000}>
+                      Disconnect
+                    </HoldButton>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Configuration Form */}
+            <div className={`p-4 rounded-lg border ${editingMode === 'test' ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
+              <div className="flex items-center gap-2 mb-4">
+                <h3 className="text-sm font-medium text-zinc-200">
+                  Configure {editingMode === 'test' ? 'Test' : 'Live'} Mode
+                </h3>
+                <Badge variant={editingMode === 'test' ? 'warning' : 'success'}>
+                  {editingMode === 'test' ? '🧪 Test' : '🔴 Live'}
+                </Badge>
+              </div>
+              <form onSubmit={handleSaveBillingConfig} className="space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-zinc-300">Stripe Secret Key</label>
+                  <Input
+                    type="password"
+                    value={stripeSecretKey}
+                    onChange={(e) => setStripeSecretKey(e.target.value)}
+                    placeholder={editingMode === 'test' ? 'sk_test_...' : 'sk_live_...'}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-zinc-300">Stripe Publishable Key</label>
+                  <Input
+                    value={stripePublishableKey}
+                    onChange={(e) => setStripePublishableKey(e.target.value)}
+                    placeholder={editingMode === 'test' ? 'pk_test_...' : 'pk_live_...'}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-zinc-300">Webhook Secret</label>
+                  <Input
+                    type="password"
+                    value={stripeWebhookSecret}
+                    onChange={(e) => setStripeWebhookSecret(e.target.value)}
+                    placeholder="whsec_..."
+                  />
+                  <p className="text-xs text-zinc-500">
+                    Configure your {editingMode} webhook endpoint at{' '}
+                    <code className="bg-zinc-800 px-1 rounded">
+                      https://reauth.{domain?.domain}/api/public/domain/reauth.{domain?.domain}/billing/webhook/{editingMode}
+                    </code>
+                  </p>
+                </div>
+                <Button type="submit" variant="primary" disabled={savingBillingConfig}>
+                  {savingBillingConfig ? 'Saving...' : `Save ${editingMode === 'test' ? 'Test' : 'Live'} Configuration`}
+                </Button>
+              </form>
+            </div>
+          </Card>
+
+          {/* Subscription Plans */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <DollarSign size={20} className="text-green-400" />
+                  Subscription Plans
+                </h2>
+                <p className="text-sm text-zinc-400 mt-1">Create and manage subscription plans for your users.</p>
+              </div>
+              <Button variant="primary" onClick={() => openPlanModal()}>
+                <Plus size={16} className="mr-1" /> Create Plan
+              </Button>
+            </div>
+
+            {loadingBilling ? (
+              <div className="flex justify-center py-8">
+                <div className="w-6 h-6 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+              </div>
+            ) : billingPlans.length === 0 ? (
+              <EmptyState
+                icon={DollarSign}
+                title="No plans yet"
+                description="Create your first subscription plan to start accepting payments."
+                action={<Button variant="primary" onClick={() => openPlanModal()}><Plus size={14} /> Create Plan</Button>}
+              />
+            ) : (
+              <div className="space-y-3">
+                {billingPlans.filter(p => !p.is_archived).map((plan) => (
+                  <div key={plan.id} className="flex items-center justify-between p-4 bg-zinc-900 rounded-lg">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-white">{plan.name}</span>
+                        <code className="text-xs bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">{plan.code}</code>
+                        {!plan.is_public && <Badge variant="warning">Private</Badge>}
+                        {plan.trial_days > 0 && <Badge variant="info">{plan.trial_days}d trial</Badge>}
+                      </div>
+                      <div className="text-sm text-zinc-400 mt-1">
+                        {formatPrice(plan.price_cents)} {formatInterval(plan.interval, plan.interval_count)}
+                      </div>
+                      {plan.features.length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-2">
+                          {plan.features.slice(0, 3).map((feature, i) => (
+                            <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">{feature}</span>
+                          ))}
+                          {plan.features.length > 3 && (
+                            <span className="text-xs text-zinc-500">+{plan.features.length - 3} more</span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button variant="ghost" size="sm" onClick={() => openPlanModal(plan)}>Edit</Button>
+                      <HoldButton onComplete={() => handleArchivePlan(plan.id)} variant="danger" duration={2000}>Archive</HoldButton>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </Card>
+        </div>
+      )}
+
       {/* Settings Tab */}
       {activeTab === 'settings' && (
         <div className="space-y-6">
@@ -1083,6 +1564,115 @@ export default function DomainDetailPage() {
             <Button variant="primary" onClick={() => { setNewlyCreatedKey(null); setShowCreateKeyModal(false); }}>Done</Button>
           </div>
         </div>
+      </Modal>
+
+      {/* Plan Modal */}
+      <Modal open={showPlanModal} onClose={() => setShowPlanModal(false)} title={editingPlan ? 'Edit Plan' : 'Create Plan'}>
+        <form onSubmit={handleSavePlan} className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-zinc-300">Plan Code</label>
+              <Input
+                value={planCode}
+                onChange={(e) => setPlanCode(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                placeholder="e.g., pro"
+                disabled={!!editingPlan}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-zinc-300">Plan Name</label>
+              <Input
+                value={planName}
+                onChange={(e) => setPlanName(e.target.value)}
+                placeholder="e.g., Pro Plan"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">Description (optional)</label>
+            <Input
+              value={planDescription}
+              onChange={(e) => setPlanDescription(e.target.value)}
+              placeholder="A brief description of this plan"
+            />
+          </div>
+
+          <div className="grid grid-cols-3 gap-4">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-zinc-300">Price (cents)</label>
+              <Input
+                type="number"
+                value={planPriceCents}
+                onChange={(e) => setPlanPriceCents(e.target.value)}
+                placeholder="999"
+              />
+              <p className="text-xs text-zinc-500">e.g., 999 = $9.99</p>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-zinc-300">Interval</label>
+              <select
+                value={planInterval}
+                onChange={(e) => setPlanInterval(e.target.value)}
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white"
+              >
+                <option value="monthly">Monthly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-zinc-300">Trial (days)</label>
+              <Input
+                type="number"
+                value={planTrialDays}
+                onChange={(e) => setPlanTrialDays(e.target.value)}
+                placeholder="0"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">Features</label>
+            <div className="flex gap-2">
+              <Input
+                value={newFeature}
+                onChange={(e) => setNewFeature(e.target.value)}
+                placeholder="Add a feature..."
+                onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addFeature(); } }}
+              />
+              <Button type="button" variant="ghost" onClick={addFeature}>Add</Button>
+            </div>
+            {planFeatures.length > 0 && (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {planFeatures.map((feature, i) => (
+                  <span key={i} className="inline-flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-sm text-zinc-300">
+                    {feature}
+                    <button type="button" onClick={() => removeFeature(i)} className="text-zinc-500 hover:text-red-400">
+                      <Trash2 size={12} />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={planIsPublic}
+              onChange={(e) => setPlanIsPublic(e.target.checked)}
+              className="w-4 h-4"
+            />
+            <span className="text-sm">Show on public pricing page</span>
+          </label>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button type="button" variant="ghost" onClick={() => setShowPlanModal(false)}>Cancel</Button>
+            <Button type="submit" variant="primary" disabled={savingPlan}>
+              {savingPlan ? 'Saving...' : editingPlan ? 'Update Plan' : 'Create Plan'}
+            </Button>
+          </div>
+        </form>
       </Modal>
     </div>
   );

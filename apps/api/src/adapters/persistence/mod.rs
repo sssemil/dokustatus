@@ -3,12 +3,16 @@ use sqlx::PgPool;
 use crate::app_error::AppError;
 
 pub mod api_key;
+pub mod billing_stripe_config;
 pub mod domain;
 pub mod domain_auth_config;
 pub mod domain_auth_google_oauth;
 pub mod domain_auth_magic_link;
 pub mod domain_end_user;
 pub mod domain_role;
+pub mod subscription_event;
+pub mod subscription_plan;
+pub mod user_subscription;
 
 #[derive(Clone)]
 pub struct PostgresPersistence {

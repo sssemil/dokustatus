@@ -132,9 +132,10 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   }
 
   // Simplified layout for ingress domains (custom domains)
-  // Only /profile is allowed on ingress
+  // Only /profile and /billing are allowed on ingress
+  const allowedIngressPaths = ['/profile', '/billing'];
   if (isIngress) {
-    if (pathname !== '/profile') {
+    if (!allowedIngressPaths.includes(pathname)) {
       window.location.href = '/profile';
       return (
         <div className="flex items-center justify-center min-h-screen">
@@ -147,7 +148,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
       <AppContext.Provider value={{ user, refetchUser: fetchUser, isIngress, displayDomain }}>
         <ToastProvider>
           <main className="flex items-center justify-center p-8">
-            <div className="max-w-md w-full">
+            <div className={pathname === '/billing' ? 'max-w-2xl w-full' : 'max-w-md w-full'}>
               {children}
             </div>
           </main>

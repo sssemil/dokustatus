@@ -3,9 +3,10 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Mail, Calendar, Clock, Shield, Snowflake, CheckCircle } from 'lucide-react';
-import { Card, Button, Badge, HoldButton } from '@/components/ui';
+import { ArrowLeft, Mail, Calendar, Clock, Shield, Snowflake, CheckCircle, CreditCard, DollarSign } from 'lucide-react';
+import { Card, Button, Badge, HoldButton, Modal, Input } from '@/components/ui';
 import { useToast } from '@/contexts/ToastContext';
+import { SubscriptionPlan, formatPrice, formatInterval, getStatusLabel } from '@/types/billing';
 
 type EndUser = {
   id: string;
@@ -24,6 +25,23 @@ type Role = {
   user_count: number;
 };
 
+type UserSubscriptionData = {
+  id: string;
+  user_id: string;
+  user_email: string;
+  plan_id: string;
+  plan_name: string;
+  plan_code: string;
+  status: string;
+  current_period_start: string | null;
+  current_period_end: string | null;
+  trial_start: string | null;
+  trial_end: string | null;
+  cancel_at_period_end: boolean;
+  manually_granted: boolean;
+  created_at: string | null;
+};
+
 export default function UserDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -39,6 +57,14 @@ export default function UserDetailPage() {
   const [availableRoles, setAvailableRoles] = useState<Role[]>([]);
   const [selectedRoles, setSelectedRoles] = useState<string[]>([]);
   const [savingRoles, setSavingRoles] = useState(false);
+
+  // Subscription state
+  const [subscription, setSubscription] = useState<UserSubscriptionData | null>(null);
+  const [availablePlans, setAvailablePlans] = useState<SubscriptionPlan[]>([]);
+  const [loadingSubscription, setLoadingSubscription] = useState(false);
+  const [showGrantModal, setShowGrantModal] = useState(false);
+  const [selectedPlanId, setSelectedPlanId] = useState('');
+  const [grantingSubscription, setGrantingSubscription] = useState(false);
 
   const fetchUser = useCallback(async () => {
     try {
@@ -67,10 +93,31 @@ export default function UserDetailPage() {
     } catch {}
   }, [domainId]);
 
+  const fetchSubscription = useCallback(async () => {
+    setLoadingSubscription(true);
+    try {
+      // Fetch user's subscription from subscribers list
+      const subscribersRes = await fetch(`/api/domains/${domainId}/billing/subscribers`, { credentials: 'include' });
+      if (subscribersRes.ok) {
+        const subscribers = await subscribersRes.json();
+        const userSub = subscribers.find((s: UserSubscriptionData) => s.user_id === userId);
+        setSubscription(userSub || null);
+      }
+      // Fetch available plans
+      const plansRes = await fetch(`/api/domains/${domainId}/billing/plans`, { credentials: 'include' });
+      if (plansRes.ok) {
+        const plans = await plansRes.json();
+        setAvailablePlans(plans.filter((p: SubscriptionPlan) => !p.is_archived));
+      }
+    } catch {}
+    finally { setLoadingSubscription(false); }
+  }, [domainId, userId]);
+
   useEffect(() => {
     fetchUser();
     fetchRoles();
-  }, [fetchUser, fetchRoles]);
+    fetchSubscription();
+  }, [fetchUser, fetchRoles, fetchSubscription]);
 
   const handleAction = async (action: 'freeze' | 'unfreeze' | 'whitelist' | 'unwhitelist' | 'delete') => {
     setActionLoading(true);
@@ -146,6 +193,52 @@ export default function UserDetailPage() {
   };
 
   const rolesChanged = user ? JSON.stringify([...selectedRoles].sort()) !== JSON.stringify([...(user.roles || [])].sort()) : false;
+
+  const handleGrantSubscription = async () => {
+    if (!selectedPlanId) {
+      addToast('Please select a plan', 'error');
+      return;
+    }
+    setGrantingSubscription(true);
+    try {
+      const res = await fetch(`/api/domains/${domainId}/billing/subscribers/${userId}/grant`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan_id: selectedPlanId }),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        addToast('Subscription granted', 'success');
+        setShowGrantModal(false);
+        setSelectedPlanId('');
+        fetchSubscription();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to grant subscription', 'error');
+      }
+    } catch {
+      addToast('Network error', 'error');
+    } finally {
+      setGrantingSubscription(false);
+    }
+  };
+
+  const handleRevokeSubscription = async () => {
+    try {
+      const res = await fetch(`/api/domains/${domainId}/billing/subscribers/${userId}/revoke`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (res.ok) {
+        addToast('Subscription revoked', 'success');
+        fetchSubscription();
+      } else {
+        addToast('Failed to revoke subscription', 'error');
+      }
+    } catch {
+      addToast('Network error', 'error');
+    }
+  };
 
   const formatDate = (dateString: string | null) => {
     if (!dateString) return 'Never';
@@ -287,6 +380,57 @@ export default function UserDetailPage() {
         )}
       </Card>
 
+      {/* Subscription */}
+      <Card className="p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+            <CreditCard size={20} className="text-purple-400" />
+            Subscription
+          </h2>
+          {!subscription && availablePlans.length > 0 && (
+            <Button variant="primary" onClick={() => setShowGrantModal(true)}>
+              Grant Subscription
+            </Button>
+          )}
+        </div>
+
+        {loadingSubscription ? (
+          <div className="flex justify-center py-4">
+            <div className="w-5 h-5 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+          </div>
+        ) : subscription ? (
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="font-medium text-white">{subscription.plan_name}</span>
+                  <code className="text-xs bg-zinc-700 px-2 py-0.5 rounded text-zinc-300">{subscription.plan_code}</code>
+                  <Badge variant={subscription.status === 'active' ? 'success' : subscription.status === 'trialing' ? 'info' : subscription.status === 'past_due' ? 'warning' : 'error'}>
+                    {getStatusLabel(subscription.status as any)}
+                  </Badge>
+                  {subscription.manually_granted && <Badge variant="default">Manual</Badge>}
+                </div>
+                <div className="text-sm text-zinc-400">
+                  {subscription.current_period_end && (
+                    <span>Renews {formatDate(subscription.current_period_end)}</span>
+                  )}
+                  {subscription.cancel_at_period_end && (
+                    <span className="text-yellow-400 ml-2">Canceling at period end</span>
+                  )}
+                </div>
+              </div>
+              <HoldButton onComplete={handleRevokeSubscription} variant="danger" duration={2000}>
+                Revoke
+              </HoldButton>
+            </div>
+          </div>
+        ) : availablePlans.length > 0 ? (
+          <p className="text-sm text-zinc-400">No active subscription. Grant a subscription to this user.</p>
+        ) : (
+          <p className="text-sm text-zinc-400">No plans configured. Create plans in the Billing tab of the domain page.</p>
+        )}
+      </Card>
+
       {/* Actions */}
       <Card className="p-6">
         <h2 className="text-lg font-semibold text-white mb-4">Actions</h2>
@@ -336,6 +480,36 @@ export default function UserDetailPage() {
           </div>
         </div>
       </Card>
+
+      {/* Grant Subscription Modal */}
+      <Modal open={showGrantModal} onClose={() => setShowGrantModal(false)} title="Grant Subscription">
+        <div className="space-y-4">
+          <p className="text-sm text-zinc-400">
+            Manually grant a subscription to this user. They will have immediate access without payment.
+          </p>
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">Select Plan</label>
+            <select
+              value={selectedPlanId}
+              onChange={(e) => setSelectedPlanId(e.target.value)}
+              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white"
+            >
+              <option value="">Choose a plan...</option>
+              {availablePlans.map((plan) => (
+                <option key={plan.id} value={plan.id}>
+                  {plan.name} - {formatPrice(plan.price_cents)} {formatInterval(plan.interval, plan.interval_count)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setShowGrantModal(false)}>Cancel</Button>
+            <Button variant="primary" onClick={handleGrantSubscription} disabled={grantingSubscription || !selectedPlanId}>
+              {grantingSubscription ? 'Granting...' : 'Grant Subscription'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -4,6 +4,7 @@ use time::{Duration, OffsetDateTime};
 use uuid::Uuid;
 
 use crate::app_error::{AppError, AppResult};
+use crate::application::use_cases::domain_billing::SubscriptionClaims;
 use secrecy::ExposeSecret;
 
 // ============================================================================
@@ -55,6 +56,7 @@ pub struct DomainEndUserClaims {
     pub domain_id: String,
     pub domain: String,     // root domain (e.g., "example.com")
     pub roles: Vec<String>, // user's roles (e.g., ["admin", "user"])
+    pub subscription: SubscriptionClaims, // subscription info (always present)
     pub exp: i64,
     pub iat: i64,
 }
@@ -64,6 +66,7 @@ pub fn issue_domain_end_user(
     domain_id: Uuid,
     domain: &str,
     roles: Vec<String>,
+    subscription: SubscriptionClaims,
     secret: &secrecy::SecretString,
     ttl: Duration,
 ) -> AppResult<String> {
@@ -78,6 +81,7 @@ pub fn issue_domain_end_user(
         domain_id: domain_id.to_string(),
         domain: root_domain,
         roles,
+        subscription,
         iat: now,
         exp,
     };

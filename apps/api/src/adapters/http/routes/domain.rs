@@ -12,7 +12,10 @@ use uuid::Uuid;
 use crate::{
     adapters::http::app_state::AppState,
     app_error::{AppError, AppResult},
-    application::{jwt, validators::is_valid_email},
+    application::{
+        jwt, validators::is_valid_email,
+        use_cases::domain_billing::{CreatePlanInput, UpdatePlanInput},
+    },
     domain::entities::domain::DomainStatus,
 };
 
@@ -72,6 +75,20 @@ pub fn router() -> Router<AppState> {
             "/{domain_id}/roles/{role_name}/user-count",
             get(get_role_user_count),
         )
+        // Billing
+        .route("/{domain_id}/billing/config", get(get_billing_config))
+        .route("/{domain_id}/billing/config", patch(update_billing_config))
+        .route("/{domain_id}/billing/config", delete(delete_billing_config))
+        .route("/{domain_id}/billing/mode", patch(set_billing_mode))
+        .route("/{domain_id}/billing/plans", get(list_billing_plans))
+        .route("/{domain_id}/billing/plans", post(create_billing_plan))
+        .route("/{domain_id}/billing/plans/reorder", put(reorder_billing_plans))
+        .route("/{domain_id}/billing/plans/{plan_id}", patch(update_billing_plan))
+        .route("/{domain_id}/billing/plans/{plan_id}", delete(archive_billing_plan))
+        .route("/{domain_id}/billing/subscribers", get(list_billing_subscribers))
+        .route("/{domain_id}/billing/subscribers/{user_id}/grant", post(grant_subscription))
+        .route("/{domain_id}/billing/subscribers/{user_id}/revoke", delete(revoke_subscription))
+        .route("/{domain_id}/billing/analytics", get(get_billing_analytics))
 }
 
 #[derive(Deserialize)]
@@ -967,4 +984,452 @@ async fn set_user_roles(
         .await?;
 
     Ok(StatusCode::OK)
+}
+
+// ============================================================================
+// Billing Endpoints
+// ============================================================================
+
+use crate::domain::entities::stripe_mode::StripeMode;
+
+/// Response for GET /billing/config - returns status of both modes
+#[derive(Serialize)]
+struct BillingConfigStatusResponse {
+    active_mode: StripeMode,
+    test: Option<ModeConfigStatusResponse>,
+    live: Option<ModeConfigStatusResponse>,
+}
+
+#[derive(Serialize)]
+struct ModeConfigStatusResponse {
+    publishable_key_last4: String,
+    is_connected: bool,
+}
+
+async fn get_billing_config(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let config = app_state
+        .billing_use_cases
+        .get_stripe_config(owner_id, domain_id)
+        .await?;
+
+    Ok(Json(BillingConfigStatusResponse {
+        active_mode: config.active_mode,
+        test: config.test.map(|c| ModeConfigStatusResponse {
+            publishable_key_last4: c.publishable_key_last4,
+            is_connected: c.is_connected,
+        }),
+        live: config.live.map(|c| ModeConfigStatusResponse {
+            publishable_key_last4: c.publishable_key_last4,
+            is_connected: c.is_connected,
+        }),
+    }))
+}
+
+#[derive(Deserialize)]
+struct UpdateBillingConfigPayload {
+    mode: StripeMode,
+    secret_key: String,
+    publishable_key: String,
+    webhook_secret: String,
+}
+
+async fn update_billing_config(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<UpdateBillingConfigPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let config = app_state
+        .billing_use_cases
+        .update_stripe_config(
+            owner_id,
+            domain_id,
+            payload.mode,
+            &payload.secret_key,
+            &payload.publishable_key,
+            &payload.webhook_secret,
+        )
+        .await?;
+
+    Ok(Json(ModeConfigStatusResponse {
+        publishable_key_last4: config.publishable_key_last4,
+        is_connected: config.is_connected,
+    }))
+}
+
+#[derive(Deserialize)]
+struct DeleteBillingConfigPayload {
+    mode: StripeMode,
+}
+
+async fn delete_billing_config(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<DeleteBillingConfigPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .billing_use_cases
+        .delete_stripe_config(owner_id, domain_id, payload.mode)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Set the active Stripe mode for a domain
+#[derive(Deserialize)]
+struct SetBillingModePayload {
+    mode: StripeMode,
+}
+
+#[derive(Serialize)]
+struct SetBillingModeResponse {
+    active_mode: StripeMode,
+}
+
+async fn set_billing_mode(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<SetBillingModePayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let new_mode = app_state
+        .billing_use_cases
+        .set_active_mode(owner_id, domain_id, payload.mode)
+        .await?;
+
+    Ok(Json(SetBillingModeResponse {
+        active_mode: new_mode,
+    }))
+}
+
+#[derive(Serialize)]
+struct BillingPlanResponse {
+    id: Uuid,
+    code: String,
+    name: String,
+    description: Option<String>,
+    price_cents: i32,
+    currency: String,
+    interval: String,
+    interval_count: i32,
+    trial_days: i32,
+    features: Vec<String>,
+    is_public: bool,
+    display_order: i32,
+    stripe_product_id: Option<String>,
+    stripe_price_id: Option<String>,
+    is_archived: bool,
+    created_at: Option<chrono::NaiveDateTime>,
+}
+
+#[derive(Deserialize)]
+struct ListPlansQuery {
+    include_archived: Option<bool>,
+}
+
+async fn list_billing_plans(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Query(query): Query<ListPlansQuery>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let plans = app_state
+        .billing_use_cases
+        .list_plans(owner_id, domain_id, query.include_archived.unwrap_or(false))
+        .await?;
+
+    let response: Vec<BillingPlanResponse> = plans
+        .into_iter()
+        .map(|p| BillingPlanResponse {
+            id: p.id,
+            code: p.code,
+            name: p.name,
+            description: p.description,
+            price_cents: p.price_cents,
+            currency: p.currency,
+            interval: p.interval,
+            interval_count: p.interval_count,
+            trial_days: p.trial_days,
+            features: p.features,
+            is_public: p.is_public,
+            display_order: p.display_order,
+            stripe_product_id: p.stripe_product_id,
+            stripe_price_id: p.stripe_price_id,
+            is_archived: p.is_archived,
+            created_at: p.created_at,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+async fn create_billing_plan(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(input): Json<CreatePlanInput>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let plan = app_state
+        .billing_use_cases
+        .create_plan(owner_id, domain_id, input)
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(BillingPlanResponse {
+            id: plan.id,
+            code: plan.code,
+            name: plan.name,
+            description: plan.description,
+            price_cents: plan.price_cents,
+            currency: plan.currency,
+            interval: plan.interval,
+            interval_count: plan.interval_count,
+            trial_days: plan.trial_days,
+            features: plan.features,
+            is_public: plan.is_public,
+            display_order: plan.display_order,
+            stripe_product_id: plan.stripe_product_id,
+            stripe_price_id: plan.stripe_price_id,
+            is_archived: plan.is_archived,
+            created_at: plan.created_at,
+        }),
+    ))
+}
+
+#[derive(Deserialize)]
+struct PlanPathParams {
+    domain_id: Uuid,
+    plan_id: Uuid,
+}
+
+async fn update_billing_plan(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<PlanPathParams>,
+    Json(input): Json<UpdatePlanInput>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let plan = app_state
+        .billing_use_cases
+        .update_plan(owner_id, params.domain_id, params.plan_id, input)
+        .await?;
+
+    Ok(Json(BillingPlanResponse {
+        id: plan.id,
+        code: plan.code,
+        name: plan.name,
+        description: plan.description,
+        price_cents: plan.price_cents,
+        currency: plan.currency,
+        interval: plan.interval,
+        interval_count: plan.interval_count,
+        trial_days: plan.trial_days,
+        features: plan.features,
+        is_public: plan.is_public,
+        display_order: plan.display_order,
+        stripe_product_id: plan.stripe_product_id,
+        stripe_price_id: plan.stripe_price_id,
+        is_archived: plan.is_archived,
+        created_at: plan.created_at,
+    }))
+}
+
+async fn archive_billing_plan(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<PlanPathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .billing_use_cases
+        .archive_plan(owner_id, params.domain_id, params.plan_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct ReorderPlansPayload {
+    plan_ids: Vec<Uuid>,
+}
+
+async fn reorder_billing_plans(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<ReorderPlansPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .billing_use_cases
+        .reorder_plans(owner_id, domain_id, payload.plan_ids)
+        .await?;
+
+    Ok(StatusCode::OK)
+}
+
+#[derive(Serialize)]
+struct SubscriberResponse {
+    id: Uuid,
+    user_id: Uuid,
+    user_email: String,
+    plan_id: Uuid,
+    plan_name: String,
+    plan_code: String,
+    status: String,
+    current_period_start: Option<chrono::NaiveDateTime>,
+    current_period_end: Option<chrono::NaiveDateTime>,
+    trial_start: Option<chrono::NaiveDateTime>,
+    trial_end: Option<chrono::NaiveDateTime>,
+    cancel_at_period_end: bool,
+    manually_granted: bool,
+    created_at: Option<chrono::NaiveDateTime>,
+}
+
+async fn list_billing_subscribers(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let subscribers = app_state
+        .billing_use_cases
+        .list_subscribers(owner_id, domain_id)
+        .await?;
+
+    let response: Vec<SubscriberResponse> = subscribers
+        .into_iter()
+        .map(|s| SubscriberResponse {
+            id: s.subscription.id,
+            user_id: s.subscription.end_user_id,
+            user_email: s.user_email,
+            plan_id: s.plan.id,
+            plan_name: s.plan.name,
+            plan_code: s.plan.code,
+            status: s.subscription.status.as_str().to_string(),
+            current_period_start: s.subscription.current_period_start,
+            current_period_end: s.subscription.current_period_end,
+            trial_start: s.subscription.trial_start,
+            trial_end: s.subscription.trial_end,
+            cancel_at_period_end: s.subscription.cancel_at_period_end,
+            manually_granted: s.subscription.manually_granted,
+            created_at: s.subscription.created_at,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+#[derive(Deserialize)]
+struct GrantSubscriptionPayload {
+    plan_id: Uuid,
+}
+
+async fn grant_subscription(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<EndUserPathParams>,
+    Json(payload): Json<GrantSubscriptionPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    // For manually granted subscriptions, we create a placeholder customer ID
+    let stripe_customer_id = format!("manual_{}", params.user_id);
+
+    let subscription = app_state
+        .billing_use_cases
+        .grant_subscription(
+            owner_id,
+            params.domain_id,
+            params.user_id,
+            payload.plan_id,
+            &stripe_customer_id,
+        )
+        .await?;
+
+    Ok((StatusCode::CREATED, Json(subscription)))
+}
+
+async fn revoke_subscription(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<EndUserPathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .billing_use_cases
+        .revoke_subscription(owner_id, params.domain_id, params.user_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct BillingAnalyticsResponse {
+    mrr_cents: i64,
+    active_subscribers: i64,
+    trialing_subscribers: i64,
+    past_due_subscribers: i64,
+    plan_distribution: Vec<PlanDistributionResponse>,
+}
+
+#[derive(Serialize)]
+struct PlanDistributionResponse {
+    plan_id: Uuid,
+    plan_name: String,
+    subscriber_count: i64,
+    revenue_cents: i64,
+}
+
+async fn get_billing_analytics(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let analytics = app_state
+        .billing_use_cases
+        .get_analytics(owner_id, domain_id)
+        .await?;
+
+    Ok(Json(BillingAnalyticsResponse {
+        mrr_cents: analytics.mrr_cents,
+        active_subscribers: analytics.active_subscribers,
+        trialing_subscribers: analytics.trialing_subscribers,
+        past_due_subscribers: analytics.past_due_subscribers,
+        plan_distribution: analytics
+            .plan_distribution
+            .into_iter()
+            .map(|p| PlanDistributionResponse {
+                plan_id: p.plan_id,
+                plan_name: p.plan_name,
+                subscriber_count: p.subscriber_count,
+                revenue_cents: p.revenue_cents,
+            })
+            .collect(),
+    }))
 }

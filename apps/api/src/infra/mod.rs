@@ -10,6 +10,7 @@ pub mod domain_verifier;
 pub mod oauth_state;
 pub mod rate_limit;
 pub mod setup;
+pub mod stripe_client;
 
 pub async fn postgres_persistence(database_url: &str) -> anyhow::Result<PostgresPersistence> {
     let pool = init_db(database_url).await?;

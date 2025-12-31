@@ -6,8 +6,11 @@ use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
     domain::entities::domain::DomainStatus,
+    domain::entities::stripe_mode::StripeMode,
     use_cases::domain::{DomainProfile, DomainRepo},
 };
+
+const SELECT_COLS: &str = "id, owner_end_user_id, domain, status, billing_stripe_mode, verification_started_at, verified_at, created_at, updated_at";
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainProfile {
     DomainProfile {
@@ -15,6 +18,7 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainProfile {
         owner_end_user_id: row.get("owner_end_user_id"),
         domain: row.get("domain"),
         status: DomainStatus::from_str(row.get("status")),
+        billing_stripe_mode: row.get("billing_stripe_mode"),
         verification_started_at: row.get("verification_started_at"),
         verified_at: row.get("verified_at"),
         created_at: row.get("created_at"),
@@ -26,13 +30,14 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainProfile {
 impl DomainRepo for PostgresPersistence {
     async fn create(&self, owner_end_user_id: Uuid, domain: &str) -> AppResult<DomainProfile> {
         let id = Uuid::new_v4();
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             r#"
                 INSERT INTO domains (id, owner_end_user_id, domain, status)
                 VALUES ($1, $2, $3, 'pending_dns')
-                RETURNING id, owner_end_user_id, domain, status, verification_started_at, verified_at, created_at, updated_at
+                RETURNING {}
             "#,
-        )
+            SELECT_COLS
+        ))
         .bind(id)
         .bind(owner_end_user_id)
         .bind(domain)
@@ -43,9 +48,10 @@ impl DomainRepo for PostgresPersistence {
     }
 
     async fn get_by_id(&self, domain_id: Uuid) -> AppResult<Option<DomainProfile>> {
-        let row = sqlx::query(
-            "SELECT id, owner_end_user_id, domain, status, verification_started_at, verified_at, created_at, updated_at FROM domains WHERE id = $1",
-        )
+        let row = sqlx::query(&format!(
+            "SELECT {} FROM domains WHERE id = $1",
+            SELECT_COLS
+        ))
         .bind(domain_id)
         .fetch_optional(&self.pool)
         .await
@@ -54,9 +60,10 @@ impl DomainRepo for PostgresPersistence {
     }
 
     async fn get_by_domain(&self, domain: &str) -> AppResult<Option<DomainProfile>> {
-        let row = sqlx::query(
-            "SELECT id, owner_end_user_id, domain, status, verification_started_at, verified_at, created_at, updated_at FROM domains WHERE domain = $1",
-        )
+        let row = sqlx::query(&format!(
+            "SELECT {} FROM domains WHERE domain = $1",
+            SELECT_COLS
+        ))
         .bind(domain)
         .fetch_optional(&self.pool)
         .await
@@ -65,9 +72,10 @@ impl DomainRepo for PostgresPersistence {
     }
 
     async fn list_by_owner(&self, owner_end_user_id: Uuid) -> AppResult<Vec<DomainProfile>> {
-        let rows = sqlx::query(
-            "SELECT id, owner_end_user_id, domain, status, verification_started_at, verified_at, created_at, updated_at FROM domains WHERE owner_end_user_id = $1 ORDER BY created_at DESC",
-        )
+        let rows = sqlx::query(&format!(
+            "SELECT {} FROM domains WHERE owner_end_user_id = $1 ORDER BY created_at DESC",
+            SELECT_COLS
+        ))
         .bind(owner_end_user_id)
         .fetch_all(&self.pool)
         .await
@@ -76,14 +84,15 @@ impl DomainRepo for PostgresPersistence {
     }
 
     async fn update_status(&self, domain_id: Uuid, status: &str) -> AppResult<DomainProfile> {
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             r#"
                 UPDATE domains
                 SET status = $2
                 WHERE id = $1
-                RETURNING id, owner_end_user_id, domain, status, verification_started_at, verified_at, created_at, updated_at
+                RETURNING {}
             "#,
-        )
+            SELECT_COLS
+        ))
         .bind(domain_id)
         .bind(status)
         .fetch_one(&self.pool)
@@ -93,14 +102,15 @@ impl DomainRepo for PostgresPersistence {
     }
 
     async fn set_verifying(&self, domain_id: Uuid) -> AppResult<DomainProfile> {
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             r#"
                 UPDATE domains
                 SET status = 'verifying', verification_started_at = CURRENT_TIMESTAMP
                 WHERE id = $1
-                RETURNING id, owner_end_user_id, domain, status, verification_started_at, verified_at, created_at, updated_at
+                RETURNING {}
             "#,
-        )
+            SELECT_COLS
+        ))
         .bind(domain_id)
         .fetch_one(&self.pool)
         .await
@@ -109,14 +119,15 @@ impl DomainRepo for PostgresPersistence {
     }
 
     async fn set_verified(&self, domain_id: Uuid) -> AppResult<DomainProfile> {
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             r#"
                 UPDATE domains
                 SET status = 'verified', verified_at = CURRENT_TIMESTAMP
                 WHERE id = $1
-                RETURNING id, owner_end_user_id, domain, status, verification_started_at, verified_at, created_at, updated_at
+                RETURNING {}
             "#,
-        )
+            SELECT_COLS
+        ))
         .bind(domain_id)
         .fetch_one(&self.pool)
         .await
@@ -125,14 +136,15 @@ impl DomainRepo for PostgresPersistence {
     }
 
     async fn set_failed(&self, domain_id: Uuid) -> AppResult<DomainProfile> {
-        let row = sqlx::query(
+        let row = sqlx::query(&format!(
             r#"
                 UPDATE domains
                 SET status = 'failed'
                 WHERE id = $1
-                RETURNING id, owner_end_user_id, domain, status, verification_started_at, verified_at, created_at, updated_at
+                RETURNING {}
             "#,
-        )
+            SELECT_COLS
+        ))
         .bind(domain_id)
         .fetch_one(&self.pool)
         .await
@@ -150,16 +162,35 @@ impl DomainRepo for PostgresPersistence {
     }
 
     async fn get_verifying_domains(&self) -> AppResult<Vec<DomainProfile>> {
-        let rows = sqlx::query(
+        let rows = sqlx::query(&format!(
             r#"
-                SELECT id, owner_end_user_id, domain, status, verification_started_at, verified_at, created_at, updated_at
+                SELECT {}
                 FROM domains
                 WHERE status = 'verifying'
             "#,
-        )
+            SELECT_COLS
+        ))
         .fetch_all(&self.pool)
         .await
         .map_err(AppError::from)?;
         Ok(rows.into_iter().map(row_to_profile).collect())
+    }
+
+    async fn set_billing_stripe_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<DomainProfile> {
+        let row = sqlx::query(&format!(
+            r#"
+                UPDATE domains
+                SET billing_stripe_mode = $2, updated_at = CURRENT_TIMESTAMP
+                WHERE id = $1
+                RETURNING {}
+            "#,
+            SELECT_COLS
+        ))
+        .bind(domain_id)
+        .bind(mode)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+        Ok(row_to_profile(row))
     }
 }
