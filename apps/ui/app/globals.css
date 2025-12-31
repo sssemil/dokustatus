@@ -181,7 +181,7 @@ body {
 /* Amber/Warning colors - need darker text and lighter backgrounds */
 :where(.light) .text-amber-400 { color: var(--color-amber-600); }
 :where(.light) .text-amber-500 { color: var(--color-amber-600); }
-:where(.light) .bg-amber-900\/10 { background-color: var(--color-amber-100); }
+:where(.light) .bg-amber-900\/10 { background-color: var(--color-amber-50); }
 :where(.light) .bg-amber-900\/20 { background-color: var(--color-amber-100); }
 :where(.light) .bg-amber-900\/30 { background-color: var(--color-amber-100); }
 :where(.light) .bg-amber-900\/50 { background-color: var(--color-amber-100); }
@@ -190,6 +190,7 @@ body {
 :where(.light) .border-amber-500\/20 { border-color: var(--color-amber-300); }
 
 /* Emerald/Success colors - need darker text and lighter backgrounds */
+:where(.light) .text-emerald-200 { color: var(--color-emerald-700); }
 :where(.light) .text-emerald-400 { color: var(--color-emerald-600); }
 :where(.light) .bg-emerald-900\/30 { background-color: var(--color-emerald-100); }
 :where(.light) .bg-emerald-900\/50 { background-color: var(--color-emerald-100); }
@@ -228,3 +229,16 @@ body {
 :where(.light) .bg-green-500\/20 { background-color: var(--color-green-100); }
 :where(.light) .border-green-500\/30 { border-color: var(--color-green-300); }
 :where(.light) .border-green-500\/50 { border-color: var(--color-green-400); }
+
+/* ========== PRESERVE WHITE TEXT ON COLORED BACKGROUNDS ========== */
+/* These elements need white text even in light mode */
+:where(.light) .bg-blue-600 .text-white,
+:where(.light) .bg-blue-600.text-white,
+:where(.light) .bg-blue-500 .text-white,
+:where(.light) .bg-blue-500.text-white { color: white; }
+
+:where(.light) .bg-red-600 .text-white,
+:where(.light) .bg-red-600.text-white { color: white; }
+
+:where(.light) .bg-emerald-600 .text-white,
+:where(.light) .bg-emerald-600.text-white { color: white; }
