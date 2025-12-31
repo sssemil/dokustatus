@@ -113,6 +113,7 @@ export default function DomainDetailPage() {
   // Roles state
   const [roles, setRoles] = useState<Role[]>([]);
   const [loadingRoles, setLoadingRoles] = useState(false);
+  const [showRoleForm, setShowRoleForm] = useState(false);
   const [newRoleName, setNewRoleName] = useState('');
   const [creatingRole, setCreatingRole] = useState(false);
   const [deleteRoleConfirm, setDeleteRoleConfirm] = useState<Role | null>(null);
@@ -520,7 +521,7 @@ export default function DomainDetailPage() {
         body: JSON.stringify({ name: newRoleName.trim().toLowerCase() }),
         credentials: 'include',
       });
-      if (res.ok) { setNewRoleName(''); fetchRoles(); addToast('Role created', 'success'); }
+      if (res.ok) { setNewRoleName(''); setShowRoleForm(false); fetchRoles(); addToast('Role created', 'success'); }
       else {
         const err = await res.json().catch(() => ({}));
         addToast(err.message || 'Failed to create role', 'error');
@@ -1115,12 +1116,12 @@ export default function DomainDetailPage() {
           <Card className="p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold">Roles</h3>
-              <Button variant="ghost" size="sm" onClick={() => setNewRoleName('')}>
+              <Button variant="ghost" size="sm" onClick={() => setShowRoleForm(true)}>
                 <Plus size={14} /> Add role
               </Button>
             </div>
 
-            {newRoleName !== '' && (
+            {showRoleForm && (
               <form onSubmit={handleCreateRole} className="flex gap-2 mb-4">
                 <Input
                   value={newRoleName}
@@ -1129,7 +1130,7 @@ export default function DomainDetailPage() {
                   autoFocus
                 />
                 <Button type="submit" variant="primary" disabled={creatingRole || !newRoleName.trim()}>Add</Button>
-                <Button type="button" variant="ghost" onClick={() => setNewRoleName('')}>Cancel</Button>
+                <Button type="button" variant="ghost" onClick={() => { setShowRoleForm(false); setNewRoleName(''); }}>Cancel</Button>
               </form>
             )}
 
@@ -1142,14 +1143,14 @@ export default function DomainDetailPage() {
             ) : (
               <div className="flex flex-wrap gap-2">
                 {roles.map((role) => (
-                  <div key={role.id} className="flex items-center gap-1 bg-blue-900/30 border border-blue-700 px-3 py-1.5 rounded-lg text-sm group">
-                    <span className="text-blue-400">{role.name}</span>
-                    <span className="text-blue-400/50 text-xs">({role.user_count})</span>
+                  <div key={role.id} className="inline-flex items-center gap-1.5 bg-blue-900/50 text-blue-400 border border-blue-700 px-2 py-0.5 rounded text-xs font-medium group">
+                    <span>{role.name}</span>
+                    <span className="text-blue-400/50">({role.user_count})</span>
                     <button
                       onClick={() => setDeleteRoleConfirm(role)}
-                      className="text-blue-400/50 hover:text-red-400 ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+                      className="text-blue-400/50 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                     >
-                      <Trash2 size={12} />
+                      <Trash2 size={10} />
                     </button>
                   </div>
                 ))}
@@ -1162,7 +1163,7 @@ export default function DomainDetailPage() {
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-semibold">Users ({endUsers.length})</h3>
               <Button variant="ghost" size="sm" onClick={() => setShowInviteModal(true)}>
-                <Plus size={14} /> Add user
+                <Plus size={14} /> Invite user
               </Button>
             </div>
 
@@ -1177,7 +1178,7 @@ export default function DomainDetailPage() {
                 <div className="w-5 h-5 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
               </div>
             ) : endUsers.length === 0 ? (
-              <EmptyState icon={Users} title="No users yet" description="Users will appear here once they sign in, or you can add them manually" action={<Button variant="primary" onClick={() => setShowInviteModal(true)}><Plus size={14} /> Add first user</Button>} />
+              <EmptyState icon={Users} title="No users yet" description="Users will appear here once they sign in, or you can invite them" action={<Button variant="primary" onClick={() => setShowInviteModal(true)}><Plus size={14} /> Invite first user</Button>} />
             ) : (
               <div className="space-y-2">
                 {endUsers.filter(u => u.email.toLowerCase().includes(userSearch.toLowerCase())).map((user) => (
