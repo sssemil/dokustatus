@@ -384,7 +384,8 @@ export default function BillingPage() {
 
           <div className="grid gap-4 sm:grid-cols-2">
             {plans.map((plan) => {
-              const isCurrentPlan = subscription?.plan_code === plan.code;
+              // Only show as "current" if subscription is active (not canceled/none)
+              const isCurrentPlan = hasActiveSubscription && subscription?.plan_code === plan.code;
               return (
                 <div
                   key={plan.id}
