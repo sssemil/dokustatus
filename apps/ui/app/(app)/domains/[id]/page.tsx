@@ -6,11 +6,13 @@ import Link from 'next/link';
 import {
   ExternalLink, Globe, Trash2, RefreshCw, AlertTriangle,
   Mail, Key, Users, Shield, Settings, MoreVertical, Plus, Check, ChevronRight,
-  CreditCard, DollarSign, TrendingUp
+  CreditCard, DollarSign, TrendingUp, Receipt, FileText, Download, ChevronLeft, Search, X
 } from 'lucide-react';
 import {
   StripeConfigStatus, StripeMode, SubscriptionPlan, UserSubscription, BillingAnalytics,
-  formatPrice, formatInterval, getStatusBadgeColor, getStatusLabel, getModeLabel, getModeBadgeColor
+  formatPrice, formatInterval, getStatusBadgeColor, getStatusLabel, getModeLabel, getModeBadgeColor,
+  BillingPayment, PaymentSummary, DashboardPaymentListResponse, PaymentListFilters,
+  getPaymentStatusLabel, getPaymentStatusBadgeColor, formatPaymentDate, formatPaymentDateTime
 } from '@/types/billing';
 import {
   Card, Button, Badge, Input, Toggle, Tabs, Modal, ConfirmModal,
@@ -156,6 +158,15 @@ export default function DomainDetailPage() {
   const [savingPlan, setSavingPlan] = useState(false);
   const [newFeature, setNewFeature] = useState('');
 
+  // Payment history state
+  const [payments, setPayments] = useState<BillingPayment[]>([]);
+  const [paymentsSummary, setPaymentsSummary] = useState<PaymentSummary | null>(null);
+  const [paymentsPagination, setPaymentsPagination] = useState({ page: 1, total: 0, total_pages: 0, per_page: 10 });
+  const [loadingPayments, setLoadingPayments] = useState(false);
+  const [paymentFilters, setPaymentFilters] = useState<PaymentListFilters>({});
+  const [paymentEmailSearch, setPaymentEmailSearch] = useState('');
+  const [exportingPayments, setExportingPayments] = useState(false);
+
   // Tab change handler
   const handleTabChange = useCallback((tab: Tab) => {
     setActiveTab(tab);
@@ -234,10 +245,84 @@ export default function DomainDetailPage() {
     } catch { /* ignore */ } finally { setLoadingBilling(false); }
   }, [domainId, domain]);
 
+  const fetchPayments = useCallback(async (page: number = 1, filters: PaymentListFilters = {}) => {
+    if (!domain) return;
+    setLoadingPayments(true);
+    try {
+      const params = new URLSearchParams({
+        page: page.toString(),
+        per_page: '10',
+      });
+      if (filters.status) params.set('status', filters.status);
+      if (filters.date_from) params.set('date_from', filters.date_from.toString());
+      if (filters.date_to) params.set('date_to', filters.date_to.toString());
+      if (filters.plan_code) params.set('plan_code', filters.plan_code);
+      if (filters.user_email) params.set('user_email', filters.user_email);
+
+      const res = await fetch(`/api/domains/${domainId}/billing/payments?${params}`, { credentials: 'include' });
+      if (res.ok) {
+        const data: DashboardPaymentListResponse = await res.json();
+        setPayments(data.payments);
+        setPaymentsSummary(data.summary);
+        setPaymentsPagination({ page: data.page, total: data.total, total_pages: data.total_pages, per_page: data.per_page });
+      }
+    } catch { /* ignore */ } finally { setLoadingPayments(false); }
+  }, [domainId, domain]);
+
+  const handleExportPayments = async () => {
+    if (!domain) return;
+    setExportingPayments(true);
+    try {
+      const params = new URLSearchParams();
+      if (paymentFilters.status) params.set('status', paymentFilters.status);
+      if (paymentFilters.date_from) params.set('date_from', paymentFilters.date_from.toString());
+      if (paymentFilters.date_to) params.set('date_to', paymentFilters.date_to.toString());
+      if (paymentFilters.plan_code) params.set('plan_code', paymentFilters.plan_code);
+      if (paymentFilters.user_email) params.set('user_email', paymentFilters.user_email);
+
+      const res = await fetch(`/api/domains/${domainId}/billing/payments/export?${params}`, { credentials: 'include' });
+      if (res.ok) {
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `payments-${domain.domain}-${new Date().toISOString().split('T')[0]}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      } else {
+        addToast('Failed to export payments', 'error');
+      }
+    } catch {
+      addToast('Failed to export payments', 'error');
+    } finally {
+      setExportingPayments(false);
+    }
+  };
+
+  const handlePaymentSearch = () => {
+    const newFilters = { ...paymentFilters, user_email: paymentEmailSearch || undefined };
+    setPaymentFilters(newFilters);
+    fetchPayments(1, newFilters);
+  };
+
+  const handlePaymentStatusFilter = (status: string | undefined) => {
+    const newFilters = { ...paymentFilters, status: status as PaymentListFilters['status'] };
+    setPaymentFilters(newFilters);
+    fetchPayments(1, newFilters);
+  };
+
+  const clearPaymentFilters = () => {
+    setPaymentFilters({});
+    setPaymentEmailSearch('');
+    fetchPayments(1, {});
+  };
+
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => { if ((activeTab === 'users' || activeTab === 'overview') && domain) { fetchEndUsers(); fetchRoles(); } }, [activeTab, domain, fetchEndUsers, fetchRoles]);
   useEffect(() => { if ((activeTab === 'api' || activeTab === 'overview') && domain) fetchApiKeys(); }, [activeTab, domain, fetchApiKeys]);
-  useEffect(() => { if (activeTab === 'billing' && domain) fetchBillingData(); }, [activeTab, domain, fetchBillingData]);
+  useEffect(() => { if (activeTab === 'billing' && domain) { fetchBillingData(); fetchPayments(1, paymentFilters); } }, [activeTab, domain, fetchBillingData, fetchPayments, paymentFilters]);
 
   // Poll for verification status
   useEffect(() => {
@@ -1431,6 +1516,224 @@ export default function DomainDetailPage() {
                   </div>
                 ))}
               </div>
+            )}
+          </Card>
+
+          {/* Payment History */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <Receipt size={20} className="text-purple-400" />
+                  Payment History
+                </h2>
+                <p className="text-sm text-zinc-400 mt-1">View and export payment records.</p>
+              </div>
+              <Button
+                variant="ghost"
+                onClick={handleExportPayments}
+                disabled={exportingPayments || payments.length === 0}
+              >
+                <Download size={14} className="mr-1" />
+                {exportingPayments ? 'Exporting...' : 'Export CSV'}
+              </Button>
+            </div>
+
+            {/* Summary Cards */}
+            {paymentsSummary && (
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-zinc-400">Revenue</div>
+                  <div className="text-lg font-semibold text-green-400">{formatPrice(paymentsSummary.total_revenue_cents)}</div>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-zinc-400">Refunded</div>
+                  <div className="text-lg font-semibold text-blue-400">{formatPrice(paymentsSummary.total_refunded_cents)}</div>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-zinc-400">Payments</div>
+                  <div className="text-lg font-semibold">{paymentsSummary.payment_count}</div>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-zinc-400">Successful</div>
+                  <div className="text-lg font-semibold text-green-400">{paymentsSummary.successful_payments}</div>
+                </div>
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                  <div className="text-xs text-zinc-400">Failed</div>
+                  <div className="text-lg font-semibold text-red-400">{paymentsSummary.failed_payments}</div>
+                </div>
+              </div>
+            )}
+
+            {/* Filters */}
+            <div className="flex flex-wrap items-center gap-2 mb-4">
+              <div className="flex-1 min-w-[200px]">
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search by email..."
+                    value={paymentEmailSearch}
+                    onChange={(e) => setPaymentEmailSearch(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handlePaymentSearch()}
+                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 pr-8 text-sm text-white placeholder:text-zinc-500 focus:outline-none focus:border-zinc-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={handlePaymentSearch}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-400 hover:text-white"
+                  >
+                    <Search size={16} />
+                  </button>
+                </div>
+              </div>
+              <select
+                value={paymentFilters.status || ''}
+                onChange={(e) => handlePaymentStatusFilter(e.target.value || undefined)}
+                className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-zinc-600"
+              >
+                <option value="">All statuses</option>
+                <option value="paid">Paid</option>
+                <option value="pending">Pending</option>
+                <option value="failed">Failed</option>
+                <option value="refunded">Refunded</option>
+                <option value="partial_refund">Partial Refund</option>
+                <option value="void">Voided</option>
+                <option value="uncollectible">Uncollectible</option>
+              </select>
+              {(paymentFilters.status || paymentFilters.user_email) && (
+                <Button variant="ghost" size="sm" onClick={clearPaymentFilters}>
+                  <X size={14} className="mr-1" />
+                  Clear
+                </Button>
+              )}
+            </div>
+
+            {/* Payments Table */}
+            {loadingPayments ? (
+              <div className="flex justify-center py-8">
+                <div className="w-6 h-6 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+              </div>
+            ) : payments.length === 0 ? (
+              <EmptyState
+                icon={Receipt}
+                title="No payments yet"
+                description="Payment records will appear here as users subscribe."
+              />
+            ) : (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-zinc-700">
+                        <th className="text-left py-3 px-2 text-zinc-400 font-medium">Date</th>
+                        <th className="text-left py-3 px-2 text-zinc-400 font-medium">User</th>
+                        <th className="text-left py-3 px-2 text-zinc-400 font-medium">Plan</th>
+                        <th className="text-left py-3 px-2 text-zinc-400 font-medium">Amount</th>
+                        <th className="text-left py-3 px-2 text-zinc-400 font-medium">Status</th>
+                        <th className="text-right py-3 px-2 text-zinc-400 font-medium">Invoice</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {payments.map((payment) => (
+                        <tr key={payment.id} className="border-b border-zinc-800 last:border-0 hover:bg-zinc-800/30">
+                          <td className="py-3 px-2 text-white whitespace-nowrap">
+                            {formatPaymentDate(payment.payment_date || payment.created_at)}
+                          </td>
+                          <td className="py-3 px-2 text-zinc-300">
+                            <div className="max-w-[180px] truncate" title={payment.user_email}>
+                              {payment.user_email || '-'}
+                            </div>
+                          </td>
+                          <td className="py-3 px-2 text-zinc-300">
+                            {payment.plan_name || payment.plan_code || '-'}
+                          </td>
+                          <td className="py-3 px-2 text-white whitespace-nowrap">
+                            {formatPrice(payment.amount_cents, payment.currency)}
+                            {payment.amount_refunded_cents > 0 && (
+                              <span className="text-xs text-blue-400 ml-1">
+                                (-{formatPrice(payment.amount_refunded_cents, payment.currency)})
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-2">
+                            <Badge variant={
+                              getPaymentStatusBadgeColor(payment.status) === 'green' ? 'success' :
+                              getPaymentStatusBadgeColor(payment.status) === 'red' ? 'error' :
+                              getPaymentStatusBadgeColor(payment.status) === 'yellow' ? 'warning' :
+                              getPaymentStatusBadgeColor(payment.status) === 'blue' ? 'info' : 'default'
+                            }>
+                              {getPaymentStatusLabel(payment.status)}
+                            </Badge>
+                            {payment.failure_message && (
+                              <span className="block text-xs text-red-400 mt-1" title={payment.failure_message}>
+                                {payment.failure_message.slice(0, 30)}...
+                              </span>
+                            )}
+                          </td>
+                          <td className="py-3 px-2 text-right">
+                            {payment.invoice_pdf ? (
+                              <a
+                                href={payment.invoice_pdf}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"
+                              >
+                                <FileText size={14} />
+                                PDF
+                              </a>
+                            ) : payment.invoice_url ? (
+                              <a
+                                href={payment.invoice_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"
+                              >
+                                <ExternalLink size={14} />
+                                View
+                              </a>
+                            ) : payment.invoice_number ? (
+                              <span className="text-zinc-500">#{payment.invoice_number}</span>
+                            ) : (
+                              <span className="text-zinc-500">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Pagination */}
+                {paymentsPagination.total_pages > 1 && (
+                  <div className="flex items-center justify-between mt-4 pt-4 border-t border-zinc-800">
+                    <span className="text-sm text-zinc-400">
+                      Showing {((paymentsPagination.page - 1) * paymentsPagination.per_page) + 1} to{' '}
+                      {Math.min(paymentsPagination.page * paymentsPagination.per_page, paymentsPagination.total)} of{' '}
+                      {paymentsPagination.total} payments
+                    </span>
+                    <div className="flex gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={paymentsPagination.page <= 1 || loadingPayments}
+                        onClick={() => fetchPayments(paymentsPagination.page - 1, paymentFilters)}
+                      >
+                        <ChevronLeft size={14} />
+                        Previous
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        disabled={paymentsPagination.page >= paymentsPagination.total_pages || loadingPayments}
+                        onClick={() => fetchPayments(paymentsPagination.page + 1, paymentFilters)}
+                      >
+                        Next
+                        <ChevronRight size={14} />
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </Card>
         </div>

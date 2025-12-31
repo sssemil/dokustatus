@@ -89,6 +89,8 @@ pub fn router() -> Router<AppState> {
         .route("/{domain_id}/billing/subscribers/{user_id}/grant", post(grant_subscription))
         .route("/{domain_id}/billing/subscribers/{user_id}/revoke", delete(revoke_subscription))
         .route("/{domain_id}/billing/analytics", get(get_billing_analytics))
+        .route("/{domain_id}/billing/payments", get(list_billing_payments))
+        .route("/{domain_id}/billing/payments/export", get(export_billing_payments))
 }
 
 #[derive(Deserialize)]
@@ -1432,4 +1434,196 @@ async fn get_billing_analytics(
             })
             .collect(),
     }))
+}
+
+// ============================================================================
+// Payment History Endpoints
+// ============================================================================
+
+#[derive(Debug, Deserialize)]
+struct PaymentListQuery {
+    page: Option<i32>,
+    per_page: Option<i32>,
+    status: Option<String>,
+    date_from: Option<i64>,
+    date_to: Option<i64>,
+    plan_code: Option<String>,
+    user_email: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct PaymentListResponse {
+    payments: Vec<PaymentWithUserResponse>,
+    total: i64,
+    page: i32,
+    per_page: i32,
+    total_pages: i32,
+    summary: PaymentSummaryResponse,
+}
+
+#[derive(Debug, Serialize)]
+struct PaymentWithUserResponse {
+    id: String,
+    user_id: String,
+    user_email: String,
+    amount_cents: i32,
+    amount_paid_cents: i32,
+    amount_refunded_cents: i32,
+    currency: String,
+    status: String,
+    plan_code: Option<String>,
+    plan_name: Option<String>,
+    invoice_url: Option<String>,
+    invoice_pdf: Option<String>,
+    invoice_number: Option<String>,
+    billing_reason: Option<String>,
+    failure_message: Option<String>,
+    payment_date: Option<i64>,
+    created_at: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct PaymentSummaryResponse {
+    total_revenue_cents: i64,
+    total_refunded_cents: i64,
+    payment_count: i64,
+    successful_payments: i64,
+    failed_payments: i64,
+}
+
+/// GET /api/domains/{id}/billing/payments
+/// Lists all payments for a domain with filtering and pagination
+async fn list_billing_payments(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Query(query): Query<PaymentListQuery>,
+) -> AppResult<impl IntoResponse> {
+    use crate::application::use_cases::domain_billing::PaymentListFilters;
+    use crate::domain::entities::payment_status::PaymentStatus;
+
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
+
+    // Parse status filter
+    let status = query.status.as_deref().and_then(|s| s.parse::<PaymentStatus>().ok());
+
+    // Parse date filters (timestamps to NaiveDateTime)
+    let date_from = query.date_from.and_then(|ts| {
+        chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc())
+    });
+    let date_to = query.date_to.and_then(|ts| {
+        chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc())
+    });
+
+    let filters = PaymentListFilters {
+        status,
+        date_from,
+        date_to,
+        plan_code: query.plan_code,
+        user_email: query.user_email,
+    };
+
+    // Get payments
+    let paginated = app_state
+        .billing_use_cases
+        .list_domain_payments(owner_id, domain_id, &filters, page, per_page)
+        .await?;
+
+    // Get summary
+    let summary = app_state
+        .billing_use_cases
+        .get_payment_summary(owner_id, domain_id, date_from, date_to)
+        .await?;
+
+    let payments: Vec<PaymentWithUserResponse> = paginated
+        .payments
+        .into_iter()
+        .map(|p| PaymentWithUserResponse {
+            id: p.payment.id.to_string(),
+            user_id: p.payment.end_user_id.to_string(),
+            user_email: p.user_email,
+            amount_cents: p.payment.amount_cents,
+            amount_paid_cents: p.payment.amount_paid_cents,
+            amount_refunded_cents: p.payment.amount_refunded_cents,
+            currency: p.payment.currency,
+            status: p.payment.status.as_str().to_string(),
+            plan_code: p.payment.plan_code,
+            plan_name: p.payment.plan_name,
+            invoice_url: p.payment.hosted_invoice_url,
+            invoice_pdf: p.payment.invoice_pdf_url,
+            invoice_number: p.payment.invoice_number,
+            billing_reason: p.payment.billing_reason,
+            failure_message: p.payment.failure_message,
+            payment_date: p.payment.payment_date.map(|dt| dt.and_utc().timestamp()),
+            created_at: p.payment.created_at.map(|dt| dt.and_utc().timestamp()),
+        })
+        .collect();
+
+    Ok(Json(PaymentListResponse {
+        payments,
+        total: paginated.total,
+        page: paginated.page,
+        per_page: paginated.per_page,
+        total_pages: paginated.total_pages,
+        summary: PaymentSummaryResponse {
+            total_revenue_cents: summary.total_revenue_cents,
+            total_refunded_cents: summary.total_refunded_cents,
+            payment_count: summary.payment_count,
+            successful_payments: summary.successful_payments,
+            failed_payments: summary.failed_payments,
+        },
+    }))
+}
+
+/// GET /api/domains/{id}/billing/payments/export
+/// Exports payments as CSV file
+async fn export_billing_payments(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Query(query): Query<PaymentListQuery>,
+) -> AppResult<impl IntoResponse> {
+    use crate::application::use_cases::domain_billing::PaymentListFilters;
+    use crate::domain::entities::payment_status::PaymentStatus;
+
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    // Parse status filter
+    let status = query.status.as_deref().and_then(|s| s.parse::<PaymentStatus>().ok());
+
+    // Parse date filters
+    let date_from = query.date_from.and_then(|ts| {
+        chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc())
+    });
+    let date_to = query.date_to.and_then(|ts| {
+        chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc())
+    });
+
+    let filters = PaymentListFilters {
+        status,
+        date_from,
+        date_to,
+        plan_code: query.plan_code,
+        user_email: query.user_email,
+    };
+
+    let csv = app_state
+        .billing_use_cases
+        .export_payments_csv(owner_id, domain_id, &filters)
+        .await?;
+
+    // Return CSV file with proper headers
+    Ok((
+        [
+            (axum::http::header::CONTENT_TYPE, "text/csv"),
+            (
+                axum::http::header::CONTENT_DISPOSITION,
+                "attachment; filename=\"payments.csv\"",
+            ),
+        ],
+        csv,
+    ))
 }

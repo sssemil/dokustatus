@@ -7,6 +7,7 @@ use uuid::Uuid;
 use crate::{
     app_error::{AppError, AppResult},
     domain::entities::{
+        payment_status::PaymentStatus,
         stripe_mode::StripeMode,
         user_subscription::SubscriptionStatus,
     },
@@ -98,6 +99,60 @@ pub struct SubscriptionEventProfile {
     pub created_at: Option<NaiveDateTime>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct BillingPaymentProfile {
+    pub id: Uuid,
+    pub domain_id: Uuid,
+    pub stripe_mode: StripeMode,
+    pub end_user_id: Uuid,
+    pub subscription_id: Option<Uuid>,
+    pub stripe_invoice_id: String,
+    pub stripe_payment_intent_id: Option<String>,
+    pub stripe_customer_id: String,
+    pub amount_cents: i32,
+    pub amount_paid_cents: i32,
+    pub amount_refunded_cents: i32,
+    pub currency: String,
+    pub status: PaymentStatus,
+    pub plan_id: Option<Uuid>,
+    pub plan_code: Option<String>,
+    pub plan_name: Option<String>,
+    pub hosted_invoice_url: Option<String>,
+    pub invoice_pdf_url: Option<String>,
+    pub invoice_number: Option<String>,
+    pub billing_reason: Option<String>,
+    pub failure_message: Option<String>,
+    pub invoice_created_at: Option<NaiveDateTime>,
+    pub payment_date: Option<NaiveDateTime>,
+    pub refunded_at: Option<NaiveDateTime>,
+    pub created_at: Option<NaiveDateTime>,
+    pub updated_at: Option<NaiveDateTime>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BillingPaymentWithUser {
+    pub payment: BillingPaymentProfile,
+    pub user_email: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PaginatedPayments {
+    pub payments: Vec<BillingPaymentWithUser>,
+    pub total: i64,
+    pub page: i32,
+    pub per_page: i32,
+    pub total_pages: i32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PaymentSummary {
+    pub total_revenue_cents: i64,
+    pub total_refunded_cents: i64,
+    pub payment_count: i64,
+    pub successful_payments: i64,
+    pub failed_payments: i64,
+}
+
 // ============================================================================
 // Input Types
 // ============================================================================
@@ -165,6 +220,40 @@ pub struct CreateSubscriptionEventInput {
     pub stripe_event_id: Option<String>,
     pub metadata: serde_json::Value,
     pub created_by: Option<Uuid>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreatePaymentInput {
+    pub domain_id: Uuid,
+    pub stripe_mode: StripeMode,
+    pub end_user_id: Uuid,
+    pub subscription_id: Option<Uuid>,
+    pub stripe_invoice_id: String,
+    pub stripe_payment_intent_id: Option<String>,
+    pub stripe_customer_id: String,
+    pub amount_cents: i32,
+    pub amount_paid_cents: i32,
+    pub currency: String,
+    pub status: PaymentStatus,
+    pub plan_id: Option<Uuid>,
+    pub plan_code: Option<String>,
+    pub plan_name: Option<String>,
+    pub hosted_invoice_url: Option<String>,
+    pub invoice_pdf_url: Option<String>,
+    pub invoice_number: Option<String>,
+    pub billing_reason: Option<String>,
+    pub failure_message: Option<String>,
+    pub invoice_created_at: Option<NaiveDateTime>,
+    pub payment_date: Option<NaiveDateTime>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct PaymentListFilters {
+    pub status: Option<PaymentStatus>,
+    pub date_from: Option<NaiveDateTime>,
+    pub date_to: Option<NaiveDateTime>,
+    pub plan_code: Option<String>,
+    pub user_email: Option<String>,
 }
 
 // ============================================================================
@@ -343,6 +432,67 @@ pub trait SubscriptionEventRepo: Send + Sync {
     async fn exists_by_stripe_event_id(&self, stripe_event_id: &str) -> AppResult<bool>;
 }
 
+#[async_trait]
+pub trait BillingPaymentRepo: Send + Sync {
+    /// Create or update a payment from Stripe webhook data
+    async fn upsert_from_stripe(
+        &self,
+        input: &CreatePaymentInput,
+    ) -> AppResult<BillingPaymentProfile>;
+
+    /// Get payment by Stripe invoice ID (for idempotency checks)
+    async fn get_by_stripe_invoice_id(
+        &self,
+        stripe_invoice_id: &str,
+    ) -> AppResult<Option<BillingPaymentProfile>>;
+
+    /// List payments for an end-user (their own payments)
+    async fn list_by_user(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+        end_user_id: Uuid,
+        page: i32,
+        per_page: i32,
+    ) -> AppResult<PaginatedPayments>;
+
+    /// List payments for a domain with filters (dashboard)
+    async fn list_by_domain(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+        filters: &PaymentListFilters,
+        page: i32,
+        per_page: i32,
+    ) -> AppResult<PaginatedPayments>;
+
+    /// Update payment status (for refunds, failures, etc.)
+    async fn update_status(
+        &self,
+        stripe_invoice_id: &str,
+        status: PaymentStatus,
+        amount_refunded_cents: Option<i32>,
+        failure_message: Option<String>,
+    ) -> AppResult<()>;
+
+    /// Get payment summary for analytics
+    async fn get_payment_summary(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+        date_from: Option<NaiveDateTime>,
+        date_to: Option<NaiveDateTime>,
+    ) -> AppResult<PaymentSummary>;
+
+    /// List all payments for export (no pagination)
+    async fn list_all_for_export(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+        filters: &PaymentListFilters,
+    ) -> AppResult<Vec<BillingPaymentWithUser>>;
+}
+
 // ============================================================================
 // Use Cases
 // ============================================================================
@@ -354,6 +504,7 @@ pub struct DomainBillingUseCases {
     plan_repo: Arc<dyn SubscriptionPlanRepo>,
     subscription_repo: Arc<dyn UserSubscriptionRepo>,
     event_repo: Arc<dyn SubscriptionEventRepo>,
+    payment_repo: Arc<dyn BillingPaymentRepo>,
     cipher: ProcessCipher,
     // NOTE: No fallback Stripe credentials - we cannot accept payments on behalf of other developers.
     // Each domain must configure their own Stripe account.
@@ -366,6 +517,7 @@ impl DomainBillingUseCases {
         plan_repo: Arc<dyn SubscriptionPlanRepo>,
         subscription_repo: Arc<dyn UserSubscriptionRepo>,
         event_repo: Arc<dyn SubscriptionEventRepo>,
+        payment_repo: Arc<dyn BillingPaymentRepo>,
         cipher: ProcessCipher,
     ) -> Self {
         Self {
@@ -374,6 +526,7 @@ impl DomainBillingUseCases {
             plan_repo,
             subscription_repo,
             event_repo,
+            payment_repo,
             cipher,
         }
     }
@@ -995,6 +1148,220 @@ impl DomainBillingUseCases {
             metadata,
             created_by: None,
         }).await
+    }
+
+    // ========================================================================
+    // Payment History Methods
+    // ========================================================================
+
+    /// Sync an invoice from Stripe webhook data
+    pub async fn sync_invoice_from_webhook(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+        invoice: &serde_json::Value,
+    ) -> AppResult<BillingPaymentProfile> {
+        let stripe_invoice_id = invoice["id"].as_str().unwrap_or("");
+        let customer_id = invoice["customer"].as_str().unwrap_or("");
+
+        // Try to find the subscription and user from the customer ID
+        let subscription = self.subscription_repo
+            .get_by_stripe_customer_id(domain_id, mode, customer_id)
+            .await?;
+
+        let (end_user_id, subscription_id, plan_id, plan_code, plan_name) =
+            if let Some(sub) = &subscription {
+                let plan = self.plan_repo.get_by_id(sub.plan_id).await?;
+                (
+                    sub.end_user_id,
+                    Some(sub.id),
+                    Some(sub.plan_id),
+                    plan.as_ref().map(|p| p.code.clone()),
+                    plan.as_ref().map(|p| p.name.clone()),
+                )
+            } else {
+                // If we can't find the subscription, we can't create the payment
+                return Err(AppError::NotFound);
+            };
+
+        let status = PaymentStatus::from_stripe_invoice_status(
+            invoice["status"].as_str().unwrap_or(""),
+        );
+
+        let payment_date = if status == PaymentStatus::Paid {
+            invoice["status_transitions"]["paid_at"]
+                .as_i64()
+                .and_then(|ts| NaiveDateTime::from_timestamp_opt(ts, 0))
+        } else {
+            None
+        };
+
+        let input = CreatePaymentInput {
+            domain_id,
+            stripe_mode: mode,
+            end_user_id,
+            subscription_id,
+            stripe_invoice_id: stripe_invoice_id.to_string(),
+            stripe_payment_intent_id: invoice["payment_intent"]
+                .as_str()
+                .map(|s| s.to_string()),
+            stripe_customer_id: customer_id.to_string(),
+            amount_cents: invoice["amount_due"].as_i64().unwrap_or(0) as i32,
+            amount_paid_cents: invoice["amount_paid"].as_i64().unwrap_or(0) as i32,
+            currency: invoice["currency"]
+                .as_str()
+                .unwrap_or("usd")
+                .to_uppercase(),
+            status,
+            plan_id,
+            plan_code,
+            plan_name,
+            hosted_invoice_url: invoice["hosted_invoice_url"]
+                .as_str()
+                .map(|s| s.to_string()),
+            invoice_pdf_url: invoice["invoice_pdf"].as_str().map(|s| s.to_string()),
+            invoice_number: invoice["number"].as_str().map(|s| s.to_string()),
+            billing_reason: invoice["billing_reason"].as_str().map(|s| s.to_string()),
+            failure_message: None,
+            invoice_created_at: invoice["created"]
+                .as_i64()
+                .and_then(|ts| NaiveDateTime::from_timestamp_opt(ts, 0)),
+            payment_date,
+        };
+
+        self.payment_repo.upsert_from_stripe(&input).await
+    }
+
+    /// Update payment status (for failures and refunds)
+    pub async fn update_payment_status(
+        &self,
+        stripe_invoice_id: &str,
+        status: PaymentStatus,
+        amount_refunded_cents: Option<i32>,
+        failure_message: Option<String>,
+    ) -> AppResult<()> {
+        self.payment_repo
+            .update_status(stripe_invoice_id, status, amount_refunded_cents, failure_message)
+            .await
+    }
+
+    /// Get user's own payment history (for ingress billing page)
+    pub async fn get_user_payments(
+        &self,
+        domain_id: Uuid,
+        user_id: Uuid,
+        page: i32,
+        per_page: i32,
+    ) -> AppResult<PaginatedPayments> {
+        let mode = self.get_active_mode(domain_id).await?;
+        self.payment_repo
+            .list_by_user(domain_id, mode, user_id, page, per_page)
+            .await
+    }
+
+    /// List payments for domain dashboard with filters
+    pub async fn list_domain_payments(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+        filters: &PaymentListFilters,
+        page: i32,
+        per_page: i32,
+    ) -> AppResult<PaginatedPayments> {
+        let domain = self.get_domain_verified(owner_id, domain_id).await?;
+        self.payment_repo
+            .list_by_domain(domain_id, domain.billing_stripe_mode, filters, page, per_page)
+            .await
+    }
+
+    /// Get payment summary for dashboard
+    pub async fn get_payment_summary(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+        date_from: Option<NaiveDateTime>,
+        date_to: Option<NaiveDateTime>,
+    ) -> AppResult<PaymentSummary> {
+        let domain = self.get_domain_verified(owner_id, domain_id).await?;
+        self.payment_repo
+            .get_payment_summary(domain_id, domain.billing_stripe_mode, date_from, date_to)
+            .await
+    }
+
+    /// Export payments as CSV
+    pub async fn export_payments_csv(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+        filters: &PaymentListFilters,
+    ) -> AppResult<String> {
+        let domain = self.get_domain_verified(owner_id, domain_id).await?;
+        let payments = self.payment_repo
+            .list_all_for_export(domain_id, domain.billing_stripe_mode, filters)
+            .await?;
+
+        // Build CSV content
+        let mut csv = String::new();
+        csv.push_str("Date,User Email,Plan,Amount,Status,Invoice Number,Billing Reason\n");
+
+        for p in payments {
+            let date = p.payment.payment_date
+                .or(p.payment.created_at)
+                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+                .unwrap_or_default();
+
+            let amount = format!("{:.2}", p.payment.amount_cents as f64 / 100.0);
+
+            // Escape all user-provided fields for security (including formula injection prevention)
+            let email = escape_csv_field(&p.user_email);
+            let plan = escape_csv_field(p.payment.plan_name.as_deref().unwrap_or(""));
+            let invoice = escape_csv_field(p.payment.invoice_number.as_deref().unwrap_or(""));
+            let reason = escape_csv_field(p.payment.billing_reason.as_deref().unwrap_or(""));
+
+            csv.push_str(&format!(
+                "{},{},{},{},{},{},{}\n",
+                date,
+                email,
+                plan,
+                amount,
+                p.payment.status.as_str(),
+                invoice,
+                reason
+            ));
+        }
+
+        Ok(csv)
+    }
+}
+
+/// Escape a field for CSV output, including formula injection prevention.
+/// Spreadsheet applications (Excel, Google Sheets, etc.) will execute formulas
+/// starting with =, +, -, @, tab, or carriage return. We prefix such values
+/// with a single quote to prevent formula injection attacks.
+fn escape_csv_field(field: &str) -> String {
+    let needs_quoting = field.contains(',')
+        || field.contains('"')
+        || field.contains('\n')
+        || field.contains('\r');
+
+    // Check for formula injection characters at start
+    let is_formula = field
+        .chars()
+        .next()
+        .map(|c| matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r'))
+        .unwrap_or(false);
+
+    let escaped = if is_formula {
+        // Prefix with single quote to prevent formula execution
+        format!("'{}", field)
+    } else {
+        field.to_string()
+    };
+
+    if needs_quoting || is_formula {
+        format!("\"{}\"", escaped.replace('"', "\"\""))
+    } else {
+        escaped
     }
 }
 

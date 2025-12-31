@@ -2,12 +2,21 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, CreditCard, Check, ExternalLink } from 'lucide-react';
-import { Card, Button, Badge, HoldButton } from '@/components/ui';
+import { ArrowLeft, CreditCard, Check, ExternalLink, Receipt, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Card, Button, Badge, HoldButton, Table } from '@/components/ui';
 import { useToast } from '@/contexts/ToastContext';
 import { useAppContext } from '../layout';
 import { getRootDomain } from '@/lib/domain-utils';
-import { formatPrice, formatInterval, getStatusLabel } from '@/types/billing';
+import {
+  formatPrice,
+  formatInterval,
+  getStatusLabel,
+  BillingPayment,
+  PaginatedPayments,
+  getPaymentStatusLabel,
+  getPaymentStatusBadgeColor,
+  formatPaymentDate,
+} from '@/types/billing';
 
 type SubscriptionPlan = {
   id: string;
@@ -39,11 +48,34 @@ export default function BillingPage() {
 
   const [subscription, setSubscription] = useState<UserSubscription | null>(null);
   const [plans, setPlans] = useState<SubscriptionPlan[]>([]);
+  const [payments, setPayments] = useState<BillingPayment[]>([]);
+  const [paymentsPagination, setPaymentsPagination] = useState({ page: 1, total: 0, total_pages: 0 });
   const [loading, setLoading] = useState(true);
+  const [loadingPayments, setLoadingPayments] = useState(false);
   const [subscribing, setSubscribing] = useState<string | null>(null);
   const [canceling, setCanceling] = useState(false);
 
   const apiDomain = typeof window !== 'undefined' ? getRootDomain(window.location.hostname) : '';
+
+  const fetchPayments = useCallback(async (page: number = 1) => {
+    if (!apiDomain) return;
+    setLoadingPayments(true);
+    try {
+      const res = await fetch(
+        `/api/public/domain/${apiDomain}/billing/payments?page=${page}&per_page=5`,
+        { credentials: 'include' }
+      );
+      if (res.ok) {
+        const data: PaginatedPayments = await res.json();
+        setPayments(data.payments);
+        setPaymentsPagination({ page: data.page, total: data.total, total_pages: data.total_pages });
+      }
+    } catch {
+      // Silent fail for payments
+    } finally {
+      setLoadingPayments(false);
+    }
+  }, [apiDomain]);
 
   const fetchData = useCallback(async () => {
     if (!apiDomain) return;
@@ -62,12 +94,15 @@ export default function BillingPage() {
         const plansData = await plansRes.json();
         setPlans(plansData.sort((a: SubscriptionPlan, b: SubscriptionPlan) => a.display_order - b.display_order));
       }
+
+      // Fetch payments
+      await fetchPayments(1);
     } catch {
       addToast('Failed to load billing information', 'error');
     } finally {
       setLoading(false);
     }
-  }, [apiDomain, addToast]);
+  }, [apiDomain, addToast, fetchPayments]);
 
   useEffect(() => {
     fetchData();
@@ -227,6 +262,114 @@ export default function BillingPage() {
                 Your subscription will be canceled at the end of your current billing period.
                 You will retain access until {formatPeriodEnd(subscription.current_period_end)}.
               </p>
+            </div>
+          )}
+        </Card>
+      )}
+
+      {/* Payment History */}
+      {payments.length > 0 && (
+        <Card className="p-6">
+          <div className="flex items-center gap-2 mb-4">
+            <Receipt size={20} className="text-purple-400" />
+            <h2 className="text-lg font-semibold text-white">Payment History</h2>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-zinc-700">
+                  <th className="text-left py-3 px-2 text-zinc-400 font-medium">Date</th>
+                  <th className="text-left py-3 px-2 text-zinc-400 font-medium">Plan</th>
+                  <th className="text-left py-3 px-2 text-zinc-400 font-medium">Amount</th>
+                  <th className="text-left py-3 px-2 text-zinc-400 font-medium">Status</th>
+                  <th className="text-right py-3 px-2 text-zinc-400 font-medium">Invoice</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payments.map((payment) => (
+                  <tr key={payment.id} className="border-b border-zinc-800 last:border-0">
+                    <td className="py-3 px-2 text-white">
+                      {formatPaymentDate(payment.payment_date || payment.created_at)}
+                    </td>
+                    <td className="py-3 px-2 text-zinc-300">
+                      {payment.plan_name || '-'}
+                    </td>
+                    <td className="py-3 px-2 text-white">
+                      {formatPrice(payment.amount_cents, payment.currency)}
+                      {payment.amount_refunded_cents > 0 && (
+                        <span className="text-xs text-blue-400 ml-1">
+                          (-{formatPrice(payment.amount_refunded_cents, payment.currency)})
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-3 px-2">
+                      <Badge variant={
+                        getPaymentStatusBadgeColor(payment.status) === 'green' ? 'success' :
+                        getPaymentStatusBadgeColor(payment.status) === 'red' ? 'error' :
+                        getPaymentStatusBadgeColor(payment.status) === 'yellow' ? 'warning' :
+                        getPaymentStatusBadgeColor(payment.status) === 'blue' ? 'info' : 'default'
+                      }>
+                        {getPaymentStatusLabel(payment.status)}
+                      </Badge>
+                    </td>
+                    <td className="py-3 px-2 text-right">
+                      {payment.invoice_pdf ? (
+                        <a
+                          href={payment.invoice_pdf}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"
+                        >
+                          <FileText size={14} />
+                          PDF
+                        </a>
+                      ) : payment.invoice_url ? (
+                        <a
+                          href={payment.invoice_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-blue-400 hover:text-blue-300"
+                        >
+                          <ExternalLink size={14} />
+                          View
+                        </a>
+                      ) : (
+                        <span className="text-zinc-500">-</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Pagination */}
+          {paymentsPagination.total_pages > 1 && (
+            <div className="flex items-center justify-between mt-4 pt-4 border-t border-zinc-800">
+              <span className="text-sm text-zinc-400">
+                Page {paymentsPagination.page} of {paymentsPagination.total_pages}
+              </span>
+              <div className="flex gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={paymentsPagination.page <= 1 || loadingPayments}
+                  onClick={() => fetchPayments(paymentsPagination.page - 1)}
+                >
+                  <ChevronLeft size={14} />
+                  Previous
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={paymentsPagination.page >= paymentsPagination.total_pages || loadingPayments}
+                  onClick={() => fetchPayments(paymentsPagination.page + 1)}
+                >
+                  Next
+                  <ChevronRight size={14} />
+                </Button>
+              </div>
             </div>
           )}
         </Card>

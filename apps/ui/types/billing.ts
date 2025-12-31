@@ -191,3 +191,124 @@ export function getModeLabel(mode: StripeMode): string {
 export function getModeBadgeColor(mode: StripeMode): 'yellow' | 'green' {
   return mode === 'test' ? 'yellow' : 'green';
 }
+
+// ============================================================================
+// Payment History Types
+// ============================================================================
+
+export type PaymentStatus =
+  | 'pending'
+  | 'paid'
+  | 'failed'
+  | 'refunded'
+  | 'partial_refund'
+  | 'uncollectible'
+  | 'void';
+
+export interface BillingPayment {
+  id: string;
+  user_id?: string;
+  user_email?: string;
+  amount_cents: number;
+  amount_paid_cents: number;
+  amount_refunded_cents: number;
+  currency: string;
+  status: PaymentStatus;
+  plan_code: string | null;
+  plan_name: string | null;
+  invoice_url: string | null;
+  invoice_pdf: string | null;
+  invoice_number: string | null;
+  billing_reason?: string | null;
+  failure_message?: string | null;
+  payment_date: number | null; // Unix timestamp
+  created_at: number | null; // Unix timestamp
+}
+
+export interface PaginatedPayments {
+  payments: BillingPayment[];
+  total: number;
+  page: number;
+  per_page: number;
+  total_pages: number;
+}
+
+export interface PaymentSummary {
+  total_revenue_cents: number;
+  total_refunded_cents: number;
+  payment_count: number;
+  successful_payments: number;
+  failed_payments: number;
+}
+
+export interface DashboardPaymentListResponse extends PaginatedPayments {
+  summary: PaymentSummary;
+}
+
+export interface PaymentListFilters {
+  status?: PaymentStatus;
+  date_from?: number; // Unix timestamp
+  date_to?: number; // Unix timestamp
+  plan_code?: string;
+  user_email?: string;
+}
+
+// Payment helper functions
+export function getPaymentStatusLabel(status: PaymentStatus): string {
+  switch (status) {
+    case 'pending':
+      return 'Pending';
+    case 'paid':
+      return 'Paid';
+    case 'failed':
+      return 'Failed';
+    case 'refunded':
+      return 'Refunded';
+    case 'partial_refund':
+      return 'Partially Refunded';
+    case 'uncollectible':
+      return 'Uncollectible';
+    case 'void':
+      return 'Voided';
+    default:
+      return status;
+  }
+}
+
+export function getPaymentStatusBadgeColor(status: PaymentStatus): string {
+  switch (status) {
+    case 'paid':
+      return 'green';
+    case 'pending':
+      return 'yellow';
+    case 'failed':
+    case 'uncollectible':
+    case 'void':
+      return 'red';
+    case 'refunded':
+    case 'partial_refund':
+      return 'blue';
+    default:
+      return 'gray';
+  }
+}
+
+export function formatPaymentDate(timestamp: number | null): string {
+  if (!timestamp) return '-';
+  return new Date(timestamp * 1000).toLocaleDateString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+export function formatPaymentDateTime(timestamp: number | null): string {
+  if (!timestamp) return '-';
+  return new Date(timestamp * 1000).toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}

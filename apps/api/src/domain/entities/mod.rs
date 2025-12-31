@@ -6,6 +6,7 @@ pub mod domain_auth_google_oauth;
 pub mod domain_auth_magic_link;
 pub mod domain_end_user;
 pub mod domain_role;
+pub mod payment_status;
 pub mod stripe_mode;
 pub mod subscription_plan;
 pub mod user_subscription;

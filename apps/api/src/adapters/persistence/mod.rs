@@ -3,6 +3,7 @@ use sqlx::PgPool;
 use crate::app_error::AppError;
 
 pub mod api_key;
+pub mod billing_payment;
 pub mod billing_stripe_config;
 pub mod domain;
 pub mod domain_auth_config;

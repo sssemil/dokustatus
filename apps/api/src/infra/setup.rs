@@ -9,7 +9,7 @@ use crate::{
         DomainAuthUseCases, DomainEndUserRepo,
     },
     application::use_cases::domain_billing::{
-        BillingStripeConfigRepo, DomainBillingUseCases, SubscriptionEventRepo,
+        BillingPaymentRepo, BillingStripeConfigRepo, DomainBillingUseCases, SubscriptionEventRepo,
         SubscriptionPlanRepo, UserSubscriptionRepo,
     },
     application::use_cases::domain_roles::DomainRolesUseCases,
@@ -98,6 +98,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let subscription_plan_repo = postgres_arc.clone() as Arc<dyn SubscriptionPlanRepo>;
     let user_subscription_repo = postgres_arc.clone() as Arc<dyn UserSubscriptionRepo>;
     let subscription_event_repo = postgres_arc.clone() as Arc<dyn SubscriptionEventRepo>;
+    let billing_payment_repo = postgres_arc.clone() as Arc<dyn BillingPaymentRepo>;
 
     let billing_cipher = ProcessCipher::from_env()?;
     // NOTE: No fallback Stripe credentials - each domain must configure their own Stripe account.
@@ -107,6 +108,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         subscription_plan_repo,
         user_subscription_repo,
         subscription_event_repo,
+        billing_payment_repo,
         billing_cipher,
     );
 

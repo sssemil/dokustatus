@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, HeaderValue, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
@@ -245,6 +245,7 @@ pub fn router() -> Router<AppState> {
         .route("/{domain}/billing/checkout", post(create_checkout))
         .route("/{domain}/billing/portal", post(create_portal))
         .route("/{domain}/billing/cancel", post(cancel_subscription))
+        .route("/{domain}/billing/payments", get(get_user_payments))
         // Mode-specific webhook endpoints
         .route("/{domain}/billing/webhook/test", post(handle_webhook_test))
         .route("/{domain}/billing/webhook/live", post(handle_webhook_live))
@@ -1444,6 +1445,88 @@ async fn cancel_subscription(
     Ok(StatusCode::OK)
 }
 
+/// Query params for payment list
+#[derive(Debug, Deserialize)]
+struct PaymentListQuery {
+    page: Option<i32>,
+    per_page: Option<i32>,
+}
+
+/// Response for paginated payments
+#[derive(Debug, Serialize)]
+struct PaymentListResponse {
+    payments: Vec<PaymentResponse>,
+    total: i64,
+    page: i32,
+    per_page: i32,
+    total_pages: i32,
+}
+
+#[derive(Debug, Serialize)]
+struct PaymentResponse {
+    id: String,
+    amount_cents: i32,
+    amount_paid_cents: i32,
+    amount_refunded_cents: i32,
+    currency: String,
+    status: String,
+    plan_name: Option<String>,
+    invoice_url: Option<String>,
+    invoice_pdf: Option<String>,
+    invoice_number: Option<String>,
+    payment_date: Option<i64>,
+    created_at: Option<i64>,
+}
+
+/// GET /api/public/domain/{domain}/billing/payments
+/// Returns the user's payment history
+async fn get_user_payments(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    Query(query): Query<PaymentListQuery>,
+    cookies: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get user from token
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+
+    let page = query.page.unwrap_or(1).max(1);
+    let per_page = query.per_page.unwrap_or(10).clamp(1, 100);
+
+    let paginated = app_state
+        .billing_use_cases
+        .get_user_payments(domain_id, user_id, page, per_page)
+        .await?;
+
+    let payments: Vec<PaymentResponse> = paginated
+        .payments
+        .into_iter()
+        .map(|p| PaymentResponse {
+            id: p.payment.id.to_string(),
+            amount_cents: p.payment.amount_cents,
+            amount_paid_cents: p.payment.amount_paid_cents,
+            amount_refunded_cents: p.payment.amount_refunded_cents,
+            currency: p.payment.currency,
+            status: p.payment.status.as_str().to_string(),
+            plan_name: p.payment.plan_name,
+            invoice_url: p.payment.hosted_invoice_url,
+            invoice_pdf: p.payment.invoice_pdf_url,
+            invoice_number: p.payment.invoice_number,
+            payment_date: p.payment.payment_date.map(|dt| dt.and_utc().timestamp()),
+            created_at: p.payment.created_at.map(|dt| dt.and_utc().timestamp()),
+        })
+        .collect();
+
+    Ok(Json(PaymentListResponse {
+        payments,
+        total: paginated.total,
+        page: paginated.page,
+        per_page: paginated.per_page,
+        total_pages: paginated.total_pages,
+    }))
+}
+
 use crate::domain::entities::stripe_mode::StripeMode;
 
 /// POST /api/public/domain/{domain}/billing/webhook/test
@@ -1687,6 +1770,118 @@ async fn handle_webhook_for_mode(
                         serde_json::json!({"stripe_status": status_str}),
                     )
                     .await?;
+            }
+        }
+        // Invoice events for payment history tracking
+        "invoice.created" | "invoice.paid" | "invoice.updated" | "invoice.finalized" => {
+            let invoice = &event["data"]["object"];
+
+            // Try to sync the invoice to our payments table
+            match app_state
+                .billing_use_cases
+                .sync_invoice_from_webhook(domain.id, stripe_mode, invoice)
+                .await
+            {
+                Ok(_payment) => {
+                    tracing::info!("Synced payment from {} event: {}", event_type, event_id);
+                }
+                Err(e) => {
+                    // Log but don't fail - the invoice might be for a customer we don't know
+                    tracing::warn!("Could not sync invoice from {} event: {} - {}", event_type, event_id, e);
+                }
+            }
+        }
+        "invoice.payment_failed" => {
+            let invoice = &event["data"]["object"];
+            let invoice_id = invoice["id"].as_str().unwrap_or("");
+
+            // First try to sync/create the invoice
+            let _ = app_state
+                .billing_use_cases
+                .sync_invoice_from_webhook(domain.id, stripe_mode, invoice)
+                .await;
+
+            // Extract failure message from the invoice
+            let failure_message = invoice["last_finalization_error"]["message"]
+                .as_str()
+                .or_else(|| invoice["last_payment_error"]["message"].as_str())
+                .map(|s| s.to_string());
+
+            // Update status to failed
+            if let Err(e) = app_state
+                .billing_use_cases
+                .update_payment_status(
+                    invoice_id,
+                    crate::domain::entities::payment_status::PaymentStatus::Failed,
+                    None,
+                    failure_message,
+                )
+                .await
+            {
+                tracing::warn!("Could not update payment status for failed invoice {}: {}", invoice_id, e);
+            }
+        }
+        "invoice.voided" => {
+            let invoice = &event["data"]["object"];
+            let invoice_id = invoice["id"].as_str().unwrap_or("");
+
+            if let Err(e) = app_state
+                .billing_use_cases
+                .update_payment_status(
+                    invoice_id,
+                    crate::domain::entities::payment_status::PaymentStatus::Void,
+                    None,
+                    None,
+                )
+                .await
+            {
+                tracing::warn!("Could not update payment status for voided invoice {}: {}", invoice_id, e);
+            }
+        }
+        "invoice.marked_uncollectible" => {
+            let invoice = &event["data"]["object"];
+            let invoice_id = invoice["id"].as_str().unwrap_or("");
+
+            if let Err(e) = app_state
+                .billing_use_cases
+                .update_payment_status(
+                    invoice_id,
+                    crate::domain::entities::payment_status::PaymentStatus::Uncollectible,
+                    None,
+                    None,
+                )
+                .await
+            {
+                tracing::warn!("Could not update payment status for uncollectible invoice {}: {}", invoice_id, e);
+            }
+        }
+        "charge.refunded" => {
+            // Handle refunds - need to find the associated invoice
+            let charge = &event["data"]["object"];
+            let invoice_id = charge["invoice"].as_str();
+            let amount_refunded = charge["amount_refunded"].as_i64().unwrap_or(0) as i32;
+            let amount = charge["amount"].as_i64().unwrap_or(0) as i32;
+
+            if let Some(invoice_id) = invoice_id {
+                // Determine if it's a full or partial refund
+                let status = if amount_refunded >= amount {
+                    crate::domain::entities::payment_status::PaymentStatus::Refunded
+                } else {
+                    crate::domain::entities::payment_status::PaymentStatus::PartialRefund
+                };
+
+                if let Err(e) = app_state
+                    .billing_use_cases
+                    .update_payment_status(
+                        invoice_id,
+                        status,
+                        Some(amount_refunded),
+                        None,
+                    )
+                    .await
+                {
+                    tracing::warn!("Could not update payment status for refund on invoice {}: {}", invoice_id, e);
+                }
             }
         }
         _ => {
