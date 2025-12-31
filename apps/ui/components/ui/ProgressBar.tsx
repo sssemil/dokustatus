@@ -11,7 +11,7 @@ export function ProgressBar({ value, max, className = '', showLabel = false }: P
 
   return (
     <div className={className}>
-      <div className="h-2 bg-zinc-800 rounded-full overflow-hidden">
+      <div className="h-2 bg-zinc-800 rounded-full overflow-hidden border border-zinc-700">
         <div
           className={`h-full transition-all duration-500 rounded-full ${
             isHigh ? 'bg-amber-500' : 'bg-blue-500'

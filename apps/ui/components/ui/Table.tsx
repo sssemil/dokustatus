@@ -36,7 +36,7 @@ export function Table<T extends Record<string, unknown>>({
     <div className={`overflow-x-auto ${className}`}>
       <table className="w-full min-w-[500px]">
         <thead>
-          <tr className="bg-zinc-800/50 text-left text-xs text-zinc-400 uppercase tracking-wider">
+          <tr className="bg-zinc-800/50 text-left text-xs text-zinc-400 uppercase tracking-wider border-b border-zinc-700">
             {columns.map((column) => (
               <th
                 key={column.key}

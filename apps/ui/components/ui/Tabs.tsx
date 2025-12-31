@@ -33,7 +33,7 @@ export function Tabs({ tabs, activeTab, onChange, className = '' }: TabsProps) {
   return (
     <div
       role="tablist"
-      className={`flex gap-1 bg-zinc-900 p-1 rounded-lg overflow-x-auto scrollbar-thin ${className}`}
+      className={`flex gap-1 bg-zinc-900 p-1 rounded-lg overflow-x-auto scrollbar-thin border border-zinc-700 ${className}`}
     >
       {tabs.map((tab, index) => (
         <button

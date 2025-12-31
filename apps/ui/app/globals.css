@@ -242,3 +242,13 @@ body {
 
 :where(.light) .bg-emerald-600 .text-white,
 :where(.light) .bg-emerald-600.text-white { color: white; }
+
+/* ========== NESTED BACKGROUND FIX ========== */
+/* Prevent nested containers from having same background */
+:where(.light) .bg-zinc-800\/50 .bg-zinc-800\/50 {
+  background-color: white;
+}
+
+/* ========== DARKER BORDERS IN LIGHT MODE ========== */
+/* Ensure borders are visible in light mode */
+:where(.light) .border-zinc-500 { border-color: var(--color-zinc-400); }

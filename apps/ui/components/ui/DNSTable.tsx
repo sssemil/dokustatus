@@ -32,7 +32,7 @@ export function DNSTable({
       <div className="border border-zinc-700 rounded-lg overflow-x-auto">
         <table className="w-full min-w-[500px]">
           <thead>
-            <tr className="bg-zinc-800/50 text-left text-xs text-zinc-400 uppercase tracking-wider">
+            <tr className="bg-zinc-800/50 text-left text-xs text-zinc-400 uppercase tracking-wider border-b border-zinc-700">
               <th className="px-4 py-3 w-20">Type</th>
               <th className="px-4 py-3">Name</th>
               <th className="px-4 py-3">Value</th>

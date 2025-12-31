@@ -34,7 +34,7 @@ export function Toggle({ enabled, onChange, disabled = false, saving = false, la
         className={`
           relative w-10 h-6 rounded-full transition-all duration-200
           focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950
-          ${enabled ? 'bg-blue-600' : 'bg-zinc-600'}
+          ${enabled ? 'bg-blue-600 border border-blue-500' : 'bg-zinc-600 border border-zinc-500'}
           ${disabled || saving ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}
         `}
       >

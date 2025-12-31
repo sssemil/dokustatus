@@ -95,7 +95,7 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
 
           {/* Theme toggle - full width */}
           <div className="border-t border-zinc-700 px-2 py-2">
-            <div className="relative flex bg-zinc-900 rounded-lg p-1 w-full overflow-hidden">
+            <div className="relative flex bg-zinc-900 rounded-lg p-1 w-full overflow-hidden border border-zinc-700">
               {/* Sliding pill - pointer-events-none to not block clicks */}
               <div
                 className="absolute top-1 bottom-1 bg-zinc-700 rounded-md pointer-events-none transition-[left] duration-300 ease-out"
