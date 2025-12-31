@@ -100,7 +100,7 @@ export default function SettingsPage() {
                 </div>
               </div>
             ) : (
-              <div className="bg-zinc-800/50 rounded-lg p-8 text-center">
+              <div className="bg-zinc-800/50 rounded-lg p-8 text-center border border-zinc-700">
                 <p className="text-zinc-400">
                   Usage metrics will appear here once you start using reauth.dev
                 </p>
@@ -119,12 +119,12 @@ export default function SettingsPage() {
               <h2 className="text-lg font-semibold text-white">Current Plan</h2>
             </div>
 
-            <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg mb-6">
+            <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg mb-6 border border-zinc-700">
               <div>
                 <p className="font-medium text-white">Free Tier</p>
                 <p className="text-sm text-zinc-400">Up to 5 domains, 100 users</p>
               </div>
-              <span className="px-3 py-1 bg-blue-500/10 text-blue-400 text-sm rounded-full">
+              <span className="px-3 py-1 bg-blue-500/10 text-blue-400 text-sm rounded-full border border-blue-500/30">
                 Active
               </span>
             </div>

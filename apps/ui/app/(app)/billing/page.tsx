@@ -219,7 +219,7 @@ export default function BillingPage() {
             <h2 className="text-lg font-semibold text-white">Your Subscription</h2>
           </div>
 
-          <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg">
+          <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
             <div>
               <div className="flex items-center gap-2 mb-1">
                 <span className="font-medium text-white">{subscription.plan_name}</span>

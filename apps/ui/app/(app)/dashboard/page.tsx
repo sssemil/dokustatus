@@ -91,7 +91,7 @@ export default function DashboardPage() {
                   <Link
                     key={d.id}
                     href={`/domains/${d.id}`}
-                    className="flex items-center justify-between w-full p-2 bg-amber-900/20 rounded-lg hover:bg-amber-900/30 transition-colors text-left"
+                    className="flex items-center justify-between w-full p-2 bg-amber-900/20 rounded-lg border border-amber-600/40 hover:bg-amber-900/30 transition-colors text-left"
                   >
                     <span className="text-sm truncate text-zinc-200">{d.domain}</span>
                     <span className="text-xs text-amber-400 flex-shrink-0 ml-2">
@@ -177,7 +177,7 @@ export default function DashboardPage() {
                 <Link
                   key={domain.id}
                   href={`/domains/${domain.id}`}
-                  className="flex items-center justify-between w-full p-2 bg-zinc-900 rounded-lg hover:bg-zinc-800 transition-colors text-left"
+                  className="flex items-center justify-between w-full p-2 bg-zinc-900 rounded-lg border border-zinc-800 hover:bg-zinc-800 transition-colors text-left"
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <div className="min-w-0">

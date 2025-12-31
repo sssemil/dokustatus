@@ -129,7 +129,7 @@ function WaitlistContent() {
         )}
 
         {position && (
-          <div className="bg-zinc-800/50 rounded-xl p-6 mb-6">
+          <div className="bg-zinc-800/50 rounded-xl p-6 mb-6 border border-zinc-700">
             <div className="text-sm text-zinc-500 mb-1">Your position</div>
             <div className="text-5xl font-bold text-blue-400">#{position}</div>
           </div>

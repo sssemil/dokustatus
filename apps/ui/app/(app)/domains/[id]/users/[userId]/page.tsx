@@ -400,11 +400,11 @@ export default function UserDetailPage() {
           </div>
         ) : subscription ? (
           <div className="space-y-4">
-            <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg">
+            <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
               <div>
                 <div className="flex items-center gap-2 mb-1">
                   <span className="font-medium text-white">{subscription.plan_name}</span>
-                  <code className="text-xs bg-zinc-700 px-2 py-0.5 rounded text-zinc-300">{subscription.plan_code}</code>
+                  <code className="text-xs bg-zinc-700 px-2 py-0.5 rounded border border-zinc-600 text-zinc-300">{subscription.plan_code}</code>
                   <Badge variant={subscription.status === 'active' ? 'success' : subscription.status === 'trialing' ? 'info' : subscription.status === 'past_due' ? 'warning' : 'error'}>
                     {getStatusLabel(subscription.status as any)}
                   </Badge>
@@ -436,9 +436,9 @@ export default function UserDetailPage() {
         <h2 className="text-lg font-semibold text-white mb-4">Actions</h2>
         <div className="space-y-4">
           {/* Freeze/Unfreeze */}
-          <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg">
+          <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center flex-shrink-0">
+              <div className="w-8 h-8 bg-zinc-800 rounded-lg border border-zinc-700 flex items-center justify-center flex-shrink-0">
                 <Snowflake size={16} className="text-zinc-400" />
               </div>
               <div>
@@ -458,9 +458,9 @@ export default function UserDetailPage() {
           </div>
 
           {/* Whitelist/Unwhitelist */}
-          <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg">
+          <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
             <div className="flex items-start gap-3">
-              <div className="w-8 h-8 bg-zinc-800 rounded-lg flex items-center justify-center flex-shrink-0">
+              <div className="w-8 h-8 bg-zinc-800 rounded-lg border border-zinc-700 flex items-center justify-center flex-shrink-0">
                 <Shield size={16} className="text-zinc-400" />
               </div>
               <div>

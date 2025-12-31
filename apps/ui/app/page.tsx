@@ -177,7 +177,7 @@ export default function Home() {
           <p className="text-sm text-zinc-400 mb-4">
             We sent a sign-in link to
           </p>
-          <code className="block bg-zinc-800 px-3 py-2 rounded-lg text-sm text-white mb-4">{email}</code>
+          <code className="block bg-zinc-800 px-3 py-2 rounded-lg border border-zinc-700 text-sm text-white mb-4">{email}</code>
           <p className="text-xs text-zinc-500 mb-6">
             Click the link in the email to sign in. The link expires in 15 minutes.
           </p>

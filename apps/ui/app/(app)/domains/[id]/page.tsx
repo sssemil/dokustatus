@@ -929,7 +929,7 @@ export default function DomainDetailPage() {
 
               <div className="space-y-4">
                 {/* CNAME Record */}
-                <div className="bg-zinc-800/50 rounded-lg p-4">
+                <div className="bg-zinc-800/50 rounded-lg p-4 border border-zinc-700">
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="font-medium text-white text-sm">CNAME Record</h4>
                     {(domain.status === 'verified' || cnameVerified) ? (
@@ -940,16 +940,16 @@ export default function DomainDetailPage() {
                   </div>
                   <div className="grid grid-cols-[80px_1fr_auto] gap-3 items-center text-sm">
                     <span className="text-zinc-500">Name</span>
-                    <code className="bg-zinc-900 px-3 py-1.5 rounded text-zinc-300 font-mono text-xs">{domain.dns_records.cname_name}</code>
+                    <code className="bg-zinc-900 px-3 py-1.5 rounded border border-zinc-800 text-zinc-300 font-mono text-xs">{domain.dns_records.cname_name}</code>
                     <CopyButton text={domain.dns_records.cname_name} />
                     <span className="text-zinc-500">Value</span>
-                    <code className="bg-zinc-900 px-3 py-1.5 rounded text-zinc-300 font-mono text-xs">{domain.dns_records.cname_value}</code>
+                    <code className="bg-zinc-900 px-3 py-1.5 rounded border border-zinc-800 text-zinc-300 font-mono text-xs">{domain.dns_records.cname_value}</code>
                     <CopyButton text={domain.dns_records.cname_value} />
                   </div>
                 </div>
 
                 {/* TXT Record */}
-                <div className="bg-zinc-800/50 rounded-lg p-4">
+                <div className="bg-zinc-800/50 rounded-lg p-4 border border-zinc-700">
                   <div className="flex items-center justify-between mb-3">
                     <h4 className="font-medium text-white text-sm">TXT Record</h4>
                     {(domain.status === 'verified' || txtVerified) ? (
@@ -960,10 +960,10 @@ export default function DomainDetailPage() {
                   </div>
                   <div className="grid grid-cols-[80px_1fr_auto] gap-3 items-center text-sm">
                     <span className="text-zinc-500">Name</span>
-                    <code className="bg-zinc-900 px-3 py-1.5 rounded text-zinc-300 font-mono text-xs">{domain.dns_records.txt_name}</code>
+                    <code className="bg-zinc-900 px-3 py-1.5 rounded border border-zinc-800 text-zinc-300 font-mono text-xs">{domain.dns_records.txt_name}</code>
                     <CopyButton text={domain.dns_records.txt_name} />
                     <span className="text-zinc-500">Value</span>
-                    <code className="bg-zinc-900 px-3 py-1.5 rounded text-zinc-300 font-mono text-xs truncate">{domain.dns_records.txt_value}</code>
+                    <code className="bg-zinc-900 px-3 py-1.5 rounded border border-zinc-800 text-zinc-300 font-mono text-xs truncate">{domain.dns_records.txt_value}</code>
                     <CopyButton text={domain.dns_records.txt_value} />
                   </div>
                 </div>
@@ -1076,13 +1076,13 @@ export default function DomainDetailPage() {
                   </div>
                 )}
 
-                <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
+                <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3 border border-zinc-700">
                   <div className="flex items-center justify-between">
                     <h3 className="font-medium text-white text-sm">Redirect URI</h3>
                     <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400">Open Console</a>
                   </div>
                   <div className="flex items-center gap-2">
-                    <code className="flex-1 bg-zinc-900 px-3 py-2 rounded text-xs text-zinc-300 font-mono break-all">
+                    <code className="flex-1 bg-zinc-900 px-3 py-2 rounded border border-zinc-800 text-xs text-zinc-300 font-mono break-all">
                       https://reauth.{domain.domain}/callback/google
                     </code>
                     <CopyButton text={`https://reauth.${domain.domain}/callback/google`} />
@@ -1183,7 +1183,7 @@ export default function DomainDetailPage() {
                 {endUsers.filter(u => u.email.toLowerCase().includes(userSearch.toLowerCase())).map((user) => (
                   <div
                     key={user.id}
-                    className="flex items-center justify-between p-3 bg-zinc-900 rounded-lg group hover:bg-zinc-800/80 transition-colors cursor-pointer"
+                    className="flex items-center justify-between p-3 bg-zinc-900 rounded-lg border border-zinc-800 group hover:bg-zinc-800/80 transition-colors cursor-pointer"
                     onClick={() => router.push(`/domains/${domainId}/users/${user.id}`)}
                   >
                     <div>
@@ -1247,7 +1247,7 @@ export default function DomainDetailPage() {
                   <div>
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-white">{key.name}</span>
-                      <code className="bg-zinc-800 px-2 py-0.5 rounded text-xs text-zinc-400">{key.key_prefix}...</code>
+                      <code className="bg-zinc-800 px-2 py-0.5 rounded border border-zinc-700 text-xs text-zinc-400">{key.key_prefix}...</code>
                     </div>
                     <div className="flex items-center gap-3 mt-1 text-xs text-zinc-500">
                       {key.created_at && <span>Created {formatDate(key.created_at)}</span>}
@@ -1308,7 +1308,7 @@ export default function DomainDetailPage() {
 
             {/* Active Mode Toggle */}
             {billingConfig && (billingConfig.test || billingConfig.live) && (
-              <div className="flex items-center gap-4 mb-6 p-3 bg-zinc-800/50 rounded-lg">
+              <div className="flex items-center gap-4 mb-6 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
                 <span className="text-sm text-zinc-300">Active Mode:</span>
                 <div className="flex gap-2">
                   <button
@@ -1487,11 +1487,11 @@ export default function DomainDetailPage() {
             ) : (
               <div className="space-y-3">
                 {billingPlans.filter(p => !p.is_archived).map((plan) => (
-                  <div key={plan.id} className="flex items-center justify-between p-4 bg-zinc-900 rounded-lg">
+                  <div key={plan.id} className="flex items-center justify-between p-4 bg-zinc-900 rounded-lg border border-zinc-800">
                     <div className="flex-1">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-white">{plan.name}</span>
-                        <code className="text-xs bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">{plan.code}</code>
+                        <code className="text-xs bg-zinc-800 px-2 py-0.5 rounded border border-zinc-700 text-zinc-400">{plan.code}</code>
                         {!plan.is_public && <Badge variant="warning">Private</Badge>}
                         {plan.trial_days > 0 && <Badge variant="info">{plan.trial_days}d trial</Badge>}
                       </div>
@@ -1501,7 +1501,7 @@ export default function DomainDetailPage() {
                       {plan.features.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-2">
                           {plan.features.slice(0, 3).map((feature, i) => (
-                            <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">{feature}</span>
+                            <span key={i} className="text-xs bg-zinc-800 px-2 py-0.5 rounded border border-zinc-700 text-zinc-400">{feature}</span>
                           ))}
                           {plan.features.length > 3 && (
                             <span className="text-xs text-zinc-500">+{plan.features.length - 3} more</span>
@@ -1542,23 +1542,23 @@ export default function DomainDetailPage() {
             {/* Summary Cards */}
             {paymentsSummary && (
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
-                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center border border-zinc-700">
                   <div className="text-xs text-zinc-400">Revenue</div>
                   <div className="text-lg font-semibold text-green-400">{formatPrice(paymentsSummary.total_revenue_cents)}</div>
                 </div>
-                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center border border-zinc-700">
                   <div className="text-xs text-zinc-400">Refunded</div>
                   <div className="text-lg font-semibold text-blue-400">{formatPrice(paymentsSummary.total_refunded_cents)}</div>
                 </div>
-                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center border border-zinc-700">
                   <div className="text-xs text-zinc-400">Payments</div>
                   <div className="text-lg font-semibold">{paymentsSummary.payment_count}</div>
                 </div>
-                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center border border-zinc-700">
                   <div className="text-xs text-zinc-400">Successful</div>
                   <div className="text-lg font-semibold text-green-400">{paymentsSummary.successful_payments}</div>
                 </div>
-                <div className="bg-zinc-800/50 rounded-lg p-3 text-center">
+                <div className="bg-zinc-800/50 rounded-lg p-3 text-center border border-zinc-700">
                   <div className="text-xs text-zinc-400">Failed</div>
                   <div className="text-lg font-semibold text-red-400">{paymentsSummary.failed_payments}</div>
                 </div>
