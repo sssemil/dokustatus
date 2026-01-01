@@ -359,26 +359,28 @@ def merge_outbound_task(slug: str) -> bool:
 
     print(f"Merging completed task: {slug} (branch {branch})")
 
-    # Stash any dirty changes
-    stashed = git_stash_if_dirty()
-
-    # Ensure we are on the task branch
-    if not git_switch(branch):
-        print(f"Failed to switch to branch {branch}")
-        if stashed:
-            git_stash_pop()
+    # Verify we are on the task branch - if not, something went wrong
+    current = git_current_branch()
+    if current != branch:
+        print(f"ERROR: outbound task {slug} exists but we're on branch '{current}', not '{branch}'")
+        print("This indicates the previous session didn't complete properly.")
+        print("Manual intervention required: switch to the task branch and investigate.")
         return False
 
     # Verify state - check for directory with ticket.md
     if not outbound_dir.exists() or not (outbound_dir / "ticket.md").exists():
         print(f"ERROR: outbound directory missing for {slug} — refusing merge")
+        return False
+
+    # Stash any dirty changes before switching to main
+    stashed = git_stash_if_dirty()
+
+    # Switch to main for merge
+    if not git_switch("main"):
+        print("ERROR: Failed to switch to main branch")
         if stashed:
             git_stash_pop()
         return False
-
-    # Merge to main
-    if not git_switch("main"):
-        git_switch("main", create=True)
 
     run(["git", "pull", "--ff-only"], check=False)
 
@@ -396,13 +398,15 @@ def merge_outbound_task(slug: str) -> bool:
         shutil.rmtree(done_dir)
     shutil.move(str(outbound_dir), str(done_dir))
 
-    # Cleanup session file
+    # Cleanup session file and planning state
     if session_file.exists():
         session_file.unlink()
+    planning_file = SESSIONS_DIR / f"{slug}.planning"
+    if planning_file.exists():
+        planning_file.unlink()
 
-    # Pop stash if we stashed
-    if stashed:
-        git_stash_pop()
+    # Optionally delete the task branch
+    run(["git", "branch", "-d", branch], check=False)
 
     print(f"Merged and archived: {slug}")
     return True
