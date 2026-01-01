@@ -30,9 +30,10 @@ impl PaymentMode {
     /// Detect mode from Stripe key prefix.
     /// Test keys start with sk_test_ or pk_test_.
     /// Live keys start with sk_live_ or pk_live_.
-    /// Restricted keys (rk_*) are treated as test by default.
+    /// Restricted keys follow the same live/test prefix rules.
     pub fn from_stripe_key_prefix(key: &str) -> Self {
-        if key.starts_with("sk_live_") || key.starts_with("pk_live_") {
+        if key.starts_with("sk_live_") || key.starts_with("pk_live_") || key.starts_with("rk_live_")
+        {
             PaymentMode::Live
         } else {
             PaymentMode::Test
@@ -105,14 +106,14 @@ mod tests {
             PaymentMode::from_stripe_key_prefix("pk_live_abc123"),
             PaymentMode::Live
         );
-        // Restricted keys default to test
+        // Restricted keys follow live/test prefixes
         assert_eq!(
             PaymentMode::from_stripe_key_prefix("rk_test_abc123"),
             PaymentMode::Test
         );
         assert_eq!(
             PaymentMode::from_stripe_key_prefix("rk_live_abc123"),
-            PaymentMode::Test
+            PaymentMode::Live
         );
     }
 
@@ -127,12 +128,21 @@ mod tests {
         assert!(test_mode
             .validate_stripe_key_prefix("sk_live_abc", "secret_key")
             .is_err());
+        assert!(test_mode
+            .validate_stripe_key_prefix("rk_test_abc", "secret_key")
+            .is_ok());
+        assert!(test_mode
+            .validate_stripe_key_prefix("rk_live_abc", "secret_key")
+            .is_err());
         assert!(live_mode
             .validate_stripe_key_prefix("sk_live_abc", "secret_key")
             .is_ok());
         assert!(live_mode
             .validate_stripe_key_prefix("sk_test_abc", "secret_key")
             .is_err());
+        assert!(live_mode
+            .validate_stripe_key_prefix("rk_live_abc", "secret_key")
+            .is_ok());
     }
 
     #[test]
