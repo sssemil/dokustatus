@@ -157,14 +157,19 @@ impl UserSubscriptionRepo for PostgresPersistence {
         Ok(rows
             .iter()
             .map(|row| {
+                let plan_id: uuid::Uuid = row.get("p_id");
                 let features_json: serde_json::Value = row.get("p_features");
-                let features: Vec<String> =
-                    serde_json::from_value(features_json).unwrap_or_default();
+                let features: Vec<String> = super::parse_json_with_fallback(
+                    &features_json,
+                    "features",
+                    "subscription_plan",
+                    &plan_id.to_string(),
+                );
 
                 UserSubscriptionWithPlan {
                     subscription: row_to_profile(row),
                     plan: SubscriptionPlanProfile {
-                        id: row.get("p_id"),
+                        id: plan_id,
                         domain_id: row.get("p_domain_id"),
                         stripe_mode: row.get("p_stripe_mode"),
                         payment_provider: row

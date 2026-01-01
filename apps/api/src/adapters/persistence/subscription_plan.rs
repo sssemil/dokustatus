@@ -14,11 +14,17 @@ use crate::{
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> SubscriptionPlanProfile {
+    let id: uuid::Uuid = row.get("id");
     let features_json: serde_json::Value = row.get("features");
-    let features: Vec<String> = serde_json::from_value(features_json).unwrap_or_default();
+    let features: Vec<String> = super::parse_json_with_fallback(
+        &features_json,
+        "features",
+        "subscription_plan",
+        &id.to_string(),
+    );
 
     SubscriptionPlanProfile {
-        id: row.get("id"),
+        id,
         domain_id: row.get("domain_id"),
         stripe_mode: row.get("stripe_mode"),
         payment_provider: row.get::<Option<PaymentProvider>, _>("payment_provider"),
@@ -133,7 +139,10 @@ impl SubscriptionPlanRepo for PostgresPersistence {
         input: &CreatePlanInput,
     ) -> AppResult<SubscriptionPlanProfile> {
         let id = Uuid::new_v4();
-        let features_json = serde_json::to_value(&input.features).unwrap_or(serde_json::json!([]));
+        let features_json = serde_json::to_value(&input.features).map_err(|err| {
+            tracing::error!(error = %err, "Failed to serialize features to JSON");
+            AppError::Internal("Failed to serialize features".into())
+        })?;
 
         // Get max display_order for this domain and mode
         let max_order: Option<i32> = sqlx::query_scalar(
@@ -181,6 +190,16 @@ impl SubscriptionPlanRepo for PostgresPersistence {
         id: Uuid,
         input: &UpdatePlanInput,
     ) -> AppResult<SubscriptionPlanProfile> {
+        let features_json = input
+            .features
+            .as_ref()
+            .map(|f| serde_json::to_value(f))
+            .transpose()
+            .map_err(|err| {
+                tracing::error!(error = %err, "Failed to serialize features to JSON");
+                AppError::Internal("Failed to serialize features".into())
+            })?;
+
         // For simplicity, we'll use a simpler approach with COALESCE
         let row = sqlx::query(&format!(
             r#"
@@ -206,12 +225,7 @@ impl SubscriptionPlanRepo for PostgresPersistence {
         .bind(&input.interval)
         .bind(input.interval_count)
         .bind(input.trial_days)
-        .bind(
-            input
-                .features
-                .as_ref()
-                .map(|f| serde_json::to_value(f).unwrap_or(serde_json::json!([]))),
-        )
+        .bind(features_json)
         .bind(input.is_public)
         .fetch_one(&self.pool)
         .await
