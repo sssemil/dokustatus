@@ -153,11 +153,15 @@ impl DomainRepo for PostgresPersistence {
     }
 
     async fn delete(&self, domain_id: Uuid) -> AppResult<()> {
+        let mut tx = self.pool.begin().await.map_err(AppError::from)?;
+
         sqlx::query("DELETE FROM domains WHERE id = $1")
             .bind(domain_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(AppError::from)?;
+
+        tx.commit().await.map_err(AppError::from)?;
         Ok(())
     }
 
