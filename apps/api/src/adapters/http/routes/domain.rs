@@ -216,6 +216,17 @@ async fn list_domains(
 
     let domains = app_state.domain_use_cases.list_domains(user_id).await?;
 
+    let verified_domain_ids: Vec<Uuid> = domains
+        .iter()
+        .filter(|domain| domain.status == DomainStatus::Verified)
+        .map(|domain| domain.id)
+        .collect();
+
+    let auth_methods_map = app_state
+        .domain_auth_use_cases
+        .has_auth_methods_for_owner_domains(&verified_domain_ids)
+        .await;
+
     let mut response: Vec<DomainResponse> = Vec::with_capacity(domains.len());
 
     for d in domains {
@@ -223,15 +234,9 @@ async fn list_domains(
 
         // Check if domain has any auth methods enabled (only matters for verified domains)
         let has_auth_methods = if d.status == DomainStatus::Verified {
-            if let Ok(Some(config)) = app_state
-                .domain_auth_use_cases
-                .get_auth_config(user_id, d.id)
-                .await
-                .map(|(cfg, _)| Some(cfg))
-            {
-                config.magic_link_enabled || config.google_oauth_enabled
-            } else {
-                false
+            match &auth_methods_map {
+                Ok(map) => map.get(&d.id).copied().unwrap_or(true),
+                Err(_) => false,
             }
         } else {
             true // Non-verified domains don't need this warning

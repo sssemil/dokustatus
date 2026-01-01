@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -22,8 +23,14 @@ use crate::infra::crypto::ProcessCipher;
 
 #[async_trait]
 pub trait DomainAuthConfigRepo: Send + Sync {
-    async fn get_by_domain_id(&self, domain_id: Uuid)
-    -> AppResult<Option<DomainAuthConfigProfile>>;
+    async fn get_by_domain_id(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Option<DomainAuthConfigProfile>>;
+    async fn get_by_domain_ids(
+        &self,
+        domain_ids: &[Uuid],
+    ) -> AppResult<Vec<DomainAuthConfigProfile>>;
     async fn upsert(
         &self,
         domain_id: Uuid,
@@ -527,6 +534,34 @@ impl DomainAuthUseCases {
     // ========================================================================
     // Protected endpoints (for dashboard)
     // ========================================================================
+
+    /// Batch check if domains have auth methods enabled.
+    ///
+    /// IMPORTANT: This method does NOT verify domain ownership. It must only be
+    /// called with domain IDs that have already been authorized.
+    /// Domains without explicit config default to `true` (matches get_auth_config).
+    pub(crate) async fn has_auth_methods_for_owner_domains(
+        &self,
+        domain_ids: &[Uuid],
+    ) -> AppResult<HashMap<Uuid, bool>> {
+        if domain_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let configs = self.auth_config_repo.get_by_domain_ids(domain_ids).await?;
+        let mut result = HashMap::with_capacity(domain_ids.len());
+
+        for config in configs {
+            let has_methods = config.magic_link_enabled || config.google_oauth_enabled;
+            result.insert(config.domain_id, has_methods);
+        }
+
+        for &domain_id in domain_ids {
+            result.entry(domain_id).or_insert(true);
+        }
+
+        Ok(result)
+    }
 
     /// Get auth config for a domain (domain owner only)
     #[instrument(skip(self))]
@@ -1505,6 +1540,8 @@ fn is_valid_redirect_url(url: &str, domain: &str) -> bool {
 mod tests {
     use super::*;
     use async_trait::async_trait;
+    use base64::Engine as _;
+    use crate::domain::entities::stripe_mode::StripeMode;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -1558,6 +1595,385 @@ mod tests {
             }
 
             Ok(Some(stored.data))
+        }
+    }
+
+    #[derive(Default)]
+    struct InMemoryAuthConfigRepo {
+        configs: Mutex<HashMap<Uuid, DomainAuthConfigProfile>>,
+    }
+
+    #[async_trait]
+    impl DomainAuthConfigRepo for InMemoryAuthConfigRepo {
+        async fn get_by_domain_id(
+            &self,
+            domain_id: Uuid,
+        ) -> AppResult<Option<DomainAuthConfigProfile>> {
+            Ok(self
+                .configs
+                .lock()
+                .expect("auth config lock")
+                .get(&domain_id)
+                .cloned())
+        }
+
+        async fn get_by_domain_ids(
+            &self,
+            domain_ids: &[Uuid],
+        ) -> AppResult<Vec<DomainAuthConfigProfile>> {
+            let configs = self.configs.lock().expect("auth config lock");
+            Ok(domain_ids
+                .iter()
+                .filter_map(|id| configs.get(id).cloned())
+                .collect())
+        }
+
+        async fn upsert(
+            &self,
+            domain_id: Uuid,
+            magic_link_enabled: bool,
+            google_oauth_enabled: bool,
+            redirect_url: Option<&str>,
+            whitelist_enabled: bool,
+        ) -> AppResult<DomainAuthConfigProfile> {
+            let profile = DomainAuthConfigProfile {
+                id: Uuid::new_v4(),
+                domain_id,
+                magic_link_enabled,
+                google_oauth_enabled,
+                redirect_url: redirect_url.map(|value| value.to_string()),
+                whitelist_enabled,
+                access_token_ttl_secs: 0,
+                refresh_token_ttl_days: 0,
+                created_at: None,
+                updated_at: None,
+            };
+            self.configs
+                .lock()
+                .expect("auth config lock")
+                .insert(domain_id, profile.clone());
+            Ok(profile)
+        }
+
+        async fn delete(&self, domain_id: Uuid) -> AppResult<()> {
+            self.configs
+                .lock()
+                .expect("auth config lock")
+                .remove(&domain_id);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct NoopRepo;
+
+    #[async_trait]
+    impl DomainRepo for NoopRepo {
+        async fn create(&self, _owner_end_user_id: Uuid, _domain: &str) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_by_id(&self, _domain_id: Uuid) -> AppResult<Option<DomainProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_by_domain(&self, _domain: &str) -> AppResult<Option<DomainProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn list_by_owner(
+            &self,
+            _owner_end_user_id: Uuid,
+        ) -> AppResult<Vec<DomainProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn update_status(&self, _domain_id: Uuid, _status: &str) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_verifying(&self, _domain_id: Uuid) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_verified(&self, _domain_id: Uuid) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_failed(&self, _domain_id: Uuid) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn delete(&self, _domain_id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_verifying_domains(&self) -> AppResult<Vec<DomainProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_billing_stripe_mode(
+            &self,
+            _domain_id: Uuid,
+            _mode: StripeMode,
+        ) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl DomainAuthMagicLinkRepo for NoopRepo {
+        async fn get_by_domain_id(
+            &self,
+            _domain_id: Uuid,
+        ) -> AppResult<Option<DomainAuthMagicLinkProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn upsert(
+            &self,
+            _domain_id: Uuid,
+            _resend_api_key_encrypted: &str,
+            _from_email: &str,
+        ) -> AppResult<DomainAuthMagicLinkProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn update_from_email(&self, _domain_id: Uuid, _from_email: &str) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn delete(&self, _domain_id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl DomainAuthGoogleOAuthRepo for NoopRepo {
+        async fn get_by_domain_id(
+            &self,
+            _domain_id: Uuid,
+        ) -> AppResult<Option<DomainAuthGoogleOAuthProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn upsert(
+            &self,
+            _domain_id: Uuid,
+            _client_id: &str,
+            _client_secret_encrypted: &str,
+        ) -> AppResult<DomainAuthGoogleOAuthProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn delete(&self, _domain_id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl DomainEndUserRepo for NoopRepo {
+        async fn get_by_id(&self, _id: Uuid) -> AppResult<Option<DomainEndUserProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_by_domain_and_email(
+            &self,
+            _domain_id: Uuid,
+            _email: &str,
+        ) -> AppResult<Option<DomainEndUserProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_by_domain_and_google_id(
+            &self,
+            _domain_id: Uuid,
+            _google_id: &str,
+        ) -> AppResult<Option<DomainEndUserProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn upsert(
+            &self,
+            _domain_id: Uuid,
+            _email: &str,
+        ) -> AppResult<DomainEndUserProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn upsert_with_google_id(
+            &self,
+            _domain_id: Uuid,
+            _email: &str,
+            _google_id: &str,
+        ) -> AppResult<DomainEndUserProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn mark_verified(&self, _id: Uuid) -> AppResult<DomainEndUserProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn update_last_login(&self, _id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_google_id(&self, _id: Uuid, _google_id: &str) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn clear_google_id(&self, _id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn list_by_domain(&self, _domain_id: Uuid) -> AppResult<Vec<DomainEndUserProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn delete(&self, _id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_frozen(&self, _id: Uuid, _frozen: bool) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_whitelisted(&self, _id: Uuid, _whitelisted: bool) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn whitelist_all_in_domain(&self, _domain_id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn count_by_domain_ids(&self, _domain_ids: &[Uuid]) -> AppResult<i64> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_waitlist_position(&self, _domain_id: Uuid, _user_id: Uuid) -> AppResult<i64> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_roles(&self, _id: Uuid, _roles: &[String]) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn remove_role_from_all_users(
+            &self,
+            _domain_id: Uuid,
+            _role_name: &str,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn count_users_with_role(
+            &self,
+            _domain_id: Uuid,
+            _role_name: &str,
+        ) -> AppResult<i64> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl OAuthStateStore for NoopRepo {
+        async fn store_state(
+            &self,
+            _state: &str,
+            _data: &OAuthStateData,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn consume_state(&self, _state: &str) -> AppResult<Option<OAuthStateData>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn store_completion(
+            &self,
+            _token: &str,
+            _data: &OAuthCompletionData,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn consume_completion(
+            &self,
+            _token: &str,
+        ) -> AppResult<Option<OAuthCompletionData>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn store_link_confirmation(
+            &self,
+            _token: &str,
+            _data: &OAuthLinkConfirmationData,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn consume_link_confirmation(
+            &self,
+            _token: &str,
+        ) -> AppResult<Option<OAuthLinkConfirmationData>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl DomainEmailSender for NoopRepo {
+        async fn send(
+            &self,
+            _api_key: &str,
+            _from_email: &str,
+            _to: &str,
+            _subject: &str,
+            _html: &str,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    fn build_use_cases(auth_repo: Arc<dyn DomainAuthConfigRepo>) -> DomainAuthUseCases {
+        let key_b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 32]);
+        let cipher = ProcessCipher::new_from_base64(&key_b64).expect("cipher");
+        let noop = Arc::new(NoopRepo::default());
+        DomainAuthUseCases::new(
+            noop.clone(),
+            auth_repo,
+            noop.clone(),
+            noop.clone(),
+            noop.clone(),
+            Arc::new(InMemoryMagicLinkStore::default()),
+            noop.clone(),
+            noop,
+            cipher,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn auth_config_profile(
+        domain_id: Uuid,
+        magic_link_enabled: bool,
+        google_oauth_enabled: bool,
+    ) -> DomainAuthConfigProfile {
+        DomainAuthConfigProfile {
+            id: Uuid::new_v4(),
+            domain_id,
+            magic_link_enabled,
+            google_oauth_enabled,
+            redirect_url: None,
+            whitelist_enabled: false,
+            access_token_ttl_secs: 0,
+            refresh_token_ttl_days: 0,
+            created_at: None,
+            updated_at: None,
         }
     }
 
@@ -1647,5 +2063,90 @@ mod tests {
 
         assert_eq!(consumed.end_user_id, end_user_id);
         assert_eq!(consumed.domain_id, domain_id);
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_empty_input() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let use_cases = build_use_cases(repo);
+
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[])
+            .await
+            .expect("has auth methods");
+
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_with_config() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let domain_id = Uuid::new_v4();
+        repo.configs
+            .lock()
+            .expect("auth config lock")
+            .insert(domain_id, auth_config_profile(domain_id, true, false));
+
+        let use_cases = build_use_cases(repo);
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[domain_id])
+            .await
+            .expect("has auth methods");
+
+        assert_eq!(result.get(&domain_id), Some(&true));
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_disabled_config() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let domain_id = Uuid::new_v4();
+        repo.configs
+            .lock()
+            .expect("auth config lock")
+            .insert(domain_id, auth_config_profile(domain_id, false, false));
+
+        let use_cases = build_use_cases(repo);
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[domain_id])
+            .await
+            .expect("has auth methods");
+
+        assert_eq!(result.get(&domain_id), Some(&false));
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_missing_config_defaults_to_true() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let domain_id = Uuid::new_v4();
+        let use_cases = build_use_cases(repo);
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[domain_id])
+            .await
+            .expect("has auth methods");
+
+        assert_eq!(result.get(&domain_id), Some(&true));
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_mixed_configs() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let domain_a = Uuid::new_v4();
+        let domain_b = Uuid::new_v4();
+        let domain_c = Uuid::new_v4();
+        {
+            let mut configs = repo.configs.lock().expect("auth config lock");
+            configs.insert(domain_a, auth_config_profile(domain_a, true, false));
+            configs.insert(domain_b, auth_config_profile(domain_b, false, false));
+        }
+
+        let use_cases = build_use_cases(repo);
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[domain_a, domain_b, domain_c])
+            .await
+            .expect("has auth methods");
+
+        assert_eq!(result.get(&domain_a), Some(&true));
+        assert_eq!(result.get(&domain_b), Some(&false));
+        assert_eq!(result.get(&domain_c), Some(&true));
     }
 }
