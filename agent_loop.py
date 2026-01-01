@@ -293,8 +293,7 @@ Then stop."""
         label=f"Claude {plan_file}",
         input_text=prompt,
         watch_file=expected_plan,
-        watch_min_size=100,  # Plan should be at least 100 bytes
-        use_script=True  # Capture TUI output
+        watch_min_size=100  # Plan should be at least 100 bytes
     )
 
     # Commit the plan and log
