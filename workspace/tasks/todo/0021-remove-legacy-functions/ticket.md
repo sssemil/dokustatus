@@ -1,0 +1,1 @@
+Find and remove/refactor out all legacy functions, such as `hash_domain_token_legacy`.
