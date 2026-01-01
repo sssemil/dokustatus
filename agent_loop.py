@@ -445,21 +445,25 @@ def resume_task_session(slug: str):
 
 
 def validate_in_progress_state_or_die():
-    """Validate that the git branch and in-progress state are consistent."""
+    """Validate that the git branch and task state are consistent."""
     count = current_in_progress_count()
     current_branch = git_current_branch()
 
     if current_branch.startswith("task/"):
         slug = current_branch[5:]  # Remove "task/" prefix
 
-        if count != 1:
-            print(f"ERROR: on task branch {current_branch} but {count} tasks in-progress")
-            print("This is an inconsistent state — stop and fix manually.")
-            sys.exit(1)
+        in_progress_dir = TASKS_IN_PROGRESS / slug
+        outbound_dir = TASKS_OUTBOUND / slug
 
-        expected_dir = TASKS_IN_PROGRESS / slug
-        if not expected_dir.exists() or not (expected_dir / "ticket.md").exists():
-            print(f"ERROR: branch {current_branch} does not match in-progress directory")
+        # Valid states when on a task branch:
+        # 1. Task is in in-progress (working on it)
+        # 2. Task is in outbound (completed, ready to merge)
+        in_progress = in_progress_dir.exists() and (in_progress_dir / "ticket.md").exists()
+        in_outbound = outbound_dir.exists() and (outbound_dir / "ticket.md").exists()
+
+        if not in_progress and not in_outbound:
+            print(f"ERROR: on task branch {current_branch} but task not in in-progress or outbound")
+            print("This is an inconsistent state — stop and fix manually.")
             sys.exit(1)
 
 
