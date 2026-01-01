@@ -393,10 +393,13 @@ def merge_outbound_task(slug: str) -> bool:
 
     run(["git", "commit", "-m", f"complete task {slug} — squash merge"], check=False)
 
-    # Move directory to done
+    # Move directory to done (using git mv to track the change)
     if done_dir.exists():
         shutil.rmtree(done_dir)
-    shutil.move(str(outbound_dir), str(done_dir))
+
+    # Use git mv for tracked files, then commit
+    run(["git", "mv", str(outbound_dir), str(done_dir)], check=False)
+    run(["git", "commit", "-m", f"archive task {slug} to done"], check=False)
 
     # Cleanup session file and planning state
     if session_file.exists():
@@ -405,8 +408,8 @@ def merge_outbound_task(slug: str) -> bool:
     if planning_file.exists():
         planning_file.unlink()
 
-    # Optionally delete the task branch
-    run(["git", "branch", "-d", branch], check=False)
+    # Force delete the task branch (squash merge means it won't be "fully merged")
+    run(["git", "branch", "-D", branch], check=False)
 
     print(f"Merged and archived: {slug}")
     return True
