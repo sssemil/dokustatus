@@ -1816,6 +1816,44 @@ impl DomainBillingUseCases {
         self.payment_repo.upsert_from_stripe(&input).await
     }
 
+    /// Create a payment record for dummy provider checkout
+    pub async fn create_dummy_payment(
+        &self,
+        domain_id: Uuid,
+        user_id: Uuid,
+        subscription_id: Uuid,
+        plan: &SubscriptionPlanProfile,
+    ) -> AppResult<BillingPaymentProfile> {
+        let now = chrono::Utc::now().naive_utc();
+        let invoice_id = format!("dummy_inv_{}", Uuid::new_v4());
+
+        let input = CreatePaymentInput {
+            domain_id,
+            stripe_mode: StripeMode::Test,
+            end_user_id: user_id,
+            subscription_id: Some(subscription_id),
+            stripe_invoice_id: invoice_id,
+            stripe_payment_intent_id: Some(format!("dummy_pi_{}", Uuid::new_v4())),
+            stripe_customer_id: format!("dummy_cus_{}", user_id),
+            amount_cents: plan.price_cents,
+            amount_paid_cents: plan.price_cents,
+            currency: plan.currency.to_uppercase(),
+            status: PaymentStatus::Paid,
+            plan_id: Some(plan.id),
+            plan_code: Some(plan.code.clone()),
+            plan_name: Some(plan.name.clone()),
+            hosted_invoice_url: None,
+            invoice_pdf_url: None,
+            invoice_number: Some(format!("DUMMY-{}", now.format("%Y%m%d%H%M%S"))),
+            billing_reason: Some("subscription_create".to_string()),
+            failure_message: None,
+            invoice_created_at: Some(now),
+            payment_date: Some(now),
+        };
+
+        self.payment_repo.upsert_from_stripe(&input).await
+    }
+
     /// Update payment status (for failures and refunds)
     pub async fn update_payment_status(
         &self,

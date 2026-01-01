@@ -2491,28 +2491,72 @@ async fn create_dummy_checkout(
     }
 
     // Get the plan
-    let _plan = app_state
+    let plan = app_state
         .billing_use_cases
         .get_plan_by_code(domain_id, &payload.plan_code)
         .await?
         .ok_or(AppError::NotFound)?;
 
-    // For now, return a simulated response based on scenario
-    // Full implementation would use the PaymentProviderFactory and DummyPaymentClient
+    // Build response based on scenario
     let response = match payload.scenario {
-        PaymentScenario::Success => DummyCheckoutResponse {
-            success: true,
-            requires_confirmation: false,
-            confirmation_token: None,
-            error_message: None,
-            subscription_id: Some(format!("dummy_sub_{}", Uuid::new_v4())),
+        PaymentScenario::Success => {
+            // Generate subscription ID
+            let subscription_id_str = format!("dummy_sub_{}", Uuid::new_v4());
+
+            // Create subscription and payment records
+            use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
+            use crate::domain::entities::user_subscription::SubscriptionStatus;
+            use crate::domain::entities::stripe_mode::StripeMode;
+
+            let now = chrono::Utc::now().naive_utc();
+            let period_end = now + chrono::Duration::days(
+                match plan.interval.as_str() {
+                    "yearly" => 365 * plan.interval_count as i64,
+                    _ => 30 * plan.interval_count as i64, // monthly default
+                }
+            );
+
+            let subscription = app_state.billing_use_cases.create_or_update_subscription(
+                &CreateSubscriptionInput {
+                    domain_id,
+                    stripe_mode: StripeMode::Test,
+                    end_user_id: user_id,
+                    plan_id: plan.id,
+                    stripe_customer_id: format!("dummy_cus_{}", user_id),
+                    stripe_subscription_id: Some(subscription_id_str.clone()),
+                    status: SubscriptionStatus::Active,
+                    current_period_start: Some(now),
+                    current_period_end: Some(period_end),
+                    trial_start: None,
+                    trial_end: None,
+                }
+            ).await?;
+
+            // Create payment record
+            app_state.billing_use_cases.create_dummy_payment(
+                domain_id,
+                user_id,
+                subscription.id,
+                &plan,
+            ).await?;
+
+            DummyCheckoutResponse {
+                success: true,
+                requires_confirmation: false,
+                confirmation_token: None,
+                error_message: None,
+                subscription_id: Some(subscription_id_str),
+            }
         },
-        PaymentScenario::ThreeDSecure => DummyCheckoutResponse {
-            success: false,
-            requires_confirmation: true,
-            confirmation_token: Some(format!("3ds_token_{}", Uuid::new_v4())),
-            error_message: None,
-            subscription_id: None,
+        PaymentScenario::ThreeDSecure => {
+            // Encode plan_code in the token so confirm endpoint can use it
+            DummyCheckoutResponse {
+                success: false,
+                requires_confirmation: true,
+                confirmation_token: Some(format!("3ds_token_{}_{}", payload.plan_code, Uuid::new_v4())),
+                error_message: None,
+                subscription_id: None,
+            }
         },
         PaymentScenario::Decline => DummyCheckoutResponse {
             success: false,
@@ -2549,6 +2593,7 @@ async fn create_dummy_checkout(
         domain_id = %domain_id,
         user_id = %user_id,
         scenario = ?payload.scenario,
+        success = response.success,
         "Dummy checkout processed"
     );
 
@@ -2573,24 +2618,75 @@ async fn confirm_dummy_checkout(
     // Get user from token
     let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
 
-    // Verify the token looks valid (starts with 3ds_token_)
+    // Verify and parse the token (format: 3ds_token_{plan_code}_{uuid})
     if !payload.confirmation_token.starts_with("3ds_token_") {
         return Err(AppError::InvalidInput("Invalid confirmation token".into()));
     }
 
-    // Simulate successful 3DS confirmation
+    // Extract plan_code from token: 3ds_token_{plan_code}_{uuid}
+    let token_parts: Vec<&str> = payload.confirmation_token.splitn(4, '_').collect();
+    if token_parts.len() < 4 {
+        return Err(AppError::InvalidInput("Invalid confirmation token format".into()));
+    }
+    let plan_code = token_parts[2]; // 3ds, token, {plan_code}, {uuid}
+
+    // Get the plan
+    let plan = app_state
+        .billing_use_cases
+        .get_plan_by_code(domain_id, plan_code)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // Create subscription and payment records
+    use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
+    use crate::domain::entities::user_subscription::SubscriptionStatus;
+    use crate::domain::entities::stripe_mode::StripeMode;
+
+    let subscription_id_str = format!("dummy_sub_{}", Uuid::new_v4());
+    let now = chrono::Utc::now().naive_utc();
+    let period_end = now + chrono::Duration::days(
+        match plan.interval.as_str() {
+            "yearly" => 365 * plan.interval_count as i64,
+            _ => 30 * plan.interval_count as i64,
+        }
+    );
+
+    let subscription = app_state.billing_use_cases.create_or_update_subscription(
+        &CreateSubscriptionInput {
+            domain_id,
+            stripe_mode: StripeMode::Test,
+            end_user_id: user_id,
+            plan_id: plan.id,
+            stripe_customer_id: format!("dummy_cus_{}", user_id),
+            stripe_subscription_id: Some(subscription_id_str.clone()),
+            status: SubscriptionStatus::Active,
+            current_period_start: Some(now),
+            current_period_end: Some(period_end),
+            trial_start: None,
+            trial_end: None,
+        }
+    ).await?;
+
+    // Create payment record
+    app_state.billing_use_cases.create_dummy_payment(
+        domain_id,
+        user_id,
+        subscription.id,
+        &plan,
+    ).await?;
+
     let response = DummyCheckoutResponse {
         success: true,
         requires_confirmation: false,
         confirmation_token: None,
         error_message: None,
-        subscription_id: Some(format!("dummy_sub_{}", Uuid::new_v4())),
+        subscription_id: Some(subscription_id_str),
     };
 
     tracing::info!(
         domain_id = %domain_id,
         user_id = %user_id,
-        token = %payload.confirmation_token,
+        plan_code = %plan_code,
         "Dummy 3DS confirmation processed"
     );
 
