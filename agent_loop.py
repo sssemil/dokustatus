@@ -76,7 +76,7 @@ class ActiveTask:
 class ParallelTaskManager:
     """Manages multiple concurrent tasks."""
     max_tasks: int = DEFAULT_MAX_CONCURRENT_TASKS
-    priority_tasks: list[str] = field(default_factory=list)  # Tasks to run first, then regular order
+    priority_queue: deque = field(default_factory=deque)  # Queue of priority task patterns to pop from
     active_tasks: dict[str, ActiveTask] = field(default_factory=dict)
     merge_queue: list[str] = field(default_factory=list)
 
@@ -1074,10 +1074,9 @@ def advance_planning_tasks(manager: ParallelTaskManager):
 def start_new_task_if_available(manager: ParallelTaskManager):
     """Pick next tasks from todo and start them in worktrees until capacity is full."""
     active_slugs = set(manager.active_tasks.keys())
-    priority = manager.priority_tasks if manager.priority_tasks else None
 
     while manager.can_start_new_task():
-        next_task_dir = pick_next_task(skip_slugs=active_slugs, priority_tasks=priority)
+        next_task_dir = pick_next_task(skip_slugs=active_slugs, manager=manager)
         if next_task_dir is None:
             return
 
@@ -1136,11 +1135,11 @@ def match_task_filter(slug: str, filters: list[str]) -> bool:
     return False
 
 
-def pick_next_task(skip_slugs: set[str] | None = None, priority_tasks: list[str] | None = None) -> Path | None:
+def pick_next_task(skip_slugs: set[str] | None = None, manager: ParallelTaskManager | None = None) -> Path | None:
     """Get the next task directory from todo.
 
-    If priority_tasks is specified, picks from those first (in given order),
-    then falls back to regular sorted order for remaining tasks.
+    If manager has priority_queue entries, tries to match those first (popping when matched),
+    then falls back to regular sorted order.
     """
     skip_slugs = skip_slugs or set()
 
@@ -1153,12 +1152,16 @@ def pick_next_task(skip_slugs: set[str] | None = None, priority_tasks: list[str]
     if not all_task_dirs:
         return None
 
-    # If priority tasks specified, try those first in order
-    if priority_tasks:
-        for prio in priority_tasks:
+    # Try priority queue first - pop patterns until we find a matching task
+    if manager and manager.priority_queue:
+        while manager.priority_queue:
+            prio = manager.priority_queue[0]  # Peek
             for d in all_task_dirs:
                 if match_task_filter(d.name, [prio]):
+                    manager.priority_queue.popleft()  # Pop only when matched
                     return d
+            # No match for this priority pattern, remove it and try next
+            manager.priority_queue.popleft()
 
     # Fall back to regular sorted order
     all_task_dirs.sort(key=lambda d: d.name)
@@ -1864,8 +1867,8 @@ def main_parallel():
     # Check for stale merge lock from previous crash
     check_stale_merge_lock()
 
-    # Create task manager with configured max tasks and priority tasks
-    manager = ParallelTaskManager(max_tasks=args.max_jobs, priority_tasks=args.tasks)
+    # Create task manager with configured max tasks and priority queue
+    manager = ParallelTaskManager(max_tasks=args.max_jobs, priority_queue=deque(args.tasks))
 
     # Setup signal handlers for graceful shutdown
     setup_signal_handlers(manager)
@@ -1883,8 +1886,8 @@ def main_parallel():
             start_task_execution_async(task)
 
     print(f"[STARTUP] Parallel agent loop started (max {manager.max_tasks} concurrent tasks)")
-    if manager.priority_tasks:
-        print(f"[STARTUP] Priority tasks: {', '.join(manager.priority_tasks)}")
+    if args.tasks:
+        print(f"[STARTUP] Priority queue: {', '.join(args.tasks)}")
     print(f"[STARTUP] Worktrees location: {WORKTREES_ROOT.resolve()}")
 
     while True:
@@ -1919,8 +1922,7 @@ def main_parallel():
                 status = "running" if task.is_alive else "idle"
                 print(f"  [{task.slug}] {task.phase.value} ({status})")
 
-        priority = manager.priority_tasks if manager.priority_tasks else None
-        if not manager.active_tasks and not pick_next_task(skip_slugs=set(), priority_tasks=priority):
+        if not manager.active_tasks and not pick_next_task(skip_slugs=set(), manager=manager):
             print("Idle — no tasks")
 
         time.sleep(5)  # Poll every 5 seconds
