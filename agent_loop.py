@@ -122,15 +122,129 @@ def git_stash_pop():
     run(["git", "stash", "pop"], check=False)
 
 
-def start_agent_for_task(slug: str, task_dir: Path):
-    """Start a codex agent for the given task directory."""
+# =============================================================================
+# Planning Phase Functions
+# =============================================================================
+
+def run_codex_planning(slug: str):
+    """Have codex create the initial plan.md."""
+    task_dir = TASKS_IN_PROGRESS / slug
+    prompt = f"""Read ./workspace/tasks/in-progress/{slug}/ticket.md
+
+Create a detailed plan.md in the same directory with:
+- Summary of what needs to be done
+- Step-by-step implementation approach
+- Files to modify
+- Testing approach
+- Edge cases to handle
+
+Write the plan to ./workspace/tasks/in-progress/{slug}/plan.md, then EXIT."""
+
+    print(f"[PLANNING] Codex creating initial plan for {slug}")
+    run([
+        "codex", "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-C", ".",
+        prompt
+    ], check=False)
+
+
+def run_claude_review(slug: str, iteration: int):
+    """Have Claude CLI review the plan and write feedback."""
+    task_dir = TASKS_IN_PROGRESS / slug
+    prompt = f"""Review the implementation plan for task: {slug}
+
+Read these files:
+- {task_dir}/ticket.md (the task description)
+- {task_dir}/plan.md (the proposed implementation plan)
+
+This is review iteration {iteration}/3.
+
+Write your feedback to {task_dir}/feedback.md with:
+- What's good about the plan
+- What's missing or unclear
+- Suggested improvements
+- Any risks or concerns
+
+Be specific and actionable. Focus on catching issues before implementation."""
+
+    print(f"[PLANNING] Claude reviewing plan for {slug} (iteration {iteration}/3)")
+    run(["claude", "-p", prompt], check=False)
+
+
+def run_codex_revise(slug: str, iteration: int):
+    """Have codex revise the plan based on Claude's feedback."""
+    task_dir = TASKS_IN_PROGRESS / slug
+    prompt = f"""This is plan revision {iteration}/3 for task: {slug}
+
+Read the feedback at ./workspace/tasks/in-progress/{slug}/feedback.md
+Update ./workspace/tasks/in-progress/{slug}/plan.md to address the feedback.
+
+Keep what's working, improve what was criticized.
+Then EXIT."""
+
+    print(f"[PLANNING] Codex revising plan for {slug} (iteration {iteration}/3)")
+    run([
+        "codex", "exec",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "-C", ".",
+        prompt
+    ], check=False)
+
+
+def run_planning_phase(slug: str) -> bool:
+    """
+    Run the planning review loop.
+    Returns True when planning is complete (3 iterations done).
+    """
+    task_dir = TASKS_IN_PROGRESS / slug
+    plan_file = task_dir / "plan.md"
+    planning_state = SESSIONS_DIR / f"{slug}.planning"
+
+    # Get current iteration (0 = not started, 1-3 = in progress)
+    iteration = 0
+    if planning_state.exists():
+        try:
+            iteration = int(planning_state.read_text().strip())
+        except ValueError:
+            iteration = 0
+
+    print(f"[PLANNING] Task {slug} at iteration {iteration}/3")
+
+    # Planning complete after 3 iterations
+    if iteration >= 3:
+        print(f"[PLANNING] Complete for {slug}")
+        planning_state.unlink(missing_ok=True)
+        return True
+
+    # Iteration 0: Codex creates initial plan
+    if iteration == 0 or not plan_file.exists():
+        run_codex_planning(slug)
+        planning_state.write_text("1")
+        return False
+
+    # Iterations 1-3: Claude reviews, Codex revises
+    run_claude_review(slug, iteration)
+    run_codex_revise(slug, iteration)
+    planning_state.write_text(str(iteration + 1))
+    return False
+
+
+# =============================================================================
+# Task Execution Functions
+# =============================================================================
+
+def setup_task_for_work(slug: str, task_dir: Path) -> bool:
+    """
+    Move task to in-progress and switch to task branch.
+    Returns True if successful.
+    """
     import shutil
 
     branch = f"task/{slug}"
-    session_file = session_file_for(slug)
     target_dir = TASKS_IN_PROGRESS / slug
 
-    print(f"Starting agent for {slug} on branch {branch}")
+    print(f"Setting up task {slug} on branch {branch}")
 
     # Move task directory to in-progress if not already there
     if task_dir.parent != TASKS_IN_PROGRESS:
@@ -147,29 +261,40 @@ def start_agent_for_task(slug: str, task_dir: Path):
             print(f"Failed to switch to branch {branch}")
             if stashed:
                 git_stash_pop()
-            return
+            return False
     else:
         if not git_switch(branch, create=True):
             print(f"Failed to create branch {branch}")
             if stashed:
                 git_stash_pop()
+            return False
+
+    return True
+
+
+def start_agent_for_task(slug: str, task_dir: Path):
+    """Start a codex agent for execution (planning must be complete)."""
+    session_file = session_file_for(slug)
+    target_dir = TASKS_IN_PROGRESS / slug
+
+    # Ensure task is set up
+    if not target_dir.exists():
+        if not setup_task_for_work(slug, task_dir):
             return
 
     prompt = f"""You are working on task: {slug}
 
 Task directory: ./workspace/tasks/in-progress/{slug}/
-- ticket.md: The task description (read this first)
-- plan.md: Your detailed implementation plan (create this)
+- ticket.md: The task description
+- plan.md: The implementation plan (already reviewed and finalized)
 
 This branch is dedicated to this task: task/{slug}
 
-FIRST STEPS:
-1. Read the ticket.md to understand the task
-2. Create a detailed plan.md with your implementation approach
-3. Append a History entry to ticket.md noting you've started
+The plan.md has been reviewed 3 times and is ready for implementation.
+Follow the plan closely.
 
 You are responsible for:
-- Writing a detailed plan.md before making code changes
+- Implementing according to plan.md
 - Making bounded edits to the codebase
 - Appending timestamped History entries to ticket.md
 - Committing your own changes
@@ -193,7 +318,7 @@ decide otherwise and justify it in History."""
     # Mark that a session exists
     session_file.touch()
 
-    # Run codex
+    print(f"[EXECUTION] Starting codex for {slug}")
     run([
         "codex", "exec",
         "--dangerously-bypass-approvals-and-sandbox",
@@ -313,6 +438,29 @@ def validate_in_progress_state_or_die():
             sys.exit(1)
 
 
+def is_task_in_planning(slug: str) -> bool:
+    """Check if a task is currently in planning phase."""
+    planning_file = SESSIONS_DIR / f"{slug}.planning"
+    return planning_file.exists()
+
+
+def is_planning_complete(slug: str) -> bool:
+    """Check if planning is complete (iteration >= 3 or no planning file and plan.md exists)."""
+    planning_file = SESSIONS_DIR / f"{slug}.planning"
+    plan_file = TASKS_IN_PROGRESS / slug / "plan.md"
+
+    if not planning_file.exists():
+        # No planning file means either not started or complete
+        # Complete if plan.md exists
+        return plan_file.exists()
+
+    try:
+        iteration = int(planning_file.read_text().strip())
+        return iteration >= 3
+    except ValueError:
+        return False
+
+
 def main():
     setup_directories()
 
@@ -333,20 +481,48 @@ def main():
             time.sleep(2)
             continue
 
-        # CASE 2: task in progress → resume or start
+        # CASE 2: task in planning phase → continue planning
+        planning_files = list(SESSIONS_DIR.glob("*.planning"))
+        if planning_files:
+            slug = planning_files[0].stem
+            task_dir = TASKS_IN_PROGRESS / slug
+
+            # Ensure we're on the right branch
+            branch = f"task/{slug}"
+            if git_branch_exists(branch):
+                git_switch(branch)
+
+            if run_planning_phase(slug):
+                # Planning complete, will start execution on next tick
+                print(f"[PLANNING] Complete for {slug}, ready for execution")
+            time.sleep(2)
+            continue
+
+        # CASE 3: task in progress (planning complete) → resume or execute
         if current_in_progress_count() == 1:
             task_dir = the_single_in_progress_task()
             if task_dir:
                 slug = task_dir.name
-                resume_task_session(slug)
+                if is_planning_complete(slug):
+                    # Planning done, execute
+                    resume_task_session(slug)
+                else:
+                    # Need to start planning
+                    planning_state = SESSIONS_DIR / f"{slug}.planning"
+                    planning_state.write_text("0")
                 time.sleep(3)
                 continue
 
-        # CASE 3: pick next task
+        # CASE 4: pick next task from todo
         next_task = pick_next_task()
         if next_task:
             slug = next_task.name  # Directory name is the slug
-            start_agent_for_task(slug, next_task)
+
+            # Set up task and start planning
+            if setup_task_for_work(slug, next_task):
+                planning_state = SESSIONS_DIR / f"{slug}.planning"
+                planning_state.write_text("0")
+                print(f"[NEW TASK] {slug} - starting planning phase")
             time.sleep(2)
             continue
 
