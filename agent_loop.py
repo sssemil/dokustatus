@@ -864,7 +864,6 @@ Stay focused on this task."""
         cmd = [
             "claude", "-p", prompt,
             "--allowedTools", "Edit,Write,Bash,Glob,Grep,Read",
-            "--output-format", "stream-json",
         ]
         label = f"Claude exec ({task.slug})"
     else:
