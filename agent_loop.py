@@ -1110,6 +1110,18 @@ def finalize_squash_merge(task: ActiveTask, manager: ParallelTaskManager) -> boo
         if current != "main":
             run(["git", "switch", "main"], check=False)
 
+        # Ensure main is clean before merging
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, check=False
+        )
+        if status.stdout.strip():
+            # Main has uncommitted changes or conflicts - abort any pending merge and reset
+            print(f"[MERGE] Main repo is dirty, aborting pending operations")
+            subprocess.run(["git", "merge", "--abort"], capture_output=True, check=False)
+            subprocess.run(["git", "rebase", "--abort"], capture_output=True, check=False)
+            subprocess.run(["git", "reset", "--hard", "HEAD"], capture_output=True, check=False)
+
         run(["git", "fetch", "origin"], check=False)
         run(["git", "pull", "--ff-only"], check=False)
 
