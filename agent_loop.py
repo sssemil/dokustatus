@@ -16,10 +16,10 @@ Each task runs in its own git worktree at ../worktrees/task-{slug}/ for isolatio
 
 Phases per task:
   1. PLANNING  - Iterative planning with alternating agents:
-       - Claude plan-v1 → Codex feedback-1
-       - Claude plan-v2 → Codex feedback-2
-       - Claude plan-v3 → Codex feedback-3 → plan.md (finalize)
-  2. EXECUTING - Codex executes the finalized plan
+       - Claude plan-v1 → Codex/Claude feedback-1
+       - Claude plan-v2 → Codex/Claude feedback-2
+       - Claude plan-v3 → Codex/Claude feedback-3 → plan.md (finalize)
+  2. EXECUTING - Codex/Claude executes the finalized plan
   3. OUTBOUND  - Execution complete, queued for merge
   4. MERGING   - Rebase onto main (3 attempts) → squash merge → cleanup
 
@@ -27,8 +27,13 @@ Artifacts created in {task_dir}/:
   - plan-v1.md, plan-v2.md, plan-v3.md, plan.md  (plans)
   - feedback-1.md, feedback-2.md, feedback-3.md  (reviews)
   - agent_logs/claude-plan-v*.log                (planning logs)
-  - agent_logs/codex-review-*.log                (review logs)
-  - agent_logs/codex-exec-*.log                  (execution logs)
+  - agent_logs/{codex,claude}-review-*.log       (review logs)
+  - agent_logs/{codex,claude}-exec-*.log         (execution logs)
+
+Rate Limit Fallback:
+  - If Codex hits usage_limit_reached, task switches to Claude for remaining work
+  - codex_rate_limited flag persists in .task-state across restarts
+  - Affects both reviews (planning phase) and execution
 
 Parallel Execution:
   - Up to N concurrent tasks (default 3, configurable via -j)
@@ -111,7 +116,7 @@ class ActiveTask:
     planning_iteration: int = 0
     log_handle: Optional[object] = field(default=None, repr=False)
     output_thread: Optional[threading.Thread] = field(default=None, repr=False)
-    use_claude_for_exec: bool = False  # Fallback to Claude if Codex hits rate limit
+    codex_rate_limited: bool = False  # Fallback to Claude for all Codex operations
 
     @property
     def is_alive(self) -> bool:
@@ -485,20 +490,20 @@ def kill_task_subprocess(task: ActiveTask, timeout: int = 30):
 def persist_task_state(task: ActiveTask):
     """Write task state to worktree for crash recovery."""
     state_file = task.worktree_path / ".task-state"
-    use_claude = "1" if task.use_claude_for_exec else "0"
-    state_file.write_text(f"{task.phase.value}\n{task.planning_iteration}\n{use_claude}\n")
+    rate_limited = "1" if task.codex_rate_limited else "0"
+    state_file.write_text(f"{task.phase.value}\n{task.planning_iteration}\n{rate_limited}\n")
 
 
 def load_task_state(worktree_path: Path) -> tuple[TaskPhase, int, bool]:
-    """Load task state from worktree. Returns (phase, iteration, use_claude_for_exec)."""
+    """Load task state from worktree. Returns (phase, iteration, codex_rate_limited)."""
     state_file = worktree_path / ".task-state"
     if state_file.exists():
         try:
             lines = state_file.read_text().strip().split("\n")
             phase = TaskPhase(lines[0]) if lines else TaskPhase.PLANNING
             iteration = int(lines[1]) if len(lines) > 1 else 0
-            use_claude = lines[2] == "1" if len(lines) > 2 else False
-            return phase, iteration, use_claude
+            rate_limited = lines[2] == "1" if len(lines) > 2 else False
+            return phase, iteration, rate_limited
         except (ValueError, IndexError):
             pass
     return TaskPhase.PLANNING, 0, False
@@ -757,10 +762,17 @@ Then stop."""
     )
 
 
-def start_codex_review_async(task: ActiveTask, iteration: int) -> subprocess.Popen:
-    """Start Codex review in the task's worktree (non-blocking)."""
+def start_review_async(task: ActiveTask, iteration: int) -> subprocess.Popen:
+    """Start plan review in the task's worktree (non-blocking).
+
+    Uses Codex by default, falls back to Claude if Codex hit rate limit.
+    """
     log_dir = task.worktree_task_dir() / "agent_logs"
-    log_file = log_dir / f"codex-review-{iteration}.log"
+
+    # Determine which agent to use
+    use_claude = task.codex_rate_limited
+    agent_name = "claude" if use_claude else "codex"
+    log_file = log_dir / f"{agent_name}-review-{iteration}.log"
 
     prompt = f"""Review the implementation plan for task: {task.slug}
 
@@ -776,31 +788,46 @@ Write feedback to ./workspace/tasks/in-progress/{task.slug}/feedback-{iteration}
 Be specific and actionable. Focus on catching issues before implementation.
 Then EXIT."""
 
-    return start_agent_subprocess(
-        task=task,
-        cmd=[
+    if use_claude:
+        cmd = [
+            "claude", "-p", prompt,
+            "--allowedTools", "Edit,Write,Bash,Glob,Grep,Read",
+        ]
+        label = f"Claude review-{iteration} ({task.slug})"
+    else:
+        cmd = [
             "codex", "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "-C", ".",
             prompt
-        ],
+        ]
+        label = f"Codex review-{iteration} ({task.slug})"
+
+    return start_agent_subprocess(
+        task=task,
+        cmd=cmd,
         log_file=log_file,
-        label=f"Codex review-{iteration} ({task.slug})"
+        label=label,
+        input_text=prompt if use_claude else None
     )
 
 
 def check_codex_rate_limit(task: ActiveTask) -> bool:
-    """Check if the latest Codex log shows a rate limit error."""
+    """Check if any recent Codex log shows a rate limit error."""
     log_dir = task.worktree_task_dir() / "agent_logs"
     if not log_dir.exists():
         return False
 
-    # Find the most recent codex-exec log
-    exec_logs = sorted(log_dir.glob("codex-exec-*.log"), reverse=True)
-    if not exec_logs:
+    # Check both exec and review logs
+    exec_logs = list(log_dir.glob("codex-exec-*.log"))
+    review_logs = list(log_dir.glob("codex-review-*.log"))
+    all_logs = sorted(exec_logs + review_logs, key=lambda p: p.stat().st_mtime, reverse=True)
+
+    if not all_logs:
         return False
 
-    latest_log = exec_logs[0]
+    # Check the most recent Codex log
+    latest_log = all_logs[0]
     try:
         content = latest_log.read_text()
         return "usage_limit_reached" in content or "You've hit your usage limit" in content
@@ -817,7 +844,7 @@ def start_task_execution_async(task: ActiveTask) -> subprocess.Popen:
     log_dir = task.worktree_task_dir() / "agent_logs"
 
     # Determine which agent to use
-    use_claude = task.use_claude_for_exec
+    use_claude = task.codex_rate_limited
     agent_name = "claude" if use_claude else "codex"
     log_file = log_dir / f"{agent_name}-exec-{timestamp}.log"
 
@@ -938,7 +965,7 @@ def recover_existing_worktrees(manager: ParallelTaskManager):
             branch=f"task/{slug}",
             phase=phase,
             planning_iteration=iteration,
-            use_claude_for_exec=use_claude
+            codex_rate_limited=use_claude
         )
 
         manager.add_task(task)
@@ -1148,6 +1175,12 @@ def advance_planning_tasks(manager: ParallelTaskManager):
         if task.is_alive:
             continue
 
+        # Check for Codex rate limit before retrying
+        if not task.codex_rate_limited and check_codex_rate_limit(task):
+            print(f"[PLANNING] Task {task.slug} hit Codex rate limit, switching to Claude")
+            task.codex_rate_limited = True
+            persist_task_state(task)
+
         # Check planning progress based on files
         task_dir = task.worktree_task_dir()
         plan_v3 = task_dir / "plan-v3.md"
@@ -1178,7 +1211,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
             feedback_1 = task_dir / "feedback-1.md"
             plan_v2 = task_dir / "plan-v2.md"
             if not feedback_1.exists():
-                start_codex_review_async(task, iteration=1)
+                start_review_async(task, iteration=1)
             elif not plan_v2.exists():
                 start_claude_planning_async(task, version=2)
             else:
@@ -1189,7 +1222,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
             # Codex reviews plan-v2 → feedback-2, then Claude creates plan-v3
             feedback_2 = task_dir / "feedback-2.md"
             if not feedback_2.exists():
-                start_codex_review_async(task, iteration=2)
+                start_review_async(task, iteration=2)
             elif not plan_v3.exists():
                 start_claude_planning_async(task, version=3)
             else:
@@ -1199,7 +1232,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
         elif iteration >= 3:
             # Codex final review → feedback-3, then copy plan-v3 to plan.md
             if not feedback_3.exists():
-                start_codex_review_async(task, iteration=3)
+                start_review_async(task, iteration=3)
             elif plan_v3.exists() and not plan_final.exists():
                 # Copy plan-v3 to plan.md
                 plan_final.write_text(plan_v3.read_text())
@@ -1252,9 +1285,9 @@ def handle_execution_tasks(manager: ParallelTaskManager):
                 manager.queue_for_merge(task.slug)
             elif exit_code != 0:
                 # Task crashed - check if it's a Codex rate limit
-                if not task.use_claude_for_exec and check_codex_rate_limit(task):
+                if not task.codex_rate_limited and check_codex_rate_limit(task):
                     print(f"[EXEC] Task {task.slug} hit Codex rate limit, switching to Claude")
-                    task.use_claude_for_exec = True
+                    task.codex_rate_limited = True
                     persist_task_state(task)
                 else:
                     print(f"[EXEC] Task {task.slug} crashed (exit {exit_code}), restarting...")
