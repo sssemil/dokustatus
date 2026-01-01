@@ -7,6 +7,7 @@
 Agent loop that manages codex tasks through todo -> in-progress -> outbound -> done workflow.
 """
 
+import os
 import subprocess
 import sys
 import time
@@ -149,13 +150,20 @@ def run_agent_with_logs(
     else:
         actual_cmd = cmd
 
+    # Force non-TTY environment - unset TERM to prevent TUI mode detection
+    env = os.environ.copy()
+    env.pop("TERM", None)  # Remove TERM to force non-interactive mode
+
+    print(f"[{label}] Running: {' '.join(actual_cmd)}")
+
     process = subprocess.Popen(
         actual_cmd,
         stdin=subprocess.PIPE if input_text else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         text=True,
-        bufsize=1
+        bufsize=1,
+        env=env
     )
 
     # Start file watcher thread if watch_file provided
@@ -170,6 +178,7 @@ def run_agent_with_logs(
 
     # For non-script mode, also write to log file manually
     if not use_script:
+        line_count = 0
         with open(log_file, "w") as f:
             if process.stdout:
                 for line in process.stdout:
@@ -177,7 +186,10 @@ def run_agent_with_logs(
                     f.write(line + "\n")
                     f.flush()
                     last_lines.append(line)
+                    line_count += 1
                     display_tail()
+        if line_count == 0:
+            print(f"[{label}] WARNING: No output captured from subprocess")
     else:
         # For script mode, just read stdout for tail display
         if process.stdout:
