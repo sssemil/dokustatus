@@ -271,7 +271,9 @@ def setup_task_for_work(slug: str, task_dir: Path) -> bool:
     if task_dir.parent != TASKS_IN_PROGRESS:
         if target_dir.exists():
             shutil.rmtree(target_dir)
-        shutil.move(str(task_dir), str(target_dir))
+        # Use git mv to track the move, then commit
+        run(["git", "mv", str(task_dir), str(target_dir)], check=False)
+        run(["git", "commit", "-m", f"start task {slug}: todo → in-progress"], check=False)
 
     # Stash any dirty changes before switching
     stashed = git_stash_if_dirty()
