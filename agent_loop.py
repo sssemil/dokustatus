@@ -254,6 +254,42 @@ def git_stash_pop():
     run(["git", "stash", "pop"], check=False)
 
 
+def commit_new_workspace_files() -> bool:
+    """
+    Check for and commit any new/modified files in workspace/.
+    Returns True if files were committed.
+    """
+    # Check for untracked or modified files in workspace/
+    result = subprocess.run(
+        ["git", "status", "--porcelain", "workspace/"],
+        capture_output=True, text=True, check=False
+    )
+
+    if not result.stdout.strip():
+        return False
+
+    # Count new files for commit message
+    lines = result.stdout.strip().split('\n')
+    new_files = [l for l in lines if l.startswith('?') or l.startswith('A')]
+    modified_files = [l for l in lines if l.startswith('M') or l.startswith(' M')]
+
+    print(f"[HOUSEKEEPING] Found {len(new_files)} new, {len(modified_files)} modified files in workspace/")
+
+    # Add and commit
+    run(["git", "add", "workspace/"], check=False)
+
+    # Build commit message
+    parts = []
+    if new_files:
+        parts.append(f"{len(new_files)} new")
+    if modified_files:
+        parts.append(f"{len(modified_files)} modified")
+    msg = f"workspace: add {', '.join(parts)} files"
+
+    run(["git", "commit", "-m", msg], check=False)
+    return True
+
+
 # =============================================================================
 # Planning Phase Functions
 # =============================================================================
@@ -688,6 +724,11 @@ def main():
         print(f"[{step_ts}] loop tick")
 
         validate_in_progress_state_or_die()
+
+        # Commit any new files dropped into workspace/ between tasks
+        # Only do this when on main branch (between tasks, not during task work)
+        if git_current_branch() == "main":
+            commit_new_workspace_files()
 
         # CASE 1: outbound task → merge
         outbound_dirs = []
