@@ -1,6 +1,13 @@
 use serde::{Deserialize, Serialize};
 
 /// Stripe environment mode - test (sandbox) or live (production)
+///
+/// **Deprecated**: Use [`PaymentMode`](crate::domain::entities::payment_mode::PaymentMode) instead.
+/// This type will be removed in a future release (task 0015).
+#[deprecated(
+    since = "0.2.0",
+    note = "Use PaymentMode instead. StripeMode will be removed in task 0015."
+)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "stripe_mode", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]

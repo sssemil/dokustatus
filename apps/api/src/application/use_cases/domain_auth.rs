@@ -1579,7 +1579,7 @@ fn is_valid_redirect_url(url: &str, domain: &str) -> bool {
 mod tests {
     use super::*;
     use crate::application::use_cases::domain::DomainProfile;
-    use crate::domain::entities::stripe_mode::StripeMode;
+    use crate::domain::entities::payment_mode::PaymentMode;
     use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -1890,7 +1890,7 @@ mod tests {
         async fn set_billing_stripe_mode(
             &self,
             _domain_id: Uuid,
-            _mode: StripeMode,
+            _mode: PaymentMode,
         ) -> AppResult<DomainProfile> {
             Err(AppError::Internal("not implemented".into()))
         }

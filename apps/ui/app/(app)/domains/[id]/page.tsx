@@ -9,8 +9,9 @@ import {
   CreditCard, DollarSign, TrendingUp, Receipt, FileText, Download, ChevronLeft, Search, X, TestTube
 } from 'lucide-react';
 import {
-  StripeConfigStatus, StripeMode, SubscriptionPlan, UserSubscription, BillingAnalytics,
-  formatPrice, formatInterval, getStatusBadgeColor, getStatusLabel, getModeLabel, getModeBadgeColor,
+  StripeConfigStatus, SubscriptionPlan, UserSubscription, BillingAnalytics,
+  formatPrice, formatInterval, getStatusBadgeColor, getStatusLabel,
+  getPaymentModeLabel, getPaymentModeBadgeColor,
   BillingPayment, PaymentSummary, DashboardPaymentListResponse, PaymentListFilters,
   getPaymentStatusLabel, getPaymentStatusBadgeColor, formatPaymentDate, formatPaymentDateTime,
   EnabledPaymentProvider, PaymentProvider, PaymentMode, getProviderLabel
@@ -138,7 +139,7 @@ export default function DomainDetailPage() {
   const [billingPlans, setBillingPlans] = useState<SubscriptionPlan[]>([]);
   const [billingAnalytics, setBillingAnalytics] = useState<BillingAnalytics | null>(null);
   const [loadingBilling, setLoadingBilling] = useState(false);
-  const [editingMode, setEditingMode] = useState<StripeMode>('test');
+  const [editingMode, setEditingMode] = useState<PaymentMode>('test');
   const [stripeSecretKey, setStripeSecretKey] = useState('');
   const [stripePublishableKey, setStripePublishableKey] = useState('');
   const [stripeWebhookSecret, setStripeWebhookSecret] = useState('');
@@ -681,7 +682,7 @@ export default function DomainDetailPage() {
     }
   };
 
-  const handleRemoveBillingConfig = async (mode: StripeMode) => {
+  const handleRemoveBillingConfig = async (mode: PaymentMode) => {
     try {
       const res = await fetch(`/api/domains/${domainId}/billing/config`, {
         method: 'DELETE',
@@ -701,7 +702,7 @@ export default function DomainDetailPage() {
     }
   };
 
-  const handleSwitchBillingMode = async (mode: StripeMode) => {
+  const handleSwitchBillingMode = async (mode: PaymentMode) => {
     setSwitchingMode(true);
     try {
       const res = await fetch(`/api/domains/${domainId}/billing/mode`, {

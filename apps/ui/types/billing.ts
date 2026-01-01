@@ -31,7 +31,9 @@ export interface ProviderConfig {
   mode: PaymentMode;
 }
 
-// Legacy type alias for backwards compatibility
+/**
+ * @deprecated Use PaymentMode instead. StripeMode is a legacy alias and will be removed in task 0015.
+ */
 export type StripeMode = 'test' | 'live';
 
 export interface ModeConfigStatus {
@@ -40,7 +42,7 @@ export interface ModeConfigStatus {
 }
 
 export interface StripeConfigStatus {
-  active_mode: StripeMode;
+  active_mode: PaymentMode;
   test: ModeConfigStatus | null;
   live: ModeConfigStatus | null;
 }
@@ -138,18 +140,18 @@ export interface UpdatePlanInput {
 }
 
 export interface UpdateStripeConfigInput {
-  mode: StripeMode;
+  mode: PaymentMode;
   secret_key: string;
   publishable_key: string;
   webhook_secret: string;
 }
 
 export interface DeleteStripeConfigInput {
-  mode: StripeMode;
+  mode: PaymentMode;
 }
 
 export interface SetBillingModeInput {
-  mode: StripeMode;
+  mode: PaymentMode;
 }
 
 // Helper functions
@@ -213,11 +215,17 @@ export function getStatusLabel(status: SubscriptionStatus): string {
   }
 }
 
-export function getModeLabel(mode: StripeMode): string {
+/**
+ * @deprecated Use getPaymentModeLabel instead.
+ */
+export function getModeLabel(mode: PaymentMode): string {
   return mode === 'test' ? 'Test Mode' : 'Live Mode';
 }
 
-export function getModeBadgeColor(mode: StripeMode): 'yellow' | 'green' {
+/**
+ * @deprecated Use getPaymentModeBadgeColor instead.
+ */
+export function getModeBadgeColor(mode: PaymentMode): 'yellow' | 'green' {
   return mode === 'test' ? 'yellow' : 'green';
 }
 

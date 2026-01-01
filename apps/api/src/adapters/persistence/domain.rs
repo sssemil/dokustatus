@@ -6,11 +6,11 @@ use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
     domain::entities::domain::DomainStatus,
-    domain::entities::stripe_mode::StripeMode,
+    domain::entities::payment_mode::PaymentMode,
     use_cases::domain::{DomainProfile, DomainRepo},
 };
 
-const SELECT_COLS: &str = "id, owner_end_user_id, domain, status, billing_stripe_mode, verification_started_at, verified_at, created_at, updated_at";
+const SELECT_COLS: &str = "id, owner_end_user_id, domain, status, active_payment_mode, verification_started_at, verified_at, created_at, updated_at";
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainProfile {
     DomainProfile {
@@ -18,7 +18,7 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainProfile {
         owner_end_user_id: row.get("owner_end_user_id"),
         domain: row.get("domain"),
         status: DomainStatus::from_str(row.get("status")),
-        billing_stripe_mode: row.get("billing_stripe_mode"),
+        billing_stripe_mode: row.get("active_payment_mode"),
         verification_started_at: row.get("verification_started_at"),
         verified_at: row.get("verified_at"),
         created_at: row.get("created_at"),
@@ -183,19 +183,23 @@ impl DomainRepo for PostgresPersistence {
     async fn set_billing_stripe_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<DomainProfile> {
+        // Dual-write: update both billing_stripe_mode (legacy) and active_payment_mode (new)
+        let mode_str = mode.as_str();
         let row = sqlx::query(&format!(
             r#"
                 UPDATE domains
-                SET billing_stripe_mode = $2, updated_at = CURRENT_TIMESTAMP
+                SET billing_stripe_mode = $2::stripe_mode,
+                    active_payment_mode = $2::payment_mode,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = $1
                 RETURNING {}
             "#,
             SELECT_COLS
         ))
         .bind(domain_id)
-        .bind(mode)
+        .bind(mode_str)
         .fetch_one(&self.pool)
         .await
         .map_err(AppError::from)?;

@@ -203,7 +203,7 @@ pub struct UpdatePlanInput {
 #[derive(Debug, Clone)]
 pub struct CreateSubscriptionInput {
     pub domain_id: Uuid,
-    pub stripe_mode: StripeMode,
+    pub payment_mode: PaymentMode,
     pub end_user_id: Uuid,
     pub plan_id: Uuid,
     pub stripe_customer_id: String,
@@ -242,7 +242,7 @@ pub struct CreateSubscriptionEventInput {
 #[derive(Debug, Clone)]
 pub struct CreatePaymentInput {
     pub domain_id: Uuid,
-    pub stripe_mode: StripeMode,
+    pub payment_mode: PaymentMode,
     pub end_user_id: Uuid,
     pub subscription_id: Option<Uuid>,
     pub stripe_invoice_id: String,
@@ -350,7 +350,7 @@ pub trait BillingStripeConfigRepo: Send + Sync {
     async fn get_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<Option<BillingStripeConfigProfile>>;
 
     /// List all configs for a domain (both test and live)
@@ -360,14 +360,14 @@ pub trait BillingStripeConfigRepo: Send + Sync {
     async fn upsert(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         stripe_secret_key_encrypted: &str,
         stripe_publishable_key: &str,
         stripe_webhook_secret_encrypted: &str,
     ) -> AppResult<BillingStripeConfigProfile>;
 
     /// Delete config for a specific mode
-    async fn delete(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<()>;
+    async fn delete(&self, domain_id: Uuid, mode: PaymentMode) -> AppResult<()>;
 
     /// Check if any config exists for this domain (either mode)
     async fn has_any_config(&self, domain_id: Uuid) -> AppResult<bool>;
@@ -379,24 +379,24 @@ pub trait SubscriptionPlanRepo: Send + Sync {
     async fn get_by_domain_and_code(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         code: &str,
     ) -> AppResult<Option<SubscriptionPlanProfile>>;
     async fn list_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         include_archived: bool,
     ) -> AppResult<Vec<SubscriptionPlanProfile>>;
     async fn list_public_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<Vec<SubscriptionPlanProfile>>;
     async fn create(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         input: &CreatePlanInput,
     ) -> AppResult<SubscriptionPlanProfile>;
     async fn update(&self, id: Uuid, input: &UpdatePlanInput)
@@ -407,12 +407,12 @@ pub trait SubscriptionPlanRepo: Send + Sync {
     async fn delete(&self, id: Uuid) -> AppResult<()>;
     async fn count_subscribers(&self, plan_id: Uuid) -> AppResult<i64>;
     /// Count plans in a specific mode (for deletion validation)
-    async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<i64>;
+    async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: PaymentMode) -> AppResult<i64>;
     /// Find plan by Stripe price ID (searches all plans in the mode, including archived)
     async fn get_by_stripe_price_id(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         stripe_price_id: &str,
     ) -> AppResult<Option<SubscriptionPlanProfile>>;
 }
@@ -423,7 +423,7 @@ pub trait UserSubscriptionRepo: Send + Sync {
     async fn get_by_user_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         end_user_id: Uuid,
     ) -> AppResult<Option<UserSubscriptionProfile>>;
     async fn get_by_stripe_subscription_id(
@@ -433,13 +433,13 @@ pub trait UserSubscriptionRepo: Send + Sync {
     async fn get_by_stripe_customer_id(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         stripe_customer_id: &str,
     ) -> AppResult<Option<UserSubscriptionProfile>>;
     async fn list_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<Vec<UserSubscriptionWithPlan>>;
     async fn list_by_plan(&self, plan_id: Uuid) -> AppResult<Vec<UserSubscriptionProfile>>;
     async fn create(&self, input: &CreateSubscriptionInput) -> AppResult<UserSubscriptionProfile>;
@@ -452,7 +452,7 @@ pub trait UserSubscriptionRepo: Send + Sync {
     async fn grant_manually(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         end_user_id: Uuid,
         plan_id: Uuid,
         granted_by: Uuid,
@@ -463,16 +463,16 @@ pub trait UserSubscriptionRepo: Send + Sync {
     async fn count_active_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<i64>;
     async fn count_by_status_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         status: SubscriptionStatus,
     ) -> AppResult<i64>;
     /// Count subscriptions in a specific mode (for deletion validation)
-    async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<i64>;
+    async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: PaymentMode) -> AppResult<i64>;
 }
 
 #[async_trait]
@@ -503,7 +503,7 @@ pub trait BillingPaymentRepo: Send + Sync {
     async fn list_by_user(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         end_user_id: Uuid,
         page: i32,
         per_page: i32,
@@ -513,7 +513,7 @@ pub trait BillingPaymentRepo: Send + Sync {
     async fn list_by_domain(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         filters: &PaymentListFilters,
         page: i32,
         per_page: i32,
@@ -532,7 +532,7 @@ pub trait BillingPaymentRepo: Send + Sync {
     async fn get_payment_summary(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         date_from: Option<NaiveDateTime>,
         date_to: Option<NaiveDateTime>,
     ) -> AppResult<PaymentSummary>;
@@ -541,7 +541,7 @@ pub trait BillingPaymentRepo: Send + Sync {
     async fn list_all_for_export(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         filters: &PaymentListFilters,
     ) -> AppResult<Vec<BillingPaymentWithUser>>;
 }
@@ -605,7 +605,7 @@ impl DomainBillingUseCases {
     }
 
     /// Get the active Stripe mode for a domain
-    pub async fn get_active_mode(&self, domain_id: Uuid) -> AppResult<StripeMode> {
+    pub async fn get_active_mode(&self, domain_id: Uuid) -> AppResult<PaymentMode> {
         let domain = self
             .domain_repo
             .get_by_id(domain_id)
@@ -628,8 +628,12 @@ impl DomainBillingUseCases {
 
         let configs = self.stripe_config_repo.list_by_domain(domain_id).await?;
 
-        let test_config = configs.iter().find(|c| c.stripe_mode == StripeMode::Test);
-        let live_config = configs.iter().find(|c| c.stripe_mode == StripeMode::Live);
+        let test_config = configs
+            .iter()
+            .find(|c| PaymentMode::from(c.stripe_mode) == PaymentMode::Test);
+        let live_config = configs
+            .iter()
+            .find(|c| PaymentMode::from(c.stripe_mode) == PaymentMode::Live);
 
         Ok(StripeConfigStatusResponse {
             active_mode: domain.billing_stripe_mode,
@@ -649,7 +653,7 @@ impl DomainBillingUseCases {
         &self,
         owner_id: Uuid,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         secret_key: &str,
         publishable_key: &str,
         webhook_secret: &str,
@@ -657,9 +661,9 @@ impl DomainBillingUseCases {
         self.get_domain_verified(owner_id, domain_id).await?;
 
         // Validate key prefixes match the declared mode
-        mode.validate_key_prefix(secret_key, "Secret key")
+        mode.validate_stripe_key_prefix(secret_key, "Secret key")
             .map_err(|e| AppError::InvalidInput(e))?;
-        mode.validate_key_prefix(publishable_key, "Publishable key")
+        mode.validate_stripe_key_prefix(publishable_key, "Publishable key")
             .map_err(|e| AppError::InvalidInput(e))?;
 
         // Encrypt secrets
@@ -687,7 +691,7 @@ impl DomainBillingUseCases {
         &self,
         owner_id: Uuid,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<()> {
         let domain = self.get_domain_verified(owner_id, domain_id).await?;
 
@@ -718,8 +722,8 @@ impl DomainBillingUseCases {
         &self,
         owner_id: Uuid,
         domain_id: Uuid,
-        mode: StripeMode,
-    ) -> AppResult<StripeMode> {
+        mode: PaymentMode,
+    ) -> AppResult<PaymentMode> {
         self.get_domain_verified(owner_id, domain_id).await?;
 
         // Verify the mode has a config before activating
@@ -759,7 +763,7 @@ impl DomainBillingUseCases {
     pub async fn get_stripe_secret_key_for_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<String> {
         let config = self
             .stripe_config_repo
@@ -777,7 +781,7 @@ impl DomainBillingUseCases {
     pub async fn get_stripe_webhook_secret_for_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<String> {
         let config = self
             .stripe_config_repo
@@ -799,7 +803,7 @@ impl DomainBillingUseCases {
     pub async fn is_stripe_configured_for_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<bool> {
         Ok(self
             .stripe_config_repo
@@ -852,20 +856,15 @@ impl DomainBillingUseCases {
         }
 
         // For Stripe, ensure it's configured for the mode
-        if provider == PaymentProvider::Stripe {
-            let stripe_mode = match mode {
-                PaymentMode::Test => StripeMode::Test,
-                PaymentMode::Live => StripeMode::Live,
-            };
-            if !self
-                .is_stripe_configured_for_mode(domain_id, stripe_mode)
+        if provider == PaymentProvider::Stripe
+            && !self
+                .is_stripe_configured_for_mode(domain_id, mode)
                 .await?
-            {
-                return Err(AppError::InvalidInput(format!(
-                    "Stripe {} mode must be configured before enabling",
-                    mode.as_str()
-                )));
-            }
+        {
+            return Err(AppError::InvalidInput(format!(
+                "Stripe {} mode must be configured before enabling",
+                mode.as_str()
+            )));
         }
 
         // Coinbase is not yet implemented
@@ -1097,7 +1096,7 @@ impl DomainBillingUseCases {
         &self,
         owner_id: Uuid,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         include_archived: bool,
     ) -> AppResult<Vec<SubscriptionPlanProfile>> {
         self.get_domain_verified(owner_id, domain_id).await?;
@@ -1177,7 +1176,7 @@ impl DomainBillingUseCases {
     pub async fn get_plan_by_stripe_price_id(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         stripe_price_id: &str,
     ) -> AppResult<Option<SubscriptionPlanProfile>> {
         self.plan_repo
@@ -1241,7 +1240,7 @@ impl DomainBillingUseCases {
         &self,
         owner_id: Uuid,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<Vec<UserSubscriptionWithPlan>> {
         self.get_domain_verified(owner_id, domain_id).await?;
         self.subscription_repo
@@ -1268,7 +1267,7 @@ impl DomainBillingUseCases {
         if plan.domain_id != domain_id {
             return Err(AppError::NotFound);
         }
-        if plan.stripe_mode != domain.billing_stripe_mode {
+        if PaymentMode::from(plan.stripe_mode) != domain.billing_stripe_mode {
             return Err(AppError::InvalidInput(format!(
                 "Cannot grant subscription to a plan in {} mode when active mode is {}",
                 plan.stripe_mode.as_str(),
@@ -1902,7 +1901,7 @@ impl DomainBillingUseCases {
         // Check if subscription already exists for this user in this mode
         if let Some(existing) = self
             .subscription_repo
-            .get_by_user_and_mode(input.domain_id, input.stripe_mode, input.end_user_id)
+            .get_by_user_and_mode(input.domain_id, input.payment_mode, input.end_user_id)
             .await?
         {
             // Update existing subscription with new plan and Stripe IDs
@@ -1970,7 +1969,7 @@ impl DomainBillingUseCases {
     pub async fn sync_invoice_from_webhook(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         invoice: &serde_json::Value,
     ) -> AppResult<BillingPaymentProfile> {
         let stripe_invoice_id = invoice["id"].as_str().unwrap_or("");
@@ -2010,7 +2009,7 @@ impl DomainBillingUseCases {
 
         let input = CreatePaymentInput {
             domain_id,
-            stripe_mode: mode,
+            payment_mode: mode,
             end_user_id,
             subscription_id,
             stripe_invoice_id: stripe_invoice_id.to_string(),
@@ -2052,7 +2051,7 @@ impl DomainBillingUseCases {
 
         let input = CreatePaymentInput {
             domain_id,
-            stripe_mode: StripeMode::Test,
+            payment_mode: PaymentMode::Test,
             end_user_id: user_id,
             subscription_id: Some(subscription_id),
             stripe_invoice_id: invoice_id,
@@ -2243,7 +2242,7 @@ pub struct ModeConfigStatus {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StripeConfigStatusResponse {
-    pub active_mode: StripeMode,
+    pub active_mode: PaymentMode,
     pub test: Option<ModeConfigStatus>,
     pub live: Option<ModeConfigStatus>,
 }

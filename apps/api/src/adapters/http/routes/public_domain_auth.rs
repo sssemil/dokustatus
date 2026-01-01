@@ -1802,8 +1802,6 @@ async fn change_plan(
     }))
 }
 
-use crate::domain::entities::stripe_mode::StripeMode;
-
 /// POST /api/public/domain/{domain}/billing/webhook/test
 /// Handles Stripe webhook events for test mode
 async fn handle_webhook_test(
@@ -1812,7 +1810,7 @@ async fn handle_webhook_test(
     headers: HeaderMap,
     body: String,
 ) -> AppResult<impl IntoResponse> {
-    handle_webhook_for_mode(state, path, headers, body, StripeMode::Test).await
+    handle_webhook_for_mode(state, path, headers, body, PaymentMode::Test).await
 }
 
 /// POST /api/public/domain/{domain}/billing/webhook/live
@@ -1823,7 +1821,7 @@ async fn handle_webhook_live(
     headers: HeaderMap,
     body: String,
 ) -> AppResult<impl IntoResponse> {
-    handle_webhook_for_mode(state, path, headers, body, StripeMode::Live).await
+    handle_webhook_for_mode(state, path, headers, body, PaymentMode::Live).await
 }
 
 /// Internal webhook handler that processes events for a specific mode
@@ -1832,7 +1830,7 @@ async fn handle_webhook_for_mode(
     Path(hostname): Path<String>,
     headers: HeaderMap,
     body: String,
-    stripe_mode: StripeMode,
+    stripe_mode: PaymentMode,
 ) -> AppResult<impl IntoResponse> {
     use crate::domain::entities::user_subscription::SubscriptionStatus;
     use crate::infra::stripe_client::StripeClient;
@@ -1927,7 +1925,7 @@ async fn handle_webhook_for_mode(
 
                             let input = CreateSubscriptionInput {
                                 domain_id: domain.id,
-                                stripe_mode,
+                                payment_mode: stripe_mode,
                                 end_user_id: user_id,
                                 plan_id: plan.id,
                                 stripe_customer_id: customer_id.to_string(),
@@ -2855,7 +2853,6 @@ async fn create_dummy_checkout(
 
             // Create subscription and payment records
             use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
-            use crate::domain::entities::stripe_mode::StripeMode;
             use crate::domain::entities::user_subscription::SubscriptionStatus;
 
             let now = chrono::Utc::now().naive_utc();
@@ -2869,7 +2866,7 @@ async fn create_dummy_checkout(
                 .billing_use_cases
                 .create_or_update_subscription(&CreateSubscriptionInput {
                     domain_id,
-                    stripe_mode: StripeMode::Test,
+                    payment_mode: PaymentMode::Test,
                     end_user_id: user_id,
                     plan_id: plan.id,
                     stripe_customer_id: format!("dummy_cus_{}", user_id),
@@ -2993,7 +2990,6 @@ async fn confirm_dummy_checkout(
 
     // Create subscription and payment records
     use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
-    use crate::domain::entities::stripe_mode::StripeMode;
     use crate::domain::entities::user_subscription::SubscriptionStatus;
 
     let subscription_id_str = format!("dummy_sub_{}", Uuid::new_v4());
@@ -3008,7 +3004,7 @@ async fn confirm_dummy_checkout(
         .billing_use_cases
         .create_or_update_subscription(&CreateSubscriptionInput {
             domain_id,
-            stripe_mode: StripeMode::Test,
+            payment_mode: PaymentMode::Test,
             end_user_id: user_id,
             plan_id: plan.id,
             stripe_customer_id: format!("dummy_cus_{}", user_id),

@@ -2,9 +2,16 @@ Unify StripeMode and PaymentMode
 Reduce duplicated enums and conversion boilerplate.
 
 Checklist
-- [ ] Assess migration impact for enums
-- [ ] Introduce unified enum or conversion layer
-- [ ] Plan data migration if needed
+- [x] Assess migration impact for enums
+- [x] Introduce unified enum or conversion layer
+- [x] Plan data migration if needed
+- [x] Add From/Into conversions between StripeMode and PaymentMode
+- [x] Update persistence layer to use PaymentMode
+- [x] Update application layer to use PaymentMode
+- [x] Update HTTP routes to use PaymentMode
+- [x] Update frontend types to use PaymentMode
+- [x] Add #[deprecated] attribute to StripeMode
+- [x] Create follow-up task 0015 for StripeMode removal
 
 History
 - 2026-01-01 06:52 Created from code review finding #14 Redundant StripeMode and PaymentMode enums.
@@ -32,3 +39,19 @@ History
   - Added commit checkpoint recommendations (one commit per phase)
   - Added pre-implementation checklist
   - Improved enum attribute verification step
+- 2026-01-01 Implementation completed:
+  - Phase 1: Added bidirectional From<> trait implementations between StripeMode and PaymentMode
+  - Phase 2: Updated all persistence, application, and adapter layers to use PaymentMode
+    - Updated trait signatures in domain_billing.rs
+    - Updated 5 persistence files with dual-write SQL patterns
+    - Updated HTTP routes in domain.rs and public_domain_auth.rs
+    - Updated CreateSubscriptionInput and CreatePaymentInput structs
+  - Phase 3: Updated frontend types:
+    - Changed StripeConfigStatus.active_mode to use PaymentMode
+    - Updated input types (UpdateStripeConfigInput, DeleteStripeConfigInput, SetBillingModeInput)
+    - Added @deprecated JSDoc to StripeMode type alias
+    - Updated page.tsx to use PaymentMode instead of StripeMode
+  - Phase 4: Added #[deprecated] attribute to StripeMode enum in Rust
+  - Phase 5: Created follow-up task 0015-remove-stripe-mode-enum.md
+  - All 71 tests pass, frontend builds successfully
+  - Task marked complete and moved to outbound

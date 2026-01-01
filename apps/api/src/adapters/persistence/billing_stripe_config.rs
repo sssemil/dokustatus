@@ -6,7 +6,7 @@ use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
     application::use_cases::domain_billing::{BillingStripeConfigProfile, BillingStripeConfigRepo},
-    domain::entities::stripe_mode::StripeMode,
+    domain::entities::payment_mode::PaymentMode,
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> BillingStripeConfigProfile {
@@ -27,18 +27,19 @@ impl BillingStripeConfigRepo for PostgresPersistence {
     async fn get_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<Option<BillingStripeConfigProfile>> {
+        let mode_str = mode.as_str();
         let row = sqlx::query(
             r#"
             SELECT id, domain_id, stripe_mode, stripe_secret_key_encrypted, stripe_publishable_key,
                    stripe_webhook_secret_encrypted, created_at, updated_at
             FROM domain_billing_stripe_config
-            WHERE domain_id = $1 AND stripe_mode = $2
+            WHERE domain_id = $1 AND stripe_mode = $2::stripe_mode
             "#,
         )
         .bind(domain_id)
-        .bind(mode)
+        .bind(mode_str)
         .fetch_optional(&self.pool)
         .await
         .map_err(AppError::from)?;
@@ -65,21 +66,25 @@ impl BillingStripeConfigRepo for PostgresPersistence {
     async fn upsert(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         stripe_secret_key_encrypted: &str,
         stripe_publishable_key: &str,
         stripe_webhook_secret_encrypted: &str,
     ) -> AppResult<BillingStripeConfigProfile> {
         let id = Uuid::new_v4();
+        let mode_str = mode.as_str();
+        // Dual-write: insert into both stripe_mode and payment_mode columns
         let row = sqlx::query(
             r#"
             INSERT INTO domain_billing_stripe_config
-                (id, domain_id, stripe_mode, stripe_secret_key_encrypted, stripe_publishable_key, stripe_webhook_secret_encrypted)
-            VALUES ($1, $2, $3, $4, $5, $6)
+                (id, domain_id, stripe_mode, payment_mode, payment_provider, stripe_secret_key_encrypted, stripe_publishable_key, stripe_webhook_secret_encrypted)
+            VALUES ($1, $2, $3::stripe_mode, $3::payment_mode, 'stripe'::payment_provider, $4, $5, $6)
             ON CONFLICT (domain_id, stripe_mode) DO UPDATE SET
                 stripe_secret_key_encrypted = EXCLUDED.stripe_secret_key_encrypted,
                 stripe_publishable_key = EXCLUDED.stripe_publishable_key,
                 stripe_webhook_secret_encrypted = EXCLUDED.stripe_webhook_secret_encrypted,
+                payment_mode = EXCLUDED.payment_mode,
+                payment_provider = EXCLUDED.payment_provider,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING id, domain_id, stripe_mode, stripe_secret_key_encrypted, stripe_publishable_key,
                       stripe_webhook_secret_encrypted, created_at, updated_at
@@ -87,7 +92,7 @@ impl BillingStripeConfigRepo for PostgresPersistence {
         )
         .bind(id)
         .bind(domain_id)
-        .bind(mode)
+        .bind(mode_str)
         .bind(stripe_secret_key_encrypted)
         .bind(stripe_publishable_key)
         .bind(stripe_webhook_secret_encrypted)
@@ -97,12 +102,13 @@ impl BillingStripeConfigRepo for PostgresPersistence {
         Ok(row_to_profile(row))
     }
 
-    async fn delete(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<()> {
+    async fn delete(&self, domain_id: Uuid, mode: PaymentMode) -> AppResult<()> {
+        let mode_str = mode.as_str();
         sqlx::query(
-            "DELETE FROM domain_billing_stripe_config WHERE domain_id = $1 AND stripe_mode = $2",
+            "DELETE FROM domain_billing_stripe_config WHERE domain_id = $1 AND stripe_mode = $2::stripe_mode",
         )
         .bind(domain_id)
-        .bind(mode)
+        .bind(mode_str)
         .execute(&self.pool)
         .await
         .map_err(AppError::from)?;

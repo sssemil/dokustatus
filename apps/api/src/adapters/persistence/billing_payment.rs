@@ -12,7 +12,7 @@ use crate::{
     },
     domain::entities::{
         payment_mode::PaymentMode, payment_provider::PaymentProvider,
-        payment_status::PaymentStatus, stripe_mode::StripeMode,
+        payment_status::PaymentStatus,
     },
 };
 
@@ -104,17 +104,19 @@ impl BillingPaymentRepo for PostgresPersistence {
         input: &CreatePaymentInput,
     ) -> AppResult<BillingPaymentProfile> {
         let id = Uuid::new_v4();
+        let mode_str = input.payment_mode.as_str();
+        // Dual-write: insert into both stripe_mode and payment_mode columns
         let row = sqlx::query(&format!(
             r#"
             INSERT INTO billing_payments (
-                id, domain_id, stripe_mode, end_user_id, subscription_id,
+                id, domain_id, stripe_mode, payment_mode, payment_provider, end_user_id, subscription_id,
                 stripe_invoice_id, stripe_payment_intent_id, stripe_customer_id,
                 amount_cents, amount_paid_cents, currency, status,
                 plan_id, plan_code, plan_name,
                 hosted_invoice_url, invoice_pdf_url, invoice_number, billing_reason,
                 failure_message, invoice_created_at, payment_date
             )
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+            VALUES ($1, $2, $3::stripe_mode, $3::payment_mode, 'stripe'::payment_provider, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
             ON CONFLICT (domain_id, stripe_mode, stripe_invoice_id) DO UPDATE SET
                 stripe_payment_intent_id = COALESCE(EXCLUDED.stripe_payment_intent_id, billing_payments.stripe_payment_intent_id),
                 amount_cents = EXCLUDED.amount_cents,
@@ -130,6 +132,8 @@ impl BillingPaymentRepo for PostgresPersistence {
                 invoice_number = COALESCE(EXCLUDED.invoice_number, billing_payments.invoice_number),
                 billing_reason = COALESCE(EXCLUDED.billing_reason, billing_payments.billing_reason),
                 payment_date = COALESCE(EXCLUDED.payment_date, billing_payments.payment_date),
+                payment_mode = EXCLUDED.payment_mode,
+                payment_provider = EXCLUDED.payment_provider,
                 updated_at = CURRENT_TIMESTAMP
             RETURNING {}
             "#,
@@ -137,7 +141,7 @@ impl BillingPaymentRepo for PostgresPersistence {
         ))
         .bind(id)
         .bind(input.domain_id)
-        .bind(input.stripe_mode)
+        .bind(mode_str)
         .bind(input.end_user_id)
         .bind(input.subscription_id)
         .bind(&input.stripe_invoice_id)
@@ -183,19 +187,20 @@ impl BillingPaymentRepo for PostgresPersistence {
     async fn list_by_user(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         end_user_id: Uuid,
         page: i32,
         per_page: i32,
     ) -> AppResult<PaginatedPayments> {
         let offset = (page - 1) * per_page;
+        let mode_str = mode.as_str();
 
         // Get total count
         let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM billing_payments WHERE domain_id = $1 AND stripe_mode = $2 AND end_user_id = $3",
+            "SELECT COUNT(*) FROM billing_payments WHERE domain_id = $1 AND stripe_mode = $2::stripe_mode AND end_user_id = $3",
         )
         .bind(domain_id)
-        .bind(mode)
+        .bind(mode_str)
         .bind(end_user_id)
         .fetch_one(&self.pool)
         .await
@@ -207,14 +212,14 @@ impl BillingPaymentRepo for PostgresPersistence {
             SELECT {}, deu.email as user_email
             FROM billing_payments bp
             JOIN domain_end_users deu ON bp.end_user_id = deu.id
-            WHERE bp.domain_id = $1 AND bp.stripe_mode = $2 AND bp.end_user_id = $3
+            WHERE bp.domain_id = $1 AND bp.stripe_mode = $2::stripe_mode AND bp.end_user_id = $3
             ORDER BY bp.payment_date DESC NULLS LAST, bp.created_at DESC
             LIMIT $4 OFFSET $5
             "#,
             SELECT_COLS
         ))
         .bind(domain_id)
-        .bind(mode)
+        .bind(mode_str)
         .bind(end_user_id)
         .bind(per_page)
         .bind(offset)
@@ -238,17 +243,18 @@ impl BillingPaymentRepo for PostgresPersistence {
     async fn list_by_domain(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         filters: &PaymentListFilters,
         page: i32,
         per_page: i32,
     ) -> AppResult<PaginatedPayments> {
         let offset = (page - 1) * per_page;
+        let mode_str = mode.as_str();
 
         // Build dynamic WHERE clause
         let mut conditions: Vec<String> = vec![
             "bp.domain_id = $1".to_string(),
-            "bp.stripe_mode = $2".to_string(),
+            "bp.stripe_mode = $2::stripe_mode".to_string(),
         ];
         let mut param_count = 2;
 
@@ -294,7 +300,7 @@ impl BillingPaymentRepo for PostgresPersistence {
 
         let mut count_q = sqlx::query_scalar::<_, i64>(&count_query)
             .bind(domain_id)
-            .bind(mode);
+            .bind(mode_str);
 
         if let Some(status) = &filters.status {
             count_q = count_q.bind(status);
@@ -333,7 +339,7 @@ impl BillingPaymentRepo for PostgresPersistence {
             param_count + 2
         );
 
-        let mut data_q = sqlx::query(&data_query).bind(domain_id).bind(mode);
+        let mut data_q = sqlx::query(&data_query).bind(domain_id).bind(mode_str);
 
         if let Some(status) = &filters.status {
             data_q = data_q.bind(status);
@@ -442,12 +448,15 @@ impl BillingPaymentRepo for PostgresPersistence {
     async fn get_payment_summary(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         date_from: Option<NaiveDateTime>,
         date_to: Option<NaiveDateTime>,
     ) -> AppResult<PaymentSummary> {
-        let mut conditions: Vec<String> =
-            vec!["domain_id = $1".to_string(), "stripe_mode = $2".to_string()];
+        let mode_str = mode.as_str();
+        let mut conditions: Vec<String> = vec![
+            "domain_id = $1".to_string(),
+            "stripe_mode = $2::stripe_mode".to_string(),
+        ];
         let mut param_count = 2;
 
         if date_from.is_some() {
@@ -481,7 +490,7 @@ impl BillingPaymentRepo for PostgresPersistence {
             where_clause
         );
 
-        let mut q = sqlx::query(&query).bind(domain_id).bind(mode);
+        let mut q = sqlx::query(&query).bind(domain_id).bind(mode_str);
 
         if let Some(df) = &date_from {
             q = q.bind(df);
@@ -504,13 +513,14 @@ impl BillingPaymentRepo for PostgresPersistence {
     async fn list_all_for_export(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         filters: &PaymentListFilters,
     ) -> AppResult<Vec<BillingPaymentWithUser>> {
         // Build dynamic WHERE clause
+        let mode_str = mode.as_str();
         let mut conditions: Vec<String> = vec![
             "bp.domain_id = $1".to_string(),
-            "bp.stripe_mode = $2".to_string(),
+            "bp.stripe_mode = $2::stripe_mode".to_string(),
         ];
         let mut param_count = 2;
 
@@ -554,7 +564,7 @@ impl BillingPaymentRepo for PostgresPersistence {
             SELECT_COLS, where_clause
         );
 
-        let mut q = sqlx::query(&query).bind(domain_id).bind(mode);
+        let mut q = sqlx::query(&query).bind(domain_id).bind(mode_str);
 
         if let Some(status) = &filters.status {
             q = q.bind(status);
