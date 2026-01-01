@@ -84,6 +84,15 @@ impl std::str::FromStr for PaymentMode {
     }
 }
 
+impl From<crate::domain::entities::stripe_mode::StripeMode> for PaymentMode {
+    fn from(mode: crate::domain::entities::stripe_mode::StripeMode) -> Self {
+        match mode {
+            crate::domain::entities::stripe_mode::StripeMode::Test => PaymentMode::Test,
+            crate::domain::entities::stripe_mode::StripeMode::Live => PaymentMode::Live,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -177,5 +186,13 @@ mod tests {
         assert!(PaymentMode::Live.is_production());
         assert!(PaymentMode::Test.is_test());
         assert!(!PaymentMode::Live.is_test());
+    }
+
+    #[test]
+    fn test_payment_mode_from_stripe_mode() {
+        use crate::domain::entities::stripe_mode::StripeMode;
+
+        assert_eq!(PaymentMode::from(StripeMode::Test), PaymentMode::Test);
+        assert_eq!(PaymentMode::from(StripeMode::Live), PaymentMode::Live);
     }
 }

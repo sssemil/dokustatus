@@ -74,6 +74,15 @@ impl std::str::FromStr for StripeMode {
     }
 }
 
+impl From<crate::domain::entities::payment_mode::PaymentMode> for StripeMode {
+    fn from(mode: crate::domain::entities::payment_mode::PaymentMode) -> Self {
+        match mode {
+            crate::domain::entities::payment_mode::PaymentMode::Test => StripeMode::Test,
+            crate::domain::entities::payment_mode::PaymentMode::Live => StripeMode::Live,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +156,13 @@ mod tests {
                 .validate_key_prefix("rk_live_abc", "secret_key")
                 .is_ok()
         );
+    }
+
+    #[test]
+    fn test_stripe_mode_from_payment_mode() {
+        use crate::domain::entities::payment_mode::PaymentMode;
+
+        assert_eq!(StripeMode::from(PaymentMode::Test), StripeMode::Test);
+        assert_eq!(StripeMode::from(PaymentMode::Live), StripeMode::Live);
     }
 }
