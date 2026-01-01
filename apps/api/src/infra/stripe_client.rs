@@ -453,6 +453,16 @@ impl StripeClient {
         signature_header: &str,
         webhook_secret: &str,
     ) -> AppResult<()> {
+        let now = chrono::Utc::now().timestamp();
+        Self::verify_webhook_signature_at(payload, signature_header, webhook_secret, now)
+    }
+
+    fn verify_webhook_signature_at(
+        payload: &str,
+        signature_header: &str,
+        webhook_secret: &str,
+        now: i64,
+    ) -> AppResult<()> {
         let payload = payload.as_bytes();
         use hmac::{Hmac, Mac};
         use sha2::Sha256;
@@ -481,21 +491,26 @@ impl StripeClient {
             return Err(AppError::InvalidInput("Missing signature".into()));
         }
 
-        // Compute expected signature
+        // Compute signed payload once (outside loop).
         let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
-        let mut mac = Hmac::<Sha256>::new_from_slice(webhook_secret.as_bytes())
-            .map_err(|_| AppError::Internal("HMAC error".into()))?;
-        mac.update(signed_payload.as_bytes());
-        let expected = hex::encode(mac.finalize().into_bytes());
 
-        // Check if any signature matches
-        for sig in signatures {
-            if constant_time_compare(sig, &expected) {
+        // Check if any v1 signature matches (constant-time via verify_slice).
+        // Note: per-signature MAC recomputation is required because verify_slice consumes the MAC.
+        for sig in &signatures {
+            let sig_bytes = match hex::decode(sig) {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
+            };
+
+            let mut mac = Hmac::<Sha256>::new_from_slice(webhook_secret.as_bytes())
+                .map_err(|_| AppError::Internal("HMAC error".into()))?;
+            mac.update(signed_payload.as_bytes());
+
+            if mac.verify_slice(&sig_bytes).is_ok() {
                 // Verify timestamp is not too old (5 minutes tolerance)
                 let ts: i64 = timestamp.parse().map_err(|_| {
                     AppError::InvalidInput("Invalid timestamp".into())
                 })?;
-                let now = chrono::Utc::now().timestamp();
                 if (now - ts).abs() > 300 {
                     return Err(AppError::InvalidInput("Timestamp too old".into()));
                 }
@@ -541,17 +556,6 @@ impl StripeClient {
             AppError::Internal(format!("Failed to parse Stripe response: {}", e))
         })
     }
-}
-
-fn constant_time_compare(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut result = 0u8;
-    for (x, y) in a.bytes().zip(b.bytes()) {
-        result |= x ^ y;
-    }
-    result == 0
 }
 
 // ============================================================================
@@ -893,5 +897,214 @@ impl StripeCustomerFull {
                 .as_ref()
                 .and_then(|s| s.default_payment_method.as_ref())
                 .is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    const TEST_SECRET: &str = "whsec_test_secret_key";
+    const NOW_TS: i64 = 1_700_000_000;
+    const TOLERANCE_SECS: i64 = 300;
+
+    fn compute_signature(payload: &str, timestamp: i64, secret: &str) -> String {
+        let signed_payload = format!("{}.{}", timestamp, payload);
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(signed_payload.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    fn verify(payload: &str, header: &str) -> AppResult<()> {
+        StripeClient::verify_webhook_signature_at(payload, header, TEST_SECRET, NOW_TS)
+    }
+
+    // -------------------------------------------------------------------------
+    // Basic signature verification
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_valid_signature() {
+        let payload = r#"{"type":"checkout.session.completed"}"#;
+        let ts = NOW_TS;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_ok(), "Valid signature should pass");
+    }
+
+    #[test]
+    fn test_invalid_signature() {
+        let payload = r#"{"type":"checkout.session.completed"}"#;
+        let ts = NOW_TS;
+        let header = format!(
+            "t={},v1=0000000000000000000000000000000000000000000000000000000000000000",
+            ts
+        );
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Invalid signature should fail");
+    }
+
+    // -------------------------------------------------------------------------
+    // Timestamp validation (deterministic)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_expired_timestamp() {
+        let payload = r#"{"type":"checkout.session.completed"}"#;
+        let ts = NOW_TS - TOLERANCE_SECS - 100;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Expired timestamp should fail");
+    }
+
+    #[test]
+    fn test_future_timestamp_within_tolerance() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS + 60;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_ok(), "Future timestamp within tolerance should pass");
+    }
+
+    #[test]
+    fn test_future_timestamp_beyond_tolerance() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS + TOLERANCE_SECS + 100;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Future timestamp beyond tolerance should fail");
+    }
+
+    // -------------------------------------------------------------------------
+    // Header parsing edge cases
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_missing_timestamp() {
+        let result = verify(
+            "payload",
+            "v1=abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+        );
+        assert!(result.is_err(), "Missing timestamp should fail");
+    }
+
+    #[test]
+    fn test_missing_signature() {
+        let ts = NOW_TS;
+        let result = verify("payload", &format!("t={}", ts));
+        assert!(result.is_err(), "Missing signature should fail");
+    }
+
+    #[test]
+    fn test_multiple_v1_signatures_second_valid() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let valid_sig = compute_signature(payload, ts, TEST_SECRET);
+        let invalid_sig =
+            "0000000000000000000000000000000000000000000000000000000000000000";
+
+        let header = format!("t={},v1={},v1={}", ts, invalid_sig, valid_sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_ok(), "Second valid signature should pass");
+    }
+
+    #[test]
+    fn test_non_v1_signatures_ignored() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let valid_sig = compute_signature(payload, ts, TEST_SECRET);
+
+        let header = format!("t={},v0=ignored,v1={}", ts, valid_sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_ok(), "Non-v1 signatures should be ignored");
+    }
+
+    // -------------------------------------------------------------------------
+    // Malformed signature handling
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_malformed_hex_non_hex_chars() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let header = format!(
+            "t={},v1=ZZZZ0000000000000000000000000000000000000000000000000000000000",
+            ts
+        );
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Malformed hex should fail");
+    }
+
+    #[test]
+    fn test_malformed_hex_odd_length() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let header = format!("t={},v1=abc", ts);
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Odd-length hex should fail");
+    }
+
+    #[test]
+    fn test_empty_signature_value() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let header = format!("t={},v1=", ts);
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Empty signature should fail");
+    }
+
+    #[test]
+    fn test_wrong_length_signature() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let header = format!("t={},v1=abcd1234", ts);
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Wrong-length signature should fail");
+    }
+
+    // -------------------------------------------------------------------------
+    // Header whitespace handling
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_header_with_spaces_around_comma() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={}, v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(
+            result.is_err(),
+            "Header with spaces should fail (documents current behavior)"
+        );
+    }
+
+    #[test]
+    fn test_header_standard_stripe_format() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_ok(), "Standard Stripe format should pass");
     }
 }

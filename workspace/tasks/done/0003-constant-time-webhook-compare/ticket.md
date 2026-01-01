@@ -9,3 +9,5 @@ Checklist
 History
 - 2026-01-01 06:52 Created from code review finding #3 Timing attack in webhook signature verification.
 - 2026-01-01 06:55 Renamed file to 0003-constant-time-webhook-compare.md to use 4-digit task numbering.
+- 2026-01-01 09:51 Refactored webhook signature verification to use constant-time HMAC verification and added deterministic tests.
+- 2026-01-01 09:56 Completed implementation, tests, and commit for constant-time webhook signature verification.
