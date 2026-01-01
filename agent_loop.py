@@ -1069,25 +1069,22 @@ def advance_planning_tasks(manager: ParallelTaskManager):
 
 
 def start_new_task_if_available(manager: ParallelTaskManager):
-    """Pick next task from todo and start it in a worktree."""
-    if not manager.can_start_new_task():
-        return
+    """Pick next tasks from todo and start them in worktrees until capacity is full."""
+    active_slugs = set(manager.active_tasks.keys())
 
-    next_task_dir = pick_next_task()
-    if next_task_dir is None:
-        return
+    while manager.can_start_new_task():
+        next_task_dir = pick_next_task(skip_slugs=active_slugs)
+        if next_task_dir is None:
+            return
 
-    slug = next_task_dir.name
+        slug = next_task_dir.name
+        active_slugs.add(slug)  # Don't pick this one again
 
-    # Don't start if already active
-    if manager.get_task(slug) is not None:
-        return
-
-    print(f"[NEW] Starting task {slug}")
-    task = setup_task_in_worktree(slug, manager)
-    if task:
-        # Start planning
-        start_claude_planning_async(task, version=1)
+        print(f"[NEW] Starting task {slug}")
+        task = setup_task_in_worktree(slug, manager)
+        if task:
+            # Start planning
+            start_claude_planning_async(task, version=1)
 
 
 def handle_execution_tasks(manager: ParallelTaskManager):
@@ -1119,12 +1116,13 @@ def session_file_for(slug: str) -> Path:
     return SESSIONS_DIR / f"{slug}.session"
 
 
-def pick_next_task() -> Path | None:
+def pick_next_task(skip_slugs: set[str] | None = None) -> Path | None:
     """Get the next task directory from todo, sorted by name."""
+    skip_slugs = skip_slugs or set()
     # Look for directories containing ticket.md
     task_dirs = sorted([
         d for d in TASKS_TODO.iterdir()
-        if d.is_dir() and (d / "ticket.md").exists()
+        if d.is_dir() and (d / "ticket.md").exists() and d.name not in skip_slugs
     ])
     return task_dirs[0] if task_dirs else None
 
@@ -1858,7 +1856,7 @@ def main_parallel():
                 status = "running" if task.is_alive else "idle"
                 print(f"  [{task.slug}] {task.phase.value} ({status})")
 
-        if not manager.active_tasks and not pick_next_task():
+        if not manager.active_tasks and not pick_next_task(skip_slugs=set()):
             print("Idle — no tasks")
 
         time.sleep(5)  # Poll every 5 seconds
