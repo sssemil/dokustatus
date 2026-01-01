@@ -83,30 +83,51 @@ def run_agent_with_logs(
     log_file: Path,
     label: str,
     input_text: str | None = None,
-    tail_lines: int = 3
+    tail_lines: int = 3,
+    watch_file: Path | None = None,
+    watch_min_size: int = 100
 ) -> int:
     """
     Run an agent command, streaming output to log file and showing last N lines in terminal.
+
+    If watch_file is provided, kills the process once that file exists and has >= watch_min_size bytes.
+    This is a fallback to prevent agents from spinning after completing their task.
+
     Returns the exit code.
     """
     log_file.parent.mkdir(parents=True, exist_ok=True)
 
     # Track last N lines for display
     last_lines: deque[str] = deque(maxlen=tail_lines)
+    killed_by_watcher = False
 
     def display_tail():
         """Clear and redisplay the last N lines."""
-        # Move up and clear previous lines
         if last_lines:
             sys.stdout.write(f"\r\033[K")  # Clear current line
             for i, line in enumerate(last_lines):
-                # Truncate long lines
                 display = line[:100] + "..." if len(line) > 100 else line
                 if i < len(last_lines) - 1:
                     sys.stdout.write(f"  {display}\n")
                 else:
                     sys.stdout.write(f"  {display}")
             sys.stdout.flush()
+
+    def file_watcher(proc: subprocess.Popen):
+        """Watch for expected output file and kill process when it's ready."""
+        nonlocal killed_by_watcher
+        while proc.poll() is None:  # While process is running
+            if watch_file and watch_file.exists():
+                try:
+                    size = watch_file.stat().st_size
+                    if size >= watch_min_size:
+                        print(f"\n[{label}] Output file ready ({size} bytes), terminating...")
+                        killed_by_watcher = True
+                        proc.terminate()
+                        return
+                except OSError:
+                    pass
+            time.sleep(2)
 
     print(f"[{label}] Logging to {log_file}")
 
@@ -117,8 +138,13 @@ def run_agent_with_logs(
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            bufsize=1  # Line buffered
+            bufsize=1
         )
+
+        # Start file watcher thread if watch_file provided
+        if watch_file:
+            watcher_thread = threading.Thread(target=file_watcher, args=(process,), daemon=True)
+            watcher_thread.start()
 
         # Send input if provided
         if input_text and process.stdin:
@@ -136,9 +162,11 @@ def run_agent_with_logs(
 
         process.wait()
 
-    # Final newline after tail display
     print()
-    print(f"[{label}] Exit code: {process.returncode}")
+    if killed_by_watcher:
+        print(f"[{label}] Terminated (output file ready)")
+    else:
+        print(f"[{label}] Exit code: {process.returncode}")
 
     return process.returncode
 
@@ -231,11 +259,16 @@ Address the feedback while keeping what works well.
 
 Then stop."""
 
+    # Watch for the plan file - kill Claude once it's written
+    expected_plan = task_dir / plan_file
+
     run_agent_with_logs(
         cmd=["claude", "--dangerously-skip-permissions"],
         log_file=log_file,
         label=f"Claude {plan_file}",
-        input_text=prompt
+        input_text=prompt,
+        watch_file=expected_plan,
+        watch_min_size=100  # Plan should be at least 100 bytes
     )
 
     # Commit the plan (Claude should have written it)
