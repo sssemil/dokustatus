@@ -111,6 +111,7 @@ class ActiveTask:
     planning_iteration: int = 0
     log_handle: Optional[object] = field(default=None, repr=False)
     output_thread: Optional[threading.Thread] = field(default=None, repr=False)
+    use_claude_for_exec: bool = False  # Fallback to Claude if Codex hits rate limit
 
     @property
     def is_alive(self) -> bool:
@@ -484,21 +485,23 @@ def kill_task_subprocess(task: ActiveTask, timeout: int = 30):
 def persist_task_state(task: ActiveTask):
     """Write task state to worktree for crash recovery."""
     state_file = task.worktree_path / ".task-state"
-    state_file.write_text(f"{task.phase.value}\n{task.planning_iteration}\n")
+    use_claude = "1" if task.use_claude_for_exec else "0"
+    state_file.write_text(f"{task.phase.value}\n{task.planning_iteration}\n{use_claude}\n")
 
 
-def load_task_state(worktree_path: Path) -> tuple[TaskPhase, int]:
-    """Load task state from worktree."""
+def load_task_state(worktree_path: Path) -> tuple[TaskPhase, int, bool]:
+    """Load task state from worktree. Returns (phase, iteration, use_claude_for_exec)."""
     state_file = worktree_path / ".task-state"
     if state_file.exists():
         try:
             lines = state_file.read_text().strip().split("\n")
             phase = TaskPhase(lines[0]) if lines else TaskPhase.PLANNING
             iteration = int(lines[1]) if len(lines) > 1 else 0
-            return phase, iteration
+            use_claude = lines[2] == "1" if len(lines) > 2 else False
+            return phase, iteration, use_claude
         except (ValueError, IndexError):
             pass
-    return TaskPhase.PLANNING, 0
+    return TaskPhase.PLANNING, 0, False
 
 
 # =============================================================================
@@ -786,11 +789,37 @@ Then EXIT."""
     )
 
 
+def check_codex_rate_limit(task: ActiveTask) -> bool:
+    """Check if the latest Codex log shows a rate limit error."""
+    log_dir = task.worktree_task_dir() / "agent_logs"
+    if not log_dir.exists():
+        return False
+
+    # Find the most recent codex-exec log
+    exec_logs = sorted(log_dir.glob("codex-exec-*.log"), reverse=True)
+    if not exec_logs:
+        return False
+
+    latest_log = exec_logs[0]
+    try:
+        content = latest_log.read_text()
+        return "usage_limit_reached" in content or "You've hit your usage limit" in content
+    except Exception:
+        return False
+
+
 def start_task_execution_async(task: ActiveTask) -> subprocess.Popen:
-    """Start Codex execution in the task's worktree (non-blocking)."""
+    """Start execution in the task's worktree (non-blocking).
+
+    Uses Codex by default, falls back to Claude if Codex hit rate limit.
+    """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_dir = task.worktree_task_dir() / "agent_logs"
-    log_file = log_dir / f"codex-exec-{timestamp}.log"
+
+    # Determine which agent to use
+    use_claude = task.use_claude_for_exec
+    agent_name = "claude" if use_claude else "codex"
+    log_file = log_dir / f"{agent_name}-exec-{timestamp}.log"
 
     prompt = f"""You are working on task: {task.slug}
 
@@ -830,16 +859,29 @@ Stay focused on this task."""
     task.phase = TaskPhase.EXECUTING
     persist_task_state(task)
 
-    return start_agent_subprocess(
-        task=task,
-        cmd=[
+    if use_claude:
+        # Use Claude Code for execution
+        cmd = [
+            "claude", "-p", prompt,
+            "--allowedTools", "Edit,Write,Bash,Glob,Grep,Read",
+            "--output-format", "stream-json",
+        ]
+        label = f"Claude exec ({task.slug})"
+    else:
+        # Use Codex for execution
+        cmd = [
             "codex", "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "-C", ".",
             prompt
-        ],
+        ]
+        label = f"Codex exec ({task.slug})"
+
+    return start_agent_subprocess(
+        task=task,
+        cmd=cmd,
         log_file=log_file,
-        label=f"Codex exec ({task.slug})"
+        label=label
     )
 
 
@@ -878,7 +920,7 @@ def recover_existing_worktrees(manager: ParallelTaskManager):
             subprocess.run(["git", "-C", str(path), "rebase", "--abort"], check=False)
 
         # Load persisted state
-        phase, iteration = load_task_state(path)
+        phase, iteration, use_claude = load_task_state(path)
 
         # Override phase based on directory structure
         in_progress = path / "workspace" / "tasks" / "in-progress" / slug
@@ -896,7 +938,8 @@ def recover_existing_worktrees(manager: ParallelTaskManager):
             worktree_path=path,
             branch=f"task/{slug}",
             phase=phase,
-            planning_iteration=iteration
+            planning_iteration=iteration,
+            use_claude_for_exec=use_claude
         )
 
         manager.add_task(task)
@@ -1209,8 +1252,13 @@ def handle_execution_tasks(manager: ParallelTaskManager):
                 persist_task_state(task)
                 manager.queue_for_merge(task.slug)
             elif exit_code != 0:
-                # Task crashed - restart
-                print(f"[EXEC] Task {task.slug} crashed (exit {exit_code}), restarting...")
+                # Task crashed - check if it's a Codex rate limit
+                if not task.use_claude_for_exec and check_codex_rate_limit(task):
+                    print(f"[EXEC] Task {task.slug} hit Codex rate limit, switching to Claude")
+                    task.use_claude_for_exec = True
+                    persist_task_state(task)
+                else:
+                    print(f"[EXEC] Task {task.slug} crashed (exit {exit_code}), restarting...")
                 start_task_execution_async(task)
             else:
                 # Exited 0 but not complete - restart
