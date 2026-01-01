@@ -17,7 +17,8 @@ use crate::{
     application::{
         jwt,
         use_cases::{
-            domain::extract_root_from_reauth_hostname, domain_auth::DomainEndUserProfile,
+            domain::extract_root_from_reauth_hostname,
+            domain_auth::{DomainEndUserProfile, MarkStateResult},
             domain_billing::SubscriptionClaims,
         },
         validators::is_valid_email,
@@ -904,41 +905,101 @@ async fn google_exchange(
     Path(_hostname): Path<String>,
     Json(payload): Json<GoogleExchangePayload>,
 ) -> AppResult<impl IntoResponse> {
-    // Consume state - the domain comes FROM the state, not the URL
+    const RETRY_WINDOW_SECS: i64 = 90;
+
+    // Mark state as in-use - the domain comes FROM the state, not the URL
     // This is because Google OAuth uses a single callback URL (reauth.reauth.dev)
     // but the OAuth flow could have been initiated from any domain
-    let state_data = app_state
+    let state_data = match app_state
         .domain_auth_use_cases
-        .consume_google_oauth_state(&payload.state)
+        .mark_google_oauth_state_in_use(&payload.state, RETRY_WINDOW_SECS)
         .await?
-        .ok_or_else(|| AppError::InvalidInput("Invalid or expired OAuth state".into()))?;
+    {
+        MarkStateResult::Success(data) => data,
+        MarkStateResult::NotFound => {
+            return Err(AppError::InvalidInput("Invalid or expired OAuth state".into()));
+        }
+        MarkStateResult::RetryWindowExpired => {
+            let _ = app_state
+                .domain_auth_use_cases
+                .abort_google_oauth_state(&payload.state)
+                .await;
+            return Err(AppError::OAuthRetryExpired);
+        }
+    };
 
     // Use the domain from the state (this is the domain that initiated the OAuth flow)
     let root_domain = &state_data.domain;
 
     // Get domain
-    let domain = app_state
+    let domain = match app_state
         .domain_auth_use_cases
         .get_domain_by_name(root_domain)
-        .await?
-        .ok_or(AppError::NotFound)?;
+        .await
+    {
+        Ok(Some(domain)) => domain,
+        Ok(None) => {
+            let _ = app_state
+                .domain_auth_use_cases
+                .abort_google_oauth_state(&payload.state)
+                .await;
+            return Err(AppError::NotFound);
+        }
+        Err(e) => {
+            if should_abort_state(&e) {
+                let _ = app_state
+                    .domain_auth_use_cases
+                    .abort_google_oauth_state(&payload.state)
+                    .await;
+            }
+            return Err(e);
+        }
+    };
 
     // Verify Google OAuth is still enabled
-    if !app_state
+    match app_state
         .domain_auth_use_cases
         .is_google_oauth_enabled(domain.id)
-        .await?
+        .await
     {
-        return Err(AppError::InvalidInput(
-            "Google OAuth is not enabled for this domain".into(),
-        ));
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = app_state
+                .domain_auth_use_cases
+                .abort_google_oauth_state(&payload.state)
+                .await;
+            return Err(AppError::InvalidInput(
+                "Google OAuth is not enabled for this domain".into(),
+            ));
+        }
+        Err(e) => {
+            if should_abort_state(&e) {
+                let _ = app_state
+                    .domain_auth_use_cases
+                    .abort_google_oauth_state(&payload.state)
+                    .await;
+            }
+            return Err(e);
+        }
     }
 
     // Get OAuth credentials
-    let (client_id, client_secret, is_fallback) = app_state
+    let (client_id, client_secret, is_fallback) = match app_state
         .domain_auth_use_cases
         .get_google_oauth_config(domain.id)
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            if should_abort_state(&e) {
+                let _ = app_state
+                    .domain_auth_use_cases
+                    .abort_google_oauth_state(&payload.state)
+                    .await;
+            }
+            return Err(e);
+        }
+    };
 
     // Exchange code with Google
     // Must use same redirect_uri as google_start (fallback vs custom)
@@ -949,21 +1010,41 @@ async fn google_exchange(
         format!("https://reauth.{}/callback/google", root_domain)
     };
 
-    let token_response = exchange_google_code(
+    let token_response = match exchange_google_code_typed(
         &payload.code,
         &client_id,
         &client_secret,
         &redirect_uri,
         &state_data.code_verifier,
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(e) => {
+            handle_oauth_exchange_error(&app_state, &payload.state, &e).await;
+            return Err(e.into());
+        }
+    };
 
     // Parse and validate id_token (with signature verification)
     let (google_id, email, email_verified) =
-        parse_google_id_token(&token_response.id_token, &client_id).await?;
+        match parse_google_id_token(&token_response.id_token, &client_id).await {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = app_state
+                    .domain_auth_use_cases
+                    .abort_google_oauth_state(&payload.state)
+                    .await;
+                return Err(e);
+            }
+        };
 
     // Verify email is verified by Google
     if !email_verified {
+        let _ = app_state
+            .domain_auth_use_cases
+            .abort_google_oauth_state(&payload.state)
+            .await;
         return Err(AppError::InvalidInput(
             "Google account email is not verified".into(),
         ));
@@ -971,12 +1052,20 @@ async fn google_exchange(
 
     // Find or create end user
     use crate::application::use_cases::domain_auth::GoogleLoginResult;
-    let result = app_state
+    let result = match app_state
         .domain_auth_use_cases
         .find_or_create_end_user_by_google(domain.id, &google_id, &email)
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            let exchange_err = classify_user_creation_error(&e);
+            handle_oauth_exchange_error(&app_state, &payload.state, &exchange_err).await;
+            return Err(e);
+        }
+    };
 
-    match result {
+    let response = match result {
         GoogleLoginResult::LoggedIn(user) => {
             // Generate a completion token - this will be used to set cookies on the correct domain
             let completion_token = app_state
@@ -1020,7 +1109,23 @@ async fn google_exchange(
                 Json(GoogleExchangeResponse::NeedsLinkConfirmation { link_token, email }),
             ))
         }
+    };
+
+    if response.is_ok() {
+        if let Err(e) = app_state
+            .domain_auth_use_cases
+            .complete_google_oauth_state(&payload.state)
+            .await
+        {
+            tracing::warn!(
+                state = %payload.state,
+                error = %e,
+                "Failed to delete OAuth state after successful login (best-effort)"
+            );
+        }
     }
+
+    response
 }
 
 /// POST /api/public/domain/{domain}/auth/google/confirm-link
@@ -2254,6 +2359,119 @@ async fn unlink_google(
 // Google OAuth Helper Functions
 // ============================================================================
 
+/// Typed OAuth exchange error with source information
+#[derive(Debug)]
+enum OAuthExchangeError {
+    /// Network error during Google API call
+    Network { message: String },
+    /// Google API returned an error response
+    GoogleApi {
+        status: u16,
+        error_code: Option<String>,
+        message: String,
+    },
+    /// Token parsing or validation failed
+    TokenValidation { message: String },
+    /// User data validation failed (e.g., email not verified)
+    UserValidation { message: String },
+    /// Database error during user creation
+    Database { message: String },
+    /// Redis error during state management
+    Redis { message: String },
+}
+
+impl OAuthExchangeError {
+    /// Classify error as retryable or terminal based on error type and codes
+    fn is_retryable(&self) -> bool {
+        match self {
+            OAuthExchangeError::Network { .. } => true,
+            OAuthExchangeError::GoogleApi { status, .. } => *status >= 500,
+            OAuthExchangeError::TokenValidation { .. } => false,
+            OAuthExchangeError::UserValidation { .. } => false,
+            OAuthExchangeError::Database { .. } => true,
+            OAuthExchangeError::Redis { .. } => true,
+        }
+    }
+}
+
+impl From<OAuthExchangeError> for AppError {
+    fn from(value: OAuthExchangeError) -> Self {
+        match value {
+            OAuthExchangeError::Network { message } => {
+                AppError::Internal(format!("Network error during OAuth: {message}"))
+            }
+            OAuthExchangeError::GoogleApi {
+                status,
+                error_code,
+                message,
+            } => {
+                if let Some(code) = error_code {
+                    if code == "invalid_grant" {
+                        return AppError::InvalidInput(
+                            "Authorization code expired or already used".into(),
+                        );
+                    }
+                }
+                if status >= 500 {
+                    AppError::Internal(format!("Google API error ({status}): {message}"))
+                } else {
+                    AppError::InvalidInput("Failed to authenticate with Google".into())
+                }
+            }
+            OAuthExchangeError::TokenValidation { message } => {
+                AppError::Internal(format!("Token validation failed: {message}"))
+            }
+            OAuthExchangeError::UserValidation { message } => AppError::InvalidInput(message),
+            OAuthExchangeError::Database { message } => {
+                AppError::Internal(format!("Database error: {message}"))
+            }
+            OAuthExchangeError::Redis { message } => {
+                AppError::Internal(format!("Redis error: {message}"))
+            }
+        }
+    }
+}
+
+fn should_abort_state(error: &AppError) -> bool {
+    !matches!(error, AppError::Database(_) | AppError::Internal(_) | AppError::RateLimited)
+}
+
+fn classify_user_creation_error(error: &AppError) -> OAuthExchangeError {
+    match error {
+        AppError::InvalidInput(message) | AppError::ValidationError(message) => {
+            OAuthExchangeError::UserValidation {
+                message: message.clone(),
+            }
+        }
+        AppError::Database(message) | AppError::Internal(message) => OAuthExchangeError::Database {
+            message: message.clone(),
+        },
+        other => OAuthExchangeError::UserValidation {
+            message: other.to_string(),
+        },
+    }
+}
+
+async fn handle_oauth_exchange_error(app_state: &AppState, state: &str, error: &OAuthExchangeError) {
+    if error.is_retryable() {
+        tracing::warn!(
+            state = %state,
+            error = ?error,
+            "OAuth exchange failed (retryable), state preserved for retry"
+        );
+    } else {
+        tracing::warn!(
+            state = %state,
+            error = ?error,
+            "OAuth exchange failed (terminal), aborting state"
+        );
+        let _ = app_state
+            .domain_auth_use_cases
+            .abort_google_oauth_state(state)
+            .await;
+    }
+}
+
 #[derive(Deserialize)]
 struct GoogleTokenResponse {
     #[allow(dead_code)]
@@ -2266,19 +2484,21 @@ struct GoogleTokenResponse {
 }
 
 /// Exchange authorization code with Google for tokens
-async fn exchange_google_code(
+async fn exchange_google_code_typed(
     code: &str,
     client_id: &str,
     client_secret: &str,
     redirect_uri: &str,
     code_verifier: &str,
-) -> AppResult<GoogleTokenResponse> {
+) -> Result<GoogleTokenResponse, OAuthExchangeError> {
     let client = http_client::try_build_client().map_err(|e| {
         error!(
             error = %e,
             "Failed to build HTTP client for Google OAuth token exchange"
         );
-        AppError::Internal("Failed to build HTTP client".into())
+        OAuthExchangeError::Network {
+            message: format!("Failed to build HTTP client: {e}"),
+        }
     })?;
 
     let response = client
@@ -2293,20 +2513,35 @@ async fn exchange_google_code(
         ])
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to exchange code with Google: {}", e)))?;
+        .map_err(|e| OAuthExchangeError::Network {
+            message: e.to_string(),
+        })?;
+
+    let status = response.status().as_u16();
 
     if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        tracing::error!("Google token exchange failed: {}", error_text);
-        return Err(AppError::InvalidInput(
-            "Failed to authenticate with Google".into(),
-        ));
+        let error_body = response.text().await.unwrap_or_default();
+        let error_code = serde_json::from_str::<serde_json::Value>(&error_body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(|error| error.as_str())
+                    .map(str::to_string)
+            });
+        return Err(OAuthExchangeError::GoogleApi {
+            status,
+            error_code,
+            message: error_body,
+        });
     }
 
     response
         .json::<GoogleTokenResponse>()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to parse Google token response: {}", e)))
+        .map_err(|e| OAuthExchangeError::TokenValidation {
+            message: format!("Failed to parse token response: {e}"),
+        })
 }
 
 /// Google OIDC claims from id_token
@@ -2420,6 +2655,43 @@ async fn parse_google_id_token(
     }
 
     Ok((claims.sub, claims.email, claims.email_verified))
+}
+
+#[cfg(test)]
+mod oauth_exchange_tests {
+    use super::OAuthExchangeError;
+
+    #[test]
+    fn test_error_classification() {
+        let err = OAuthExchangeError::Network {
+            message: "timeout".into(),
+        };
+        assert!(err.is_retryable());
+
+        let err = OAuthExchangeError::GoogleApi {
+            status: 503,
+            error_code: None,
+            message: "Service unavailable".into(),
+        };
+        assert!(err.is_retryable());
+
+        let err = OAuthExchangeError::GoogleApi {
+            status: 400,
+            error_code: Some("invalid_grant".into()),
+            message: "Code already used".into(),
+        };
+        assert!(!err.is_retryable());
+
+        let err = OAuthExchangeError::TokenValidation {
+            message: "bad token".into(),
+        };
+        assert!(!err.is_retryable());
+
+        let err = OAuthExchangeError::Database {
+            message: "connection reset".into(),
+        };
+        assert!(err.is_retryable());
+    }
 }
 
 // ============================================================================

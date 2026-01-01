@@ -32,6 +32,11 @@ impl IntoResponse for AppError {
             AppError::InvalidInput(msg) => {
                 error_resp(StatusCode::BAD_REQUEST, ErrorCode::InvalidInput, Some(msg))
             }
+            AppError::OAuthRetryExpired => error_resp(
+                StatusCode::GONE,
+                ErrorCode::OAuthRetryExpired,
+                Some("OAuth session expired. Please restart the login process.".to_string()),
+            ),
             AppError::AccountSuspended => error_resp(
                 StatusCode::FORBIDDEN,
                 ErrorCode::AccountSuspended,
