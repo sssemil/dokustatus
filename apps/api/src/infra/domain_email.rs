@@ -6,6 +6,7 @@ use crate::{
     app_error::{AppError, AppResult},
     application::use_cases::domain_auth::DomainEmailSender as DomainEmailSenderTrait,
 };
+use crate::infra::http_client;
 
 /// Email sender that accepts API key and from_email as parameters,
 /// allowing different domains to use their own Resend configuration.
@@ -17,7 +18,7 @@ pub struct DomainEmailSender {
 impl DomainEmailSender {
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: http_client::build_client(),
         }
     }
 }

@@ -8,6 +8,7 @@ pub mod domain_email;
 pub mod domain_magic_links;
 pub mod domain_verifier;
 pub mod dummy_payment_client;
+pub mod http_client;
 pub mod oauth_state;
 pub mod rate_limit;
 pub mod setup;

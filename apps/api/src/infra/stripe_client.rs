@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::app_error::{AppError, AppResult};
+use crate::infra::http_client;
 
 const STRIPE_API_BASE: &str = "https://api.stripe.com/v1";
 
@@ -15,7 +16,7 @@ pub struct StripeClient {
 impl StripeClient {
     pub fn new(secret_key: String) -> Self {
         Self {
-            client: Client::new(),
+            client: http_client::build_client(),
             secret_key,
         }
     }

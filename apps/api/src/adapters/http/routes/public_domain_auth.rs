@@ -8,6 +8,7 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::{Deserialize, Serialize};
 use time;
+use tracing::error;
 use uuid::Uuid;
 
 use crate::{
@@ -25,6 +26,7 @@ use crate::{
         payment_mode::PaymentMode, payment_provider::PaymentProvider,
         payment_scenario::PaymentScenario,
     },
+    infra::http_client,
 };
 
 /// Appends a cookie to the headers, handling parse errors gracefully
@@ -2271,7 +2273,13 @@ async fn exchange_google_code(
     redirect_uri: &str,
     code_verifier: &str,
 ) -> AppResult<GoogleTokenResponse> {
-    let client = reqwest::Client::new();
+    let client = http_client::try_build_client().map_err(|e| {
+        error!(
+            error = %e,
+            "Failed to build HTTP client for Google OAuth token exchange"
+        );
+        AppError::Internal("Failed to build HTTP client".into())
+    })?;
 
     let response = client
         .post("https://oauth2.googleapis.com/token")
@@ -2341,7 +2349,13 @@ struct GoogleJwk {
 
 /// Fetch Google's public keys for JWT verification
 async fn fetch_google_jwks() -> AppResult<GoogleJwks> {
-    let client = reqwest::Client::new();
+    let client = http_client::try_build_client().map_err(|e| {
+        error!(
+            error = %e,
+            "Failed to build HTTP client for Google JWKS fetch"
+        );
+        AppError::Internal("Failed to build HTTP client".into())
+    })?;
     let response = client
         .get("https://www.googleapis.com/oauth2/v3/certs")
         .send()
