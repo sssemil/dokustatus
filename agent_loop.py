@@ -10,6 +10,8 @@ Agent loop that manages codex tasks through todo -> in-progress -> outbound -> d
 import subprocess
 import sys
 import time
+import threading
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -76,6 +78,71 @@ def run_capture(cmd: list[str], check: bool = True) -> str:
     return result.stdout.strip()
 
 
+def run_agent_with_logs(
+    cmd: list[str],
+    log_file: Path,
+    label: str,
+    input_text: str | None = None,
+    tail_lines: int = 3
+) -> int:
+    """
+    Run an agent command, streaming output to log file and showing last N lines in terminal.
+    Returns the exit code.
+    """
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Track last N lines for display
+    last_lines: deque[str] = deque(maxlen=tail_lines)
+
+    def display_tail():
+        """Clear and redisplay the last N lines."""
+        # Move up and clear previous lines
+        if last_lines:
+            sys.stdout.write(f"\r\033[K")  # Clear current line
+            for i, line in enumerate(last_lines):
+                # Truncate long lines
+                display = line[:100] + "..." if len(line) > 100 else line
+                if i < len(last_lines) - 1:
+                    sys.stdout.write(f"  {display}\n")
+                else:
+                    sys.stdout.write(f"  {display}")
+            sys.stdout.flush()
+
+    print(f"[{label}] Logging to {log_file}")
+
+    with open(log_file, "w") as f:
+        process = subprocess.Popen(
+            cmd,
+            stdin=subprocess.PIPE if input_text else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1  # Line buffered
+        )
+
+        # Send input if provided
+        if input_text and process.stdin:
+            process.stdin.write(input_text)
+            process.stdin.close()
+
+        # Read output line by line
+        if process.stdout:
+            for line in process.stdout:
+                line = line.rstrip('\n')
+                f.write(line + "\n")
+                f.flush()
+                last_lines.append(line)
+                display_tail()
+
+        process.wait()
+
+    # Final newline after tail display
+    print()
+    print(f"[{label}] Exit code: {process.returncode}")
+
+    return process.returncode
+
+
 def git_current_branch() -> str:
     try:
         return run_capture(["git", "branch", "--show-current"], check=False)
@@ -130,6 +197,8 @@ def run_claude_planning(slug: str, version: int, feedback_content: str = ""):
     """Have Claude CLI create a versioned plan (with codebase exploration)."""
     task_dir = TASKS_IN_PROGRESS / slug
     plan_file = f"plan-v{version}.md"
+    log_dir = task_dir / "agent_logs"
+    log_file = log_dir / f"claude-plan-v{version}.log"
 
     if version == 1:
         prompt = f"""Create a detailed implementation plan for task: {slug}
@@ -162,21 +231,12 @@ Address the feedback while keeping what works well.
 
 Then stop."""
 
-    print(f"[PLANNING] Claude creating {plan_file} for {slug}")
-
-    # Run Claude with file access (not -p mode), pipe prompt via stdin
-    result = subprocess.run(
-        ["claude", "--dangerously-skip-permissions"],
-        input=prompt,
-        capture_output=True,
-        text=True,
-        check=False
+    run_agent_with_logs(
+        cmd=["claude", "--dangerously-skip-permissions"],
+        log_file=log_file,
+        label=f"Claude {plan_file}",
+        input_text=prompt
     )
-
-    if result.returncode != 0:
-        print(f"[PLANNING] Claude exited with code {result.returncode}")
-        if result.stderr:
-            print(f"[PLANNING] stderr: {result.stderr[:500]}")
 
     # Commit the plan (Claude should have written it)
     run(["git", "add", str(task_dir)], check=False)
@@ -188,6 +248,8 @@ def run_codex_review(slug: str, iteration: int):
     task_dir = TASKS_IN_PROGRESS / slug
     plan_file = f"plan-v{iteration}.md"
     feedback_file = f"feedback-{iteration}.md"
+    log_dir = task_dir / "agent_logs"
+    log_file = log_dir / f"codex-review-{iteration}.log"
 
     prompt = f"""Review the implementation plan for task: {slug}
 
@@ -203,14 +265,16 @@ Write feedback to ./workspace/tasks/in-progress/{slug}/{feedback_file} with:
 Be specific and actionable. Focus on catching issues before implementation.
 Then EXIT."""
 
-    print(f"[PLANNING] Codex reviewing plan-v{iteration}.md for {slug}")
-
-    run([
-        "codex", "exec",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "-C", ".",
-        prompt
-    ], check=False)
+    run_agent_with_logs(
+        cmd=[
+            "codex", "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-C", ".",
+            prompt
+        ],
+        log_file=log_file,
+        label=f"Codex review-{iteration}"
+    )
 
     # Commit the feedback
     run(["git", "add", str(task_dir)], check=False)
@@ -329,6 +393,9 @@ def start_agent_for_task(slug: str, task_dir: Path):
     """Start a codex agent for execution (planning must be complete)."""
     session_file = session_file_for(slug)
     target_dir = TASKS_IN_PROGRESS / slug
+    log_dir = target_dir / "agent_logs"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_file = log_dir / f"codex-exec-{timestamp}.log"
 
     # Ensure task is set up
     if not target_dir.exists():
@@ -371,13 +438,16 @@ decide otherwise and justify it in History."""
     # Mark that a session exists
     session_file.touch()
 
-    print(f"[EXECUTION] Starting codex for {slug}")
-    run([
-        "codex", "exec",
-        "--dangerously-bypass-approvals-and-sandbox",
-        "-C", ".",
-        prompt
-    ], check=False)
+    run_agent_with_logs(
+        cmd=[
+            "codex", "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-C", ".",
+            prompt
+        ],
+        log_file=log_file,
+        label=f"Codex exec {slug}"
+    )
 
 
 def merge_outbound_task(slug: str) -> bool:

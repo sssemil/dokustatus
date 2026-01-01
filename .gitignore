@@ -57,6 +57,7 @@ infra/images.*/
 # Agent loop runtime state
 workspace/sessions/
 workspace/logs/
+**/agent_logs/
 
 # Python
 __pycache__/
