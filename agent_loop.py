@@ -581,12 +581,21 @@ def main():
                         print(f"[PLANNING] Failed to setup task {slug}")
                         time.sleep(2)
                         continue
+                    # Reset planning to iteration 0 since we just set up the task
+                    planning_files[0].write_text("0")
                 else:
                     # Task doesn't exist anywhere - stale planning file
                     print(f"[PLANNING] Stale planning file for {slug}, cleaning up")
                     planning_files[0].unlink()
                     time.sleep(2)
                     continue
+
+            # Verify plan-v1 exists before proceeding past iteration 0
+            plan_v1 = in_progress_dir / "plan-v1.md"
+            if not plan_v1.exists():
+                # Reset to 0 so Claude creates the initial plan
+                print(f"[PLANNING] plan-v1.md missing, resetting to iteration 0")
+                planning_files[0].write_text("0")
 
             # Ensure we're on the right branch
             branch = f"task/{slug}"
