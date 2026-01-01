@@ -468,12 +468,13 @@ impl DomainAuthUseCases {
         raw_token: &str,
         session_id: &str,
     ) -> AppResult<Option<DomainEndUserProfile>> {
-        let token_hash = hash_domain_token(raw_token, domain_name);
-
-        if let Some(data) = self
-            .magic_link_store
-            .consume(&token_hash, session_id)
-            .await?
+        if let Some(data) = consume_magic_link_from_store(
+            self.magic_link_store.as_ref(),
+            raw_token,
+            domain_name,
+            session_id,
+        )
+        .await?
         {
             // Get the end user first to check access
             let end_user = self
@@ -1447,10 +1448,43 @@ fn generate_token() -> String {
 /// Note: session_id is stored separately in Redis for verification, not in the hash
 fn hash_domain_token(raw: &str, domain: &str) -> String {
     let mut hasher = Sha256::new();
+    let raw_bytes = raw.as_bytes();
+    let domain_bytes = domain.as_bytes();
+    hasher.update((raw_bytes.len() as u32).to_be_bytes());
+    hasher.update(raw_bytes);
+    hasher.update((domain_bytes.len() as u32).to_be_bytes());
+    hasher.update(domain_bytes);
+    let out = hasher.finalize();
+    hex::encode(out)
+}
+
+/// Legacy hash format (plain concatenation) kept for in-flight magic links.
+fn hash_domain_token_legacy(raw: &str, domain: &str) -> String {
+    let mut hasher = Sha256::new();
     hasher.update(raw.as_bytes());
     hasher.update(domain.as_bytes());
     let out = hasher.finalize();
     hex::encode(out)
+}
+
+async fn consume_magic_link_from_store(
+    magic_link_store: &dyn DomainMagicLinkStore,
+    raw_token: &str,
+    domain_name: &str,
+    session_id: &str,
+) -> AppResult<Option<DomainMagicLinkData>> {
+    let token_hash = hash_domain_token(raw_token, domain_name);
+    let data = magic_link_store.consume(&token_hash, session_id).await?;
+    if data.is_some() {
+        return Ok(data);
+    }
+
+    let legacy_hash = hash_domain_token_legacy(raw_token, domain_name);
+    if legacy_hash == token_hash {
+        return Ok(None);
+    }
+
+    magic_link_store.consume(&legacy_hash, session_id).await
 }
 
 /// Validate that a redirect URL is on the specified domain or a subdomain
@@ -1470,6 +1504,62 @@ fn is_valid_redirect_url(url: &str, domain: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    #[derive(Default)]
+    struct InMemoryMagicLinkStore {
+        entries: Mutex<HashMap<String, StoredMagicLink>>,
+    }
+
+    struct StoredMagicLink {
+        data: DomainMagicLinkData,
+        session_id: String,
+    }
+
+    #[async_trait]
+    impl DomainMagicLinkStore for InMemoryMagicLinkStore {
+        async fn save(
+            &self,
+            token_hash: &str,
+            end_user_id: Uuid,
+            domain_id: Uuid,
+            session_id: &str,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            let mut entries = self.entries.lock().expect("magic link store lock");
+            entries.insert(
+                token_hash.to_string(),
+                StoredMagicLink {
+                    data: DomainMagicLinkData {
+                        end_user_id,
+                        domain_id,
+                    },
+                    session_id: session_id.to_string(),
+                },
+            );
+            Ok(())
+        }
+
+        async fn consume(
+            &self,
+            token_hash: &str,
+            session_id: &str,
+        ) -> AppResult<Option<DomainMagicLinkData>> {
+            let mut entries = self.entries.lock().expect("magic link store lock");
+            let Some(stored) = entries.remove(token_hash) else {
+                return Ok(None);
+            };
+
+            if stored.session_id != session_id {
+                entries.insert(token_hash.to_string(), stored);
+                return Err(AppError::SessionMismatch);
+            }
+
+            Ok(Some(stored.data))
+        }
+    }
 
     #[test]
     fn test_is_valid_redirect_url() {
@@ -1517,5 +1607,45 @@ mod tests {
         // Invalid: malformed URLs
         assert!(!is_valid_redirect_url("not-a-url", "example.com"));
         assert!(!is_valid_redirect_url("", "example.com"));
+    }
+
+    #[test]
+    fn test_hash_domain_token_avoids_collisions() {
+        let raw_a = "ab";
+        let domain_a = "c";
+        let raw_b = "a";
+        let domain_b = "bc";
+
+        let legacy_a = hash_domain_token_legacy(raw_a, domain_a);
+        let legacy_b = hash_domain_token_legacy(raw_b, domain_b);
+        assert_eq!(legacy_a, legacy_b);
+
+        let scoped_a = hash_domain_token(raw_a, domain_a);
+        let scoped_b = hash_domain_token(raw_b, domain_b);
+        assert_ne!(scoped_a, scoped_b);
+    }
+
+    #[tokio::test]
+    async fn test_consume_magic_link_falls_back_to_legacy_hash() {
+        let store = InMemoryMagicLinkStore::default();
+        let raw_token = "test-token";
+        let domain = "example.com";
+        let session_id = "session-123";
+        let end_user_id = Uuid::new_v4();
+        let domain_id = Uuid::new_v4();
+
+        let legacy_hash = hash_domain_token_legacy(raw_token, domain);
+        store
+            .save(&legacy_hash, end_user_id, domain_id, session_id, 5)
+            .await
+            .expect("save legacy magic link");
+
+        let consumed = consume_magic_link_from_store(&store, raw_token, domain, session_id)
+            .await
+            .expect("consume magic link")
+            .expect("magic link data");
+
+        assert_eq!(consumed.end_user_id, end_user_id);
+        assert_eq!(consumed.domain_id, domain_id);
     }
 }
