@@ -2,135 +2,191 @@
 set -euo pipefail
 
 mkdir -p ./workspace/logs
+mkdir -p ./workspace/tasks/{todo,in-progress,outbound,done}
+mkdir -p ./workspace/sessions
 
-while true; do
-  step_ts="$(date -Is)"
-  log_file="./workspace/logs/agent-$step_ts.log"
+session_file_for() {
+  echo "./workspace/sessions/$1.session"
+}
 
-  # Detect the most recently active in-progress task
-  current_task_file="$(ls -t ./workspace/tasks/in-progress 2>/dev/null | head -n1 || true)"
+pick_next_task() {
+  ls ./workspace/tasks/todo/*.md 2>/dev/null | sort | head -n1 || true
+}
 
-  task_branch=""
-  if [ -n "$current_task_file" ]; then
-    task_slug="${current_task_file%.md}"
-    task_branch="task/$task_slug"
+current_in_progress_count() {
+  ls ./workspace/tasks/in-progress/*.md 2>/dev/null | wc -l
+}
 
-    # create or switch to the branch for this task
-    if git rev-parse --verify "$task_branch" >/dev/null 2>&1; then
-      git switch "$task_branch"
-    else
-      git switch -c "$task_branch"
-    fi
+the_single_in_progress_task() {
+  ls ./workspace/tasks/in-progress/*.md 2>/dev/null | head -n1 || true
+}
+
+start_agent_for_task() {
+  local slug="$1"
+  local file_path="$2"
+  local branch="task/$slug"
+  local session_file
+  session_file="$(session_file_for "$slug")"
+
+  echo "Starting agent for $slug on branch $branch"
+
+  # move task to in-progress (only if not already there)
+  if [ "$file_path" != "./workspace/tasks/in-progress/$slug.md" ]; then
+    mv "$file_path" "./workspace/tasks/in-progress/$slug.md"
+  fi
+
+  # ensure branch exists and switch
+  if git rev-parse --verify "$branch" >/dev/null 2>&1; then
+    git switch "$branch"
+  else
+    git switch -c "$branch"
   fi
 
   codex exec \
     --dangerously-bypass-approvals-and-sandbox \
     -C . \
-    "$(cat <<AGENT_PROMPT
-You are working in the monorepo root. Plans and tasks live under ./workspace.
+    --save-session-id "$session_file" \
+    """
+You are working on task: $slug
 
-Branching rules:
+Task file:
+./workspace/tasks/in-progress/$slug.md
 
-- Each in-progress task has a dedicated branch:
-  task/<task-file-basename>
-- All edits for that task happen on its branch.
-- When a task is finished and moved to ./workspace/tasks/done,
-  append a final History entry marking completion.
+This branch is dedicated to this task:
+task/$slug
 
-Important: When a task is marked done, do not continue editing it afterward.
-Completion triggers a squash merge handled outside the agent.
+You are responsible for:
+- making bounded edits
+- appending timestamped History entries
+- committing your own changes
+- optionally parallelizing subtasks (max 8 workers)
 
-Parallelization policy:
+Completion protocol:
 
-- When the current task contains multiple independent parts,
-  you may break the work into subtasks and run them in parallel.
-- You are allowed to spawn additional Codex workers yourself by starting
-  background processes such as:
+When the task is fully complete:
+1) Append a final History entry describing completion
+2) Move the task file to:
+   ./workspace/tasks/outbound/$slug.md
+3) EXIT the session
 
-  codex exec --dangerously-bypass-approvals-and-sandbox -C . "subtask prompt here" &
+Do NOT merge to main yourself.
+The script will handle squash-merge once the file
+appears in outbound.
 
-- Never run more than 8 Codex workers at the same time.
-- Treat the current process as the coordinator. Sub-workers perform
-  bounded concrete work; the coordinator supervises and integrates results.
+Stay focused on this task unless you explicitly
+decide otherwise and justify it in History.
+"""
+}
 
-How to parallelize:
+merge_outbound_task() {
+  local slug="$1"
+  local branch="task/$slug"
+  local session_file
+  session_file="$(session_file_for "$slug")"
 
-1) Inspect the current task. If it can be decomposed into parts that do not
-   conflict on the same files, define clear subtasks.
+  echo "Merging completed task: $slug (branch $branch)"
 
-2) For each independent subtask:
-   - spawn one Codex exec worker (up to 8 total)
-   - each worker performs one bounded change
-   - each worker appends a timestamped History entry in the parent task file
-   - each worker commits its change on the same task branch
+  # ensure we are ON the task branch
+  git switch "$branch"
 
-3) The coordinator:
-   - tracks spawned workers
-   - waits when appropriate
-   - reconciles results and resolves conflicts if they appear
-   - writes a short coordination History entry
-
-4) If parallelism is unsafe or unnecessary,
-   fall back to a single bounded change in this process.
-
-Behavior step ($step_ts):
-
-1) If exactly one task exists in ./workspace/tasks/in-progress:
-   - continue that task on its branch
-   - either run parallel subtasks (if appropriate) OR
-     make a single bounded incremental edit with a History entry
-
-2) If multiple tasks are in progress:
-   - pick the most recently edited one and continue only that one
-
-3) If no tasks are in progress:
-   - If there are uncommitted changes, reconcile them with task History
-   - Otherwise, pick the oldest task in ./workspace/tasks/todo,
-     move it to in-progress, create/switch branch, append "work started"
-
-Constraints:
-- Only modify Markdown inside ./workspace
-- Append timestamped History; never delete earlier entries
-- Keep filenames stable; record renames in History
-- Keep changes small and traceable
-
-State what you chose to do, perform the concrete action, then stop.
-AGENT_PROMPT
-)"
-  # stage and commit changes produced by the step
-  git add -A
-  if ! git diff --cached --quiet; then
-    git commit -m "task step: $step_ts — incremental workspace update" \
-      -m "log: $(basename "$log_file")" || true
+  # verify state
+  if [ ! -f "./workspace/tasks/outbound/$slug.md" ]; then
+    echo "ERROR: outbound file missing for $slug — refusing merge"
+    return 1
   fi
 
-  # --- Detect task completion and squash-merge to main ---
-  # If this task file is no longer in in-progress, assume it was moved to done
-  if [ -n "$task_branch" ] && \
-     [ ! -f "./workspace/tasks/in-progress/$current_task_file" ] && \
-     [ -f "./workspace/tasks/done/$current_task_file" ]; then
+  # merge to main
+  git switch main || git switch -c main
+  git pull --ff-only || true
 
-    echo "[$step_ts] detected completion of $task_branch — squash-merging to main" \
-      | tee -a "$log_file"
-
-    # ensure we’re on the task branch for merge source
-    git switch "$task_branch" || true
-
-    # switch to main and update it
-    git switch main || git switch -c main
-    git pull --ff-only || true
-
-    # squash-merge the task branch
-    git merge --squash "$task_branch" || true
-    git commit -m "complete $task_branch — squash merge of task work" \
-      -m "task: $task_slug" || true
-
-    # optional cleanup:
-    # git branch -d "$task_branch" || true
+  if git merge --squash "$branch"; then
+    git commit -m "complete task $slug — squash merge"
+  else
+    echo "Merge failed — leaving branch unmerged"
+    return 1
   fi
 
-  echo "[$step_ts] agent step complete on branch: $(git branch --show-current)" \
-    | tee -a "$log_file"
+  mv "./workspace/tasks/outbound/$slug.md" "./workspace/tasks/done/$slug.md"
 
-  sleep 5
+  # optional cleanup:
+  # git branch -d "$branch" || true
+
+  rm -f "$session_file"
+
+  echo "Merged and archived: $slug"
+}
+
+resume_task_session() {
+  local slug="$1"
+  local session_file
+  session_file="$(session_file_for "$slug")"
+
+  if [ ! -f "$session_file" ]; then
+    echo "No session file for $slug — starting new agent"
+    start_agent_for_task "$slug" "./workspace/tasks/in-progress/$slug.md"
+    return
+  fi
+
+  echo "Resuming session for task $slug ($(cat "$session_file"))"
+  codex resume "$(cat "$session_file")" || rm -f "$session_file"
+}
+
+validate_in_progress_state_or_die() {
+  local count
+  count="$(current_in_progress_count)"
+
+  current_branch="$(git branch --show-current || true)"
+
+  if [[ "$current_branch" =~ ^task/ ]]; then
+    slug="${current_branch#task/}"
+
+    if [ "$count" -ne 1 ]; then
+      echo "ERROR: on task branch $current_branch but $count tasks in-progress"
+      echo "This is an inconsistent state — stop and fix manually."
+      exit 1
+    fi
+
+    file="./workspace/tasks/in-progress/$slug.md"
+    if [ ! -f "$file" ]; then
+      echo "ERROR: branch $current_branch does not match in-progress file"
+      exit 1
+    fi
+  fi
+}
+
+while true; do
+  step_ts="$(date -Is)"
+  echo "[$step_ts] loop tick"
+
+  validate_in_progress_state_or_die
+
+  # ---- CASE 1: outbound task → merge ----
+  outbound_task="$(ls ./workspace/tasks/outbound/*.md 2>/dev/null | head -n1 || true)"
+  if [ -n "$outbound_task" ]; then
+    slug="$(basename "${outbound_task%.md}")"
+    merge_outbound_task "$slug"
+    sleep 2
+    continue
+  fi
+
+  # ---- CASE 2: task in progress → resume or start ----
+  if [ "$(current_in_progress_count)" -eq 1 ]; then
+    task_file="$(the_single_in_progress_task)"
+    slug="$(basename "${task_file%.md}")"
+    resume_task_session "$slug"
+    sleep 3
+    continue
+  fi
+
+  # ---- CASE 3: pick next task ----
+  next_task="$(pick_next_task)"
+  if [ -n "$next_task" ]; then
+    slug="$(basename "${next_task%.md}")"
+    start_agent_for_task "$slug" "$next_task"
+    sleep 2
+    continue
+  fi
+
+  echo "Idle — no tasks"
+  sleep 10
 done
