@@ -168,18 +168,25 @@ Output ONLY the revised plan content in markdown, no preamble."""
     print(f"[PLANNING] Claude creating plan-v{version}.md for {slug}")
 
     result = subprocess.run(
-        ["claude", "-p", prompt, "--no-input"],
+        ["claude", "-p", prompt],
         capture_output=True,
         text=True,
         check=False
     )
 
-    if result.stdout.strip():
-        plan_file.write_text(result.stdout.strip())
+    # Claude CLI may output to stdout or stderr depending on mode
+    output = result.stdout.strip() or result.stderr.strip()
+
+    if output:
+        plan_file.write_text(output)
         print(f"[PLANNING] Plan written to {plan_file}")
     else:
-        plan_file.write_text(f"# Plan v{version}\n\nNo plan generated.")
-        print(f"[PLANNING] No plan captured, using placeholder")
+        print(f"[PLANNING] ERROR: No output from Claude CLI")
+        print(f"[PLANNING] stdout: {result.stdout[:200] if result.stdout else '(empty)'}")
+        print(f"[PLANNING] stderr: {result.stderr[:200] if result.stderr else '(empty)'}")
+        print(f"[PLANNING] returncode: {result.returncode}")
+        plan_file.write_text(f"# Plan v{version}\n\nNo plan generated - check logs.")
+        print(f"[PLANNING] Using placeholder")
 
     # Commit the plan
     run(["git", "add", str(task_dir)], check=False)
