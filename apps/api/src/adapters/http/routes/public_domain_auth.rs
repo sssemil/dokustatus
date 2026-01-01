@@ -16,15 +16,13 @@ use crate::{
     application::{
         jwt,
         use_cases::{
-            domain::extract_root_from_reauth_hostname,
-            domain_auth::DomainEndUserProfile,
+            domain::extract_root_from_reauth_hostname, domain_auth::DomainEndUserProfile,
             domain_billing::SubscriptionClaims,
         },
         validators::is_valid_email,
     },
     domain::entities::{
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
+        payment_mode::PaymentMode, payment_provider::PaymentProvider,
         payment_scenario::PaymentScenario,
     },
 };
@@ -251,13 +249,25 @@ pub fn router() -> Router<AppState> {
         .route("/{domain}/billing/portal", post(create_portal))
         .route("/{domain}/billing/cancel", post(cancel_subscription))
         .route("/{domain}/billing/payments", get(get_user_payments))
-        .route("/{domain}/billing/plan-change/preview", get(preview_plan_change))
+        .route(
+            "/{domain}/billing/plan-change/preview",
+            get(preview_plan_change),
+        )
         .route("/{domain}/billing/plan-change", post(change_plan))
         // Provider routes
         .route("/{domain}/billing/providers", get(get_available_providers))
-        .route("/{domain}/billing/checkout/dummy", post(create_dummy_checkout))
-        .route("/{domain}/billing/dummy/confirm", post(confirm_dummy_checkout))
-        .route("/{domain}/billing/dummy/scenarios", get(get_dummy_scenarios))
+        .route(
+            "/{domain}/billing/checkout/dummy",
+            post(create_dummy_checkout),
+        )
+        .route(
+            "/{domain}/billing/dummy/confirm",
+            post(confirm_dummy_checkout),
+        )
+        .route(
+            "/{domain}/billing/dummy/scenarios",
+            get(get_dummy_scenarios),
+        )
         // Mode-specific webhook endpoints
         .route("/{domain}/billing/webhook/test", post(handle_webhook_test))
         .route("/{domain}/billing/webhook/live", post(handle_webhook_live))
@@ -1224,7 +1234,9 @@ async fn get_user_subscription(
             plan_code: Some(plan.code),
             plan_name: Some(plan.name),
             status: subscription.status.as_str().to_string(),
-            current_period_end: subscription.current_period_end.map(|dt| dt.and_utc().timestamp()),
+            current_period_end: subscription
+                .current_period_end
+                .map(|dt| dt.and_utc().timestamp()),
             trial_end: subscription.trial_end.map(|dt| dt.and_utc().timestamp()),
             cancel_at_period_end: Some(subscription.cancel_at_period_end),
         })),
@@ -1438,9 +1450,12 @@ async fn cancel_subscription(
         .ok_or(AppError::NotFound)?;
 
     // Get Stripe subscription ID
-    let stripe_subscription_id = subscription
-        .stripe_subscription_id
-        .ok_or(AppError::InvalidInput("No active Stripe subscription".into()))?;
+    let stripe_subscription_id =
+        subscription
+            .stripe_subscription_id
+            .ok_or(AppError::InvalidInput(
+                "No active Stripe subscription".into(),
+            ))?;
 
     // Get Stripe client
     let secret_key = app_state
@@ -1779,7 +1794,11 @@ async fn handle_webhook_for_mode(
                         // because plan visibility can change after purchase
                         let plan = app_state
                             .billing_use_cases
-                            .get_plan_by_stripe_price_id(domain.id, stripe_mode, &stripe_sub.price_id())
+                            .get_plan_by_stripe_price_id(
+                                domain.id,
+                                stripe_mode,
+                                &stripe_sub.price_id(),
+                            )
                             .await?;
 
                         if let Some(plan) = plan {
@@ -1807,20 +1826,26 @@ async fn handle_webhook_for_mode(
                                 stripe_customer_id: customer_id.to_string(),
                                 stripe_subscription_id: Some(sub_id.to_string()),
                                 status,
-                                current_period_start: Some(chrono::NaiveDateTime::from_timestamp_opt(
-                                    stripe_sub.current_period_start,
-                                    0,
-                                ).unwrap_or_default()),
-                                current_period_end: Some(chrono::NaiveDateTime::from_timestamp_opt(
-                                    stripe_sub.current_period_end,
-                                    0,
-                                ).unwrap_or_default()),
-                                trial_start: stripe_sub.trial_start.and_then(|ts|
-                                    chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
+                                current_period_start: Some(
+                                    chrono::NaiveDateTime::from_timestamp_opt(
+                                        stripe_sub.current_period_start,
+                                        0,
+                                    )
+                                    .unwrap_or_default(),
                                 ),
-                                trial_end: stripe_sub.trial_end.and_then(|ts|
-                                    chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
+                                current_period_end: Some(
+                                    chrono::NaiveDateTime::from_timestamp_opt(
+                                        stripe_sub.current_period_end,
+                                        0,
+                                    )
+                                    .unwrap_or_default(),
                                 ),
+                                trial_start: stripe_sub.trial_start.and_then(|ts| {
+                                    chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
+                                }),
+                                trial_end: stripe_sub.trial_end.and_then(|ts| {
+                                    chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
+                                }),
                             };
 
                             let created_sub = app_state
@@ -1887,15 +1912,17 @@ async fn handle_webhook_for_mode(
 
             let update = StripeSubscriptionUpdate {
                 status: new_status,
-                plan_id,  // Update plan if it changed (upgrade/downgrade via Stripe portal)
-                stripe_subscription_id: None,  // Already set, don't overwrite
+                plan_id, // Update plan if it changed (upgrade/downgrade via Stripe portal)
+                stripe_subscription_id: None, // Already set, don't overwrite
                 current_period_start: subscription["current_period_start"]
                     .as_i64()
                     .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
                 current_period_end: subscription["current_period_end"]
                     .as_i64()
                     .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
-                cancel_at_period_end: subscription["cancel_at_period_end"].as_bool().unwrap_or(false),
+                cancel_at_period_end: subscription["cancel_at_period_end"]
+                    .as_bool()
+                    .unwrap_or(false),
                 canceled_at: subscription["canceled_at"]
                     .as_i64()
                     .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
@@ -1927,7 +1954,11 @@ async fn handle_webhook_for_mode(
         }
         // Invoice events for payment history tracking
         // Note: invoice.payment_succeeded is the newer event name (some Stripe configs use it)
-        "invoice.created" | "invoice.paid" | "invoice.payment_succeeded" | "invoice.updated" | "invoice.finalized" => {
+        "invoice.created"
+        | "invoice.paid"
+        | "invoice.payment_succeeded"
+        | "invoice.updated"
+        | "invoice.finalized" => {
             let invoice = &event["data"]["object"];
 
             // Try to sync the invoice to our payments table
@@ -1941,7 +1972,12 @@ async fn handle_webhook_for_mode(
                 }
                 Err(e) => {
                     // Log but don't fail - the invoice might be for a customer we don't know
-                    tracing::warn!("Could not sync invoice from {} event: {} - {}", event_type, event_id, e);
+                    tracing::warn!(
+                        "Could not sync invoice from {} event: {} - {}",
+                        event_type,
+                        event_id,
+                        e
+                    );
                 }
             }
         }
@@ -1972,7 +2008,11 @@ async fn handle_webhook_for_mode(
                 )
                 .await
             {
-                tracing::warn!("Could not update payment status for failed invoice {}: {}", invoice_id, e);
+                tracing::warn!(
+                    "Could not update payment status for failed invoice {}: {}",
+                    invoice_id,
+                    e
+                );
             }
         }
         "invoice.voided" => {
@@ -1989,7 +2029,11 @@ async fn handle_webhook_for_mode(
                 )
                 .await
             {
-                tracing::warn!("Could not update payment status for voided invoice {}: {}", invoice_id, e);
+                tracing::warn!(
+                    "Could not update payment status for voided invoice {}: {}",
+                    invoice_id,
+                    e
+                );
             }
         }
         "invoice.marked_uncollectible" => {
@@ -2006,7 +2050,11 @@ async fn handle_webhook_for_mode(
                 )
                 .await
             {
-                tracing::warn!("Could not update payment status for uncollectible invoice {}: {}", invoice_id, e);
+                tracing::warn!(
+                    "Could not update payment status for uncollectible invoice {}: {}",
+                    invoice_id,
+                    e
+                );
             }
         }
         "charge.refunded" => {
@@ -2026,15 +2074,14 @@ async fn handle_webhook_for_mode(
 
                 if let Err(e) = app_state
                     .billing_use_cases
-                    .update_payment_status(
-                        invoice_id,
-                        status,
-                        Some(amount_refunded),
-                        None,
-                    )
+                    .update_payment_status(invoice_id, status, Some(amount_refunded), None)
                     .await
                 {
-                    tracing::warn!("Could not update payment status for refund on invoice {}: {}", invoice_id, e);
+                    tracing::warn!(
+                        "Could not update payment status for refund on invoice {}: {}",
+                        invoice_id,
+                        e
+                    );
                 }
             }
         }
@@ -2043,7 +2090,10 @@ async fn handle_webhook_for_mode(
             let charge = &event["data"]["object"];
             if let Some(invoice_id) = charge["invoice"].as_str() {
                 // Fetch and sync the invoice data
-                tracing::debug!("Charge succeeded for invoice {}, invoice event should handle sync", invoice_id);
+                tracing::debug!(
+                    "Charge succeeded for invoice {}, invoice event should handle sync",
+                    invoice_id
+                );
             }
         }
         "charge.failed" => {
@@ -2061,7 +2111,11 @@ async fn handle_webhook_for_mode(
                     )
                     .await
                 {
-                    tracing::warn!("Could not update payment status for failed charge on invoice {}: {}", invoice_id, e);
+                    tracing::warn!(
+                        "Could not update payment status for failed charge on invoice {}: {}",
+                        invoice_id,
+                        e
+                    );
                 }
             }
         }
@@ -2072,14 +2126,20 @@ async fn handle_webhook_for_mode(
             let amount = dispute["amount"].as_i64().unwrap_or(0);
             tracing::warn!(
                 "Dispute opened for charge {} (amount: {} cents) on domain {}",
-                charge_id, amount, domain.domain
+                charge_id,
+                amount,
+                domain.domain
             );
         }
         "charge.dispute.closed" => {
             let dispute = &event["data"]["object"];
             let status = dispute["status"].as_str().unwrap_or("unknown");
             let charge_id = dispute["charge"].as_str().unwrap_or("unknown");
-            tracing::info!("Dispute closed for charge {} with status: {}", charge_id, status);
+            tracing::info!(
+                "Dispute closed for charge {} with status: {}",
+                charge_id,
+                status
+            );
         }
         "checkout.session.async_payment_failed" => {
             // Async payment (bank transfer, etc.) failed
@@ -2098,7 +2158,11 @@ async fn handle_webhook_for_mode(
             let subscription = &event["data"]["object"];
             let sub_id = subscription["id"].as_str().unwrap_or("unknown");
             let trial_end = subscription["trial_end"].as_i64();
-            tracing::info!("Trial will end for subscription {}: {:?}", sub_id, trial_end);
+            tracing::info!(
+                "Trial will end for subscription {}: {:?}",
+                sub_id,
+                trial_end
+            );
         }
         _ => {
             tracing::debug!("Unhandled webhook event type: {}", event_type);
@@ -2505,19 +2569,19 @@ async fn create_dummy_checkout(
 
             // Create subscription and payment records
             use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
-            use crate::domain::entities::user_subscription::SubscriptionStatus;
             use crate::domain::entities::stripe_mode::StripeMode;
+            use crate::domain::entities::user_subscription::SubscriptionStatus;
 
             let now = chrono::Utc::now().naive_utc();
-            let period_end = now + chrono::Duration::days(
-                match plan.interval.as_str() {
+            let period_end = now
+                + chrono::Duration::days(match plan.interval.as_str() {
                     "yearly" => 365 * plan.interval_count as i64,
                     _ => 30 * plan.interval_count as i64, // monthly default
-                }
-            );
+                });
 
-            let subscription = app_state.billing_use_cases.create_or_update_subscription(
-                &CreateSubscriptionInput {
+            let subscription = app_state
+                .billing_use_cases
+                .create_or_update_subscription(&CreateSubscriptionInput {
                     domain_id,
                     stripe_mode: StripeMode::Test,
                     end_user_id: user_id,
@@ -2529,16 +2593,14 @@ async fn create_dummy_checkout(
                     current_period_end: Some(period_end),
                     trial_start: None,
                     trial_end: None,
-                }
-            ).await?;
+                })
+                .await?;
 
             // Create payment record
-            app_state.billing_use_cases.create_dummy_payment(
-                domain_id,
-                user_id,
-                subscription.id,
-                &plan,
-            ).await?;
+            app_state
+                .billing_use_cases
+                .create_dummy_payment(domain_id, user_id, subscription.id, &plan)
+                .await?;
 
             DummyCheckoutResponse {
                 success: true,
@@ -2547,17 +2609,21 @@ async fn create_dummy_checkout(
                 error_message: None,
                 subscription_id: Some(subscription_id_str),
             }
-        },
+        }
         PaymentScenario::ThreeDSecure => {
             // Encode plan_code in the token so confirm endpoint can use it
             DummyCheckoutResponse {
                 success: false,
                 requires_confirmation: true,
-                confirmation_token: Some(format!("3ds_token_{}_{}", payload.plan_code, Uuid::new_v4())),
+                confirmation_token: Some(format!(
+                    "3ds_token_{}_{}",
+                    payload.plan_code,
+                    Uuid::new_v4()
+                )),
                 error_message: None,
                 subscription_id: None,
             }
-        },
+        }
         PaymentScenario::Decline => DummyCheckoutResponse {
             success: false,
             requires_confirmation: false,
@@ -2626,7 +2692,9 @@ async fn confirm_dummy_checkout(
     // Extract plan_code from token: 3ds_token_{plan_code}_{uuid}
     let token_parts: Vec<&str> = payload.confirmation_token.splitn(4, '_').collect();
     if token_parts.len() < 4 {
-        return Err(AppError::InvalidInput("Invalid confirmation token format".into()));
+        return Err(AppError::InvalidInput(
+            "Invalid confirmation token format".into(),
+        ));
     }
     let plan_code = token_parts[2]; // 3ds, token, {plan_code}, {uuid}
 
@@ -2639,20 +2707,20 @@ async fn confirm_dummy_checkout(
 
     // Create subscription and payment records
     use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
-    use crate::domain::entities::user_subscription::SubscriptionStatus;
     use crate::domain::entities::stripe_mode::StripeMode;
+    use crate::domain::entities::user_subscription::SubscriptionStatus;
 
     let subscription_id_str = format!("dummy_sub_{}", Uuid::new_v4());
     let now = chrono::Utc::now().naive_utc();
-    let period_end = now + chrono::Duration::days(
-        match plan.interval.as_str() {
+    let period_end = now
+        + chrono::Duration::days(match plan.interval.as_str() {
             "yearly" => 365 * plan.interval_count as i64,
             _ => 30 * plan.interval_count as i64,
-        }
-    );
+        });
 
-    let subscription = app_state.billing_use_cases.create_or_update_subscription(
-        &CreateSubscriptionInput {
+    let subscription = app_state
+        .billing_use_cases
+        .create_or_update_subscription(&CreateSubscriptionInput {
             domain_id,
             stripe_mode: StripeMode::Test,
             end_user_id: user_id,
@@ -2664,16 +2732,14 @@ async fn confirm_dummy_checkout(
             current_period_end: Some(period_end),
             trial_start: None,
             trial_end: None,
-        }
-    ).await?;
+        })
+        .await?;
 
     // Create payment record
-    app_state.billing_use_cases.create_dummy_payment(
-        domain_id,
-        user_id,
-        subscription.id,
-        &plan,
-    ).await?;
+    app_state
+        .billing_use_cases
+        .create_dummy_payment(domain_id, user_id, subscription.id, &plan)
+        .await?;
 
     let response = DummyCheckoutResponse {
         success: true,

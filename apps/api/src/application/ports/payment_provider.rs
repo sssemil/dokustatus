@@ -6,10 +6,8 @@ use uuid::Uuid;
 use crate::{
     app_error::AppResult,
     domain::entities::{
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
-        payment_scenario::PaymentScenario,
-        user_subscription::SubscriptionStatus,
+        payment_mode::PaymentMode, payment_provider::PaymentProvider,
+        payment_scenario::PaymentScenario, user_subscription::SubscriptionStatus,
     },
 };
 
@@ -272,10 +270,8 @@ pub trait PaymentProviderPort: Send + Sync {
     ) -> AppResult<SubscriptionResult>;
 
     /// Confirm a subscription requiring additional authentication (3DS).
-    async fn confirm_subscription(
-        &self,
-        confirmation_token: &str,
-    ) -> AppResult<SubscriptionResult>;
+    async fn confirm_subscription(&self, confirmation_token: &str)
+    -> AppResult<SubscriptionResult>;
 
     // ========================================================================
     // Subscription Lifecycle
@@ -356,10 +352,7 @@ pub trait PaymentProviderPort: Send + Sync {
     /// Ensure product and price exist in the provider.
     /// For Stripe: Creates product/price if missing.
     /// For Dummy: No-op (returns provided IDs).
-    async fn ensure_product_and_price(
-        &self,
-        plan: &PlanInfo,
-    ) -> AppResult<(String, String)>; // (product_id, price_id)
+    async fn ensure_product_and_price(&self, plan: &PlanInfo) -> AppResult<(String, String)>; // (product_id, price_id)
 }
 
 /// Customer information

@@ -4,13 +4,9 @@ use uuid::Uuid;
 use crate::{
     app_error::{AppError, AppResult},
     application::ports::payment_provider::PaymentProviderPort,
-    domain::entities::{
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
-    },
+    domain::entities::{payment_mode::PaymentMode, payment_provider::PaymentProvider},
     infra::{
-        crypto::ProcessCipher,
-        dummy_payment_client::DummyPaymentClient,
+        crypto::ProcessCipher, dummy_payment_client::DummyPaymentClient,
         stripe_payment_adapter::StripePaymentAdapter,
     },
 };
@@ -30,7 +26,10 @@ pub struct PaymentProviderFactory {
 
 impl PaymentProviderFactory {
     pub fn new(cipher: ProcessCipher, config_repo: Arc<dyn BillingStripeConfigRepo>) -> Self {
-        Self { cipher, config_repo }
+        Self {
+            cipher,
+            config_repo,
+        }
     }
 
     /// Get a payment provider instance for the given domain, provider, and mode.
@@ -63,9 +62,7 @@ impl PaymentProviderFactory {
         }
 
         match provider {
-            PaymentProvider::Stripe => {
-                self.get_stripe_provider(domain_id, mode).await
-            }
+            PaymentProvider::Stripe => self.get_stripe_provider(domain_id, mode).await,
             PaymentProvider::Dummy => {
                 // Dummy provider doesn't need configuration
                 Ok(Arc::new(DummyPaymentClient::new(domain_id)))

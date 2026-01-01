@@ -50,12 +50,16 @@ impl IntoResponse for AppError {
                         .to_string(),
                 ),
             ),
-            AppError::ValidationError(msg) => {
-                error_resp(StatusCode::BAD_REQUEST, ErrorCode::ValidationError, Some(msg))
-            }
-            AppError::PaymentDeclined(msg) => {
-                error_resp(StatusCode::PAYMENT_REQUIRED, ErrorCode::PaymentDeclined, Some(msg))
-            }
+            AppError::ValidationError(msg) => error_resp(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::ValidationError,
+                Some(msg),
+            ),
+            AppError::PaymentDeclined(msg) => error_resp(
+                StatusCode::PAYMENT_REQUIRED,
+                ErrorCode::PaymentDeclined,
+                Some(msg),
+            ),
             AppError::ProviderNotConfigured => error_resp(
                 StatusCode::BAD_REQUEST,
                 ErrorCode::ProviderNotConfigured,

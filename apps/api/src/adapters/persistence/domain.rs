@@ -180,7 +180,11 @@ impl DomainRepo for PostgresPersistence {
         Ok(rows.into_iter().map(row_to_profile).collect())
     }
 
-    async fn set_billing_stripe_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<DomainProfile> {
+    async fn set_billing_stripe_mode(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+    ) -> AppResult<DomainProfile> {
         let row = sqlx::query(&format!(
             r#"
                 UPDATE domains

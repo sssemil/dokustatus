@@ -11,8 +11,8 @@ use crate::{
         PaginatedPayments, PaymentListFilters, PaymentSummary,
     },
     domain::entities::{
-        payment_mode::PaymentMode, payment_provider::PaymentProvider, payment_status::PaymentStatus,
-        stripe_mode::StripeMode,
+        payment_mode::PaymentMode, payment_provider::PaymentProvider,
+        payment_status::PaymentStatus, stripe_mode::StripeMode,
     },
 };
 
@@ -222,7 +222,8 @@ impl BillingPaymentRepo for PostgresPersistence {
         .await
         .map_err(AppError::from)?;
 
-        let payments: Vec<BillingPaymentWithUser> = rows.into_iter().map(row_to_payment_with_user).collect();
+        let payments: Vec<BillingPaymentWithUser> =
+            rows.into_iter().map(row_to_payment_with_user).collect();
         let total_pages = ((total as f64) / (per_page as f64)).ceil() as i32;
 
         Ok(PaginatedPayments {
@@ -257,11 +258,17 @@ impl BillingPaymentRepo for PostgresPersistence {
         }
         if filters.date_from.is_some() {
             param_count += 1;
-            conditions.push(format!("(bp.payment_date >= ${} OR bp.created_at >= ${})", param_count, param_count));
+            conditions.push(format!(
+                "(bp.payment_date >= ${} OR bp.created_at >= ${})",
+                param_count, param_count
+            ));
         }
         if filters.date_to.is_some() {
             param_count += 1;
-            conditions.push(format!("(bp.payment_date <= ${} OR bp.created_at <= ${})", param_count, param_count));
+            conditions.push(format!(
+                "(bp.payment_date <= ${} OR bp.created_at <= ${})",
+                param_count, param_count
+            ));
         }
         if filters.plan_code.is_some() {
             param_count += 1;
@@ -305,7 +312,10 @@ impl BillingPaymentRepo for PostgresPersistence {
             count_q = count_q.bind(format!("%{}%", user_email));
         }
 
-        let total: i64 = count_q.fetch_one(&self.pool).await.map_err(AppError::from)?;
+        let total: i64 = count_q
+            .fetch_one(&self.pool)
+            .await
+            .map_err(AppError::from)?;
 
         // Build and execute paginated query
         let data_query = format!(
@@ -323,9 +333,7 @@ impl BillingPaymentRepo for PostgresPersistence {
             param_count + 2
         );
 
-        let mut data_q = sqlx::query(&data_query)
-            .bind(domain_id)
-            .bind(mode);
+        let mut data_q = sqlx::query(&data_query).bind(domain_id).bind(mode);
 
         if let Some(status) = &filters.status {
             data_q = data_q.bind(status);
@@ -346,7 +354,8 @@ impl BillingPaymentRepo for PostgresPersistence {
         data_q = data_q.bind(per_page).bind(offset);
 
         let rows = data_q.fetch_all(&self.pool).await.map_err(AppError::from)?;
-        let payments: Vec<BillingPaymentWithUser> = rows.into_iter().map(row_to_payment_with_user).collect();
+        let payments: Vec<BillingPaymentWithUser> =
+            rows.into_iter().map(row_to_payment_with_user).collect();
         let total_pages = ((total as f64) / (per_page as f64)).ceil() as i32;
 
         Ok(PaginatedPayments {
@@ -406,13 +415,12 @@ impl BillingPaymentRepo for PostgresPersistence {
 
         if result.rows_affected() == 0 {
             // Check if invoice exists to distinguish between "not found" and "blocked by terminal state"
-            let exists: Option<i64> = sqlx::query_scalar(
-                "SELECT 1 FROM billing_payments WHERE stripe_invoice_id = $1",
-            )
-            .bind(stripe_invoice_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(AppError::from)?;
+            let exists: Option<i64> =
+                sqlx::query_scalar("SELECT 1 FROM billing_payments WHERE stripe_invoice_id = $1")
+                    .bind(stripe_invoice_id)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(AppError::from)?;
 
             if exists.is_some() {
                 tracing::debug!(
@@ -438,19 +446,23 @@ impl BillingPaymentRepo for PostgresPersistence {
         date_from: Option<NaiveDateTime>,
         date_to: Option<NaiveDateTime>,
     ) -> AppResult<PaymentSummary> {
-        let mut conditions: Vec<String> = vec![
-            "domain_id = $1".to_string(),
-            "stripe_mode = $2".to_string(),
-        ];
+        let mut conditions: Vec<String> =
+            vec!["domain_id = $1".to_string(), "stripe_mode = $2".to_string()];
         let mut param_count = 2;
 
         if date_from.is_some() {
             param_count += 1;
-            conditions.push(format!("(payment_date >= ${} OR created_at >= ${})", param_count, param_count));
+            conditions.push(format!(
+                "(payment_date >= ${} OR created_at >= ${})",
+                param_count, param_count
+            ));
         }
         if date_to.is_some() {
             param_count += 1;
-            conditions.push(format!("(payment_date <= ${} OR created_at <= ${})", param_count, param_count));
+            conditions.push(format!(
+                "(payment_date <= ${} OR created_at <= ${})",
+                param_count, param_count
+            ));
         }
 
         let where_clause = conditions.join(" AND ");
@@ -469,9 +481,7 @@ impl BillingPaymentRepo for PostgresPersistence {
             where_clause
         );
 
-        let mut q = sqlx::query(&query)
-            .bind(domain_id)
-            .bind(mode);
+        let mut q = sqlx::query(&query).bind(domain_id).bind(mode);
 
         if let Some(df) = &date_from {
             q = q.bind(df);
@@ -510,11 +520,17 @@ impl BillingPaymentRepo for PostgresPersistence {
         }
         if filters.date_from.is_some() {
             param_count += 1;
-            conditions.push(format!("(bp.payment_date >= ${} OR bp.created_at >= ${})", param_count, param_count));
+            conditions.push(format!(
+                "(bp.payment_date >= ${} OR bp.created_at >= ${})",
+                param_count, param_count
+            ));
         }
         if filters.date_to.is_some() {
             param_count += 1;
-            conditions.push(format!("(bp.payment_date <= ${} OR bp.created_at <= ${})", param_count, param_count));
+            conditions.push(format!(
+                "(bp.payment_date <= ${} OR bp.created_at <= ${})",
+                param_count, param_count
+            ));
         }
         if filters.plan_code.is_some() {
             param_count += 1;
@@ -535,13 +551,10 @@ impl BillingPaymentRepo for PostgresPersistence {
             WHERE {}
             ORDER BY bp.payment_date DESC NULLS LAST, bp.created_at DESC
             "#,
-            SELECT_COLS,
-            where_clause
+            SELECT_COLS, where_clause
         );
 
-        let mut q = sqlx::query(&query)
-            .bind(domain_id)
-            .bind(mode);
+        let mut q = sqlx::query(&query).bind(domain_id).bind(mode);
 
         if let Some(status) = &filters.status {
             q = q.bind(status);

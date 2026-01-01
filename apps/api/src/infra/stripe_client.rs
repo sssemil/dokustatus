@@ -22,7 +22,8 @@ impl StripeClient {
 
     fn auth_header(&self) -> String {
         use base64::Engine;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{}:", self.secret_key));
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("{}:", self.secret_key));
         format!("Basic {}", encoded)
     }
 
@@ -30,14 +31,19 @@ impl StripeClient {
     // Products
     // ========================================================================
 
-    pub async fn create_product(&self, name: &str, description: Option<&str>) -> AppResult<StripeProduct> {
+    pub async fn create_product(
+        &self,
+        name: &str,
+        description: Option<&str>,
+    ) -> AppResult<StripeProduct> {
         let mut params = HashMap::new();
         params.insert("name", name.to_string());
         if let Some(desc) = description {
             params.insert("description", desc.to_string());
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/products", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -68,7 +74,8 @@ impl StripeClient {
             ("recurring[interval_count]", interval_count.to_string()),
         ];
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/prices", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -88,9 +95,7 @@ impl StripeClient {
         email: &str,
         metadata: Option<HashMap<String, String>>,
     ) -> AppResult<StripeCustomer> {
-        let mut params: Vec<(String, String)> = vec![
-            ("email".to_string(), email.to_string()),
-        ];
+        let mut params: Vec<(String, String)> = vec![("email".to_string(), email.to_string())];
 
         if let Some(meta) = metadata {
             for (key, value) in meta {
@@ -98,7 +103,8 @@ impl StripeClient {
             }
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/customers", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -115,7 +121,8 @@ impl StripeClient {
         metadata: Option<HashMap<String, String>>,
     ) -> AppResult<StripeCustomer> {
         // Search for existing customer by email
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/customers", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .query(&[("email", email), ("limit", "1")])
@@ -160,11 +167,15 @@ impl StripeClient {
 
         if let Some(days) = trial_days {
             if days > 0 {
-                params.push(("subscription_data[trial_period_days]".to_string(), days.to_string()));
+                params.push((
+                    "subscription_data[trial_period_days]".to_string(),
+                    days.to_string(),
+                ));
             }
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/checkout/sessions", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -184,12 +195,10 @@ impl StripeClient {
         customer_id: &str,
         return_url: &str,
     ) -> AppResult<StripePortalSession> {
-        let params = vec![
-            ("customer", customer_id),
-            ("return_url", return_url),
-        ];
+        let params = vec![("customer", customer_id), ("return_url", return_url)];
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/billing_portal/sessions", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -205,8 +214,12 @@ impl StripeClient {
     // ========================================================================
 
     pub async fn get_subscription(&self, subscription_id: &str) -> AppResult<StripeSubscription> {
-        let response = self.client
-            .get(format!("{}/subscriptions/{}", STRIPE_API_BASE, subscription_id))
+        let response = self
+            .client
+            .get(format!(
+                "{}/subscriptions/{}",
+                STRIPE_API_BASE, subscription_id
+            ))
             .header("Authorization", self.auth_header())
             .send()
             .await
@@ -222,8 +235,12 @@ impl StripeClient {
     ) -> AppResult<StripeSubscription> {
         if at_period_end {
             // Update to cancel at period end
-            let response = self.client
-                .post(format!("{}/subscriptions/{}", STRIPE_API_BASE, subscription_id))
+            let response = self
+                .client
+                .post(format!(
+                    "{}/subscriptions/{}",
+                    STRIPE_API_BASE, subscription_id
+                ))
                 .header("Authorization", self.auth_header())
                 .form(&[("cancel_at_period_end", "true")])
                 .send()
@@ -233,8 +250,12 @@ impl StripeClient {
             self.handle_response(response).await
         } else {
             // Cancel immediately
-            let response = self.client
-                .delete(format!("{}/subscriptions/{}", STRIPE_API_BASE, subscription_id))
+            let response = self
+                .client
+                .delete(format!(
+                    "{}/subscriptions/{}",
+                    STRIPE_API_BASE, subscription_id
+                ))
                 .header("Authorization", self.auth_header())
                 .send()
                 .await
@@ -255,12 +276,19 @@ impl StripeClient {
         let params: Vec<(&str, String)> = vec![
             ("customer", customer_id.to_string()),
             ("subscription", subscription_id.to_string()),
-            ("subscription_items[0][id]", subscription_item_id.to_string()),
+            (
+                "subscription_items[0][id]",
+                subscription_item_id.to_string(),
+            ),
             ("subscription_items[0][price]", new_price_id.to_string()),
-            ("subscription_proration_behavior", "always_invoice".to_string()),
+            (
+                "subscription_proration_behavior",
+                "always_invoice".to_string(),
+            ),
         ];
 
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/invoices/upcoming", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .query(&params)
@@ -285,19 +313,32 @@ impl StripeClient {
             ("items[0][id]".to_string(), subscription_item_id.to_string()),
             ("items[0][price]".to_string(), new_price_id.to_string()),
             ("items[0][quantity]".to_string(), quantity.to_string()),
-            ("proration_behavior".to_string(), "always_invoice".to_string()),
-            ("payment_behavior".to_string(), "default_incomplete".to_string()),
+            (
+                "proration_behavior".to_string(),
+                "always_invoice".to_string(),
+            ),
+            (
+                "payment_behavior".to_string(),
+                "default_incomplete".to_string(),
+            ),
             ("cancel_at_period_end".to_string(), "false".to_string()),
             // Expand latest_invoice and payment_intent to get client_secret for SCA
-            ("expand[0]".to_string(), "latest_invoice.payment_intent".to_string()),
+            (
+                "expand[0]".to_string(),
+                "latest_invoice.payment_intent".to_string(),
+            ),
         ];
 
         if end_trial {
             params.push(("trial_end".to_string(), "now".to_string()));
         }
 
-        let response = self.client
-            .post(format!("{}/subscriptions/{}", STRIPE_API_BASE, subscription_id))
+        let response = self
+            .client
+            .post(format!(
+                "{}/subscriptions/{}",
+                STRIPE_API_BASE, subscription_id
+            ))
             .header("Authorization", self.auth_header())
             .header("Idempotency-Key", idempotency_key)
             .form(&params)
@@ -318,7 +359,8 @@ impl StripeClient {
         idempotency_key: &str,
     ) -> AppResult<StripeSubscriptionSchedule> {
         // First, create a schedule from the existing subscription
-        let create_response = self.client
+        let create_response = self
+            .client
             .post(format!("{}/subscription_schedules", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .header("Idempotency-Key", format!("{}-create", idempotency_key))
@@ -335,14 +377,27 @@ impl StripeClient {
             ("end_behavior".to_string(), "release".to_string()),
             // Phase 1: current plan until period end (already handled by from_subscription)
             // Phase 2: new plan starting at period end
-            ("phases[0][items][0][price]".to_string(), current_price_id.to_string()),
-            ("phases[0][end_date]".to_string(), current_period_end.to_string()),
-            ("phases[1][items][0][price]".to_string(), new_price_id.to_string()),
+            (
+                "phases[0][items][0][price]".to_string(),
+                current_price_id.to_string(),
+            ),
+            (
+                "phases[0][end_date]".to_string(),
+                current_period_end.to_string(),
+            ),
+            (
+                "phases[1][items][0][price]".to_string(),
+                new_price_id.to_string(),
+            ),
             ("phases[1][iterations]".to_string(), "1".to_string()),
         ];
 
-        let update_response = self.client
-            .post(format!("{}/subscription_schedules/{}", STRIPE_API_BASE, schedule.id))
+        let update_response = self
+            .client
+            .post(format!(
+                "{}/subscription_schedules/{}",
+                STRIPE_API_BASE, schedule.id
+            ))
             .header("Authorization", self.auth_header())
             .header("Idempotency-Key", format!("{}-update", idempotency_key))
             .form(&params)
@@ -351,7 +406,10 @@ impl StripeClient {
             .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
 
         // If update fails, cancel the orphaned schedule to clean up
-        match self.handle_response::<StripeSubscriptionSchedule>(update_response).await {
+        match self
+            .handle_response::<StripeSubscriptionSchedule>(update_response)
+            .await
+        {
             Ok(updated_schedule) => Ok(updated_schedule),
             Err(e) => {
                 // Best-effort cleanup: cancel the schedule we just created
@@ -362,9 +420,16 @@ impl StripeClient {
     }
 
     /// Cancel a pending subscription schedule (releases the subscription back to normal)
-    pub async fn cancel_schedule(&self, schedule_id: &str) -> AppResult<StripeSubscriptionSchedule> {
-        let response = self.client
-            .post(format!("{}/subscription_schedules/{}/cancel", STRIPE_API_BASE, schedule_id))
+    pub async fn cancel_schedule(
+        &self,
+        schedule_id: &str,
+    ) -> AppResult<StripeSubscriptionSchedule> {
+        let response = self
+            .client
+            .post(format!(
+                "{}/subscription_schedules/{}/cancel",
+                STRIPE_API_BASE, schedule_id
+            ))
             .header("Authorization", self.auth_header())
             .send()
             .await
@@ -375,7 +440,8 @@ impl StripeClient {
 
     /// Get a customer to check for default payment method
     pub async fn get_customer(&self, customer_id: &str) -> AppResult<StripeCustomerFull> {
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/customers/{}", STRIPE_API_BASE, customer_id))
             .header("Authorization", self.auth_header())
             .send()
@@ -395,9 +461,8 @@ impl StripeClient {
         amount: Option<i64>,
         reason: Option<&str>,
     ) -> AppResult<StripeRefund> {
-        let mut params: Vec<(String, String)> = vec![
-            ("payment_intent".to_string(), payment_intent_id.to_string()),
-        ];
+        let mut params: Vec<(String, String)> =
+            vec![("payment_intent".to_string(), payment_intent_id.to_string())];
 
         if let Some(amt) = amount {
             params.push(("amount".to_string(), amt.to_string()));
@@ -407,7 +472,8 @@ impl StripeClient {
             params.push(("reason".to_string(), r.to_string()));
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/refunds", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -432,7 +498,8 @@ impl StripeClient {
             query.push(("limit", l.to_string()));
         }
 
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/invoices", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .query(&query)
@@ -483,9 +550,8 @@ impl StripeClient {
             }
         }
 
-        let timestamp = timestamp.ok_or_else(|| {
-            AppError::InvalidInput("Missing timestamp in signature".into())
-        })?;
+        let timestamp = timestamp
+            .ok_or_else(|| AppError::InvalidInput("Missing timestamp in signature".into()))?;
 
         if signatures.is_empty() {
             return Err(AppError::InvalidInput("Missing signature".into()));
@@ -508,9 +574,9 @@ impl StripeClient {
 
             if mac.verify_slice(&sig_bytes).is_ok() {
                 // Verify timestamp is not too old (5 minutes tolerance)
-                let ts: i64 = timestamp.parse().map_err(|_| {
-                    AppError::InvalidInput("Invalid timestamp".into())
-                })?;
+                let ts: i64 = timestamp
+                    .parse()
+                    .map_err(|_| AppError::InvalidInput("Invalid timestamp".into()))?;
                 if (now - ts).abs() > 300 {
                     return Err(AppError::InvalidInput("Timestamp too old".into()));
                 }
@@ -530,9 +596,10 @@ impl StripeClient {
         response: reqwest::Response,
     ) -> AppResult<T> {
         let status = response.status();
-        let body = response.text().await.map_err(|e| {
-            AppError::Internal(format!("Failed to read response: {}", e))
-        })?;
+        let body = response
+            .text()
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to read response: {}", e)))?;
 
         if !status.is_success() {
             tracing::error!(status = %status, body = %body, "Stripe API error");
@@ -541,7 +608,10 @@ impl StripeClient {
             if let Ok(error) = serde_json::from_str::<StripeErrorResponse>(&body) {
                 return Err(AppError::InvalidInput(format!(
                     "Stripe error: {}",
-                    error.error.message.unwrap_or_else(|| error.error.error_type)
+                    error
+                        .error
+                        .message
+                        .unwrap_or_else(|| error.error.error_type)
                 )));
             }
 
@@ -663,7 +733,8 @@ pub struct StripePaymentIntent {
 impl StripeSubscription {
     /// Get the first price ID from the subscription items
     pub fn price_id(&self) -> String {
-        self.items.data
+        self.items
+            .data
             .first()
             .map(|item| item.price.id.clone())
             .unwrap_or_default()
@@ -972,7 +1043,10 @@ mod tests {
         let header = format!("t={},v1={}", ts, sig);
 
         let result = verify(payload, &header);
-        assert!(result.is_ok(), "Future timestamp within tolerance should pass");
+        assert!(
+            result.is_ok(),
+            "Future timestamp within tolerance should pass"
+        );
     }
 
     #[test]
@@ -983,7 +1057,10 @@ mod tests {
         let header = format!("t={},v1={}", ts, sig);
 
         let result = verify(payload, &header);
-        assert!(result.is_err(), "Future timestamp beyond tolerance should fail");
+        assert!(
+            result.is_err(),
+            "Future timestamp beyond tolerance should fail"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -1011,8 +1088,7 @@ mod tests {
         let payload = r#"{"type":"test"}"#;
         let ts = NOW_TS;
         let valid_sig = compute_signature(payload, ts, TEST_SECRET);
-        let invalid_sig =
-            "0000000000000000000000000000000000000000000000000000000000000000";
+        let invalid_sig = "0000000000000000000000000000000000000000000000000000000000000000";
 
         let header = format!("t={},v1={},v1={}", ts, invalid_sig, valid_sig);
 

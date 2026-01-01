@@ -26,7 +26,11 @@ pub trait DomainRepo: Send + Sync {
     async fn delete(&self, domain_id: Uuid) -> AppResult<()>;
     async fn get_verifying_domains(&self) -> AppResult<Vec<DomainProfile>>;
     /// Set the active Stripe billing mode for a domain
-    async fn set_billing_stripe_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<DomainProfile>;
+    async fn set_billing_stripe_mode(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+    ) -> AppResult<DomainProfile>;
 }
 
 #[async_trait]

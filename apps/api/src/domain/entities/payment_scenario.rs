@@ -105,7 +105,9 @@ impl PaymentScenario {
             PaymentScenario::Decline => Some("Your card was declined."),
             PaymentScenario::InsufficientFunds => Some("Your card has insufficient funds."),
             PaymentScenario::ExpiredCard => Some("Your card has expired."),
-            PaymentScenario::ProcessingError => Some("An error occurred while processing your card."),
+            PaymentScenario::ProcessingError => {
+                Some("An error occurred while processing your card.")
+            }
         }
     }
 
@@ -144,7 +146,9 @@ impl std::str::FromStr for PaymentScenario {
             "insufficient_funds" | "insufficientfunds" => Ok(PaymentScenario::InsufficientFunds),
             "three_d_secure" | "3ds" | "threeds" | "three_ds" => Ok(PaymentScenario::ThreeDSecure),
             "expired_card" | "expiredcard" | "expired" => Ok(PaymentScenario::ExpiredCard),
-            "processing_error" | "processingerror" | "error" => Ok(PaymentScenario::ProcessingError),
+            "processing_error" | "processingerror" | "error" => {
+                Ok(PaymentScenario::ProcessingError)
+            }
             _ => Err(format!("Invalid payment scenario: {}", s)),
         }
     }

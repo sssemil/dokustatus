@@ -23,10 +23,8 @@ use crate::infra::crypto::ProcessCipher;
 
 #[async_trait]
 pub trait DomainAuthConfigRepo: Send + Sync {
-    async fn get_by_domain_id(
-        &self,
-        domain_id: Uuid,
-    ) -> AppResult<Option<DomainAuthConfigProfile>>;
+    async fn get_by_domain_id(&self, domain_id: Uuid)
+    -> AppResult<Option<DomainAuthConfigProfile>>;
     async fn get_by_domain_ids(
         &self,
         domain_ids: &[Uuid],
@@ -1493,15 +1491,6 @@ fn hash_domain_token(raw: &str, domain: &str) -> String {
     hex::encode(out)
 }
 
-/// Legacy hash format (plain concatenation) kept for in-flight magic links.
-fn hash_domain_token_legacy(raw: &str, domain: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(raw.as_bytes());
-    hasher.update(domain.as_bytes());
-    let out = hasher.finalize();
-    hex::encode(out)
-}
-
 async fn consume_magic_link_from_store(
     magic_link_store: &dyn DomainMagicLinkStore,
     raw_token: &str,
@@ -1509,17 +1498,7 @@ async fn consume_magic_link_from_store(
     session_id: &str,
 ) -> AppResult<Option<DomainMagicLinkData>> {
     let token_hash = hash_domain_token(raw_token, domain_name);
-    let data = magic_link_store.consume(&token_hash, session_id).await?;
-    if data.is_some() {
-        return Ok(data);
-    }
-
-    let legacy_hash = hash_domain_token_legacy(raw_token, domain_name);
-    if legacy_hash == token_hash {
-        return Ok(None);
-    }
-
-    magic_link_store.consume(&legacy_hash, session_id).await
+    magic_link_store.consume(&token_hash, session_id).await
 }
 
 /// Validate that a redirect URL is on the specified domain or a subdomain
@@ -1539,9 +1518,9 @@ fn is_valid_redirect_url(url: &str, domain: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use async_trait::async_trait;
-    use base64::Engine as _;
+    use crate::application::use_cases::domain::DomainProfile;
     use crate::domain::entities::stripe_mode::StripeMode;
+    use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::Mutex;
 
@@ -1669,7 +1648,11 @@ mod tests {
 
     #[async_trait]
     impl DomainRepo for NoopRepo {
-        async fn create(&self, _owner_end_user_id: Uuid, _domain: &str) -> AppResult<DomainProfile> {
+        async fn create(
+            &self,
+            _owner_end_user_id: Uuid,
+            _domain: &str,
+        ) -> AppResult<DomainProfile> {
             Err(AppError::Internal("not implemented".into()))
         }
 
@@ -1681,10 +1664,7 @@ mod tests {
             Err(AppError::Internal("not implemented".into()))
         }
 
-        async fn list_by_owner(
-            &self,
-            _owner_end_user_id: Uuid,
-        ) -> AppResult<Vec<DomainProfile>> {
+        async fn list_by_owner(&self, _owner_end_user_id: Uuid) -> AppResult<Vec<DomainProfile>> {
             Err(AppError::Internal("not implemented".into()))
         }
 
@@ -1793,11 +1773,7 @@ mod tests {
             Err(AppError::Internal("not implemented".into()))
         }
 
-        async fn upsert(
-            &self,
-            _domain_id: Uuid,
-            _email: &str,
-        ) -> AppResult<DomainEndUserProfile> {
+        async fn upsert(&self, _domain_id: Uuid, _email: &str) -> AppResult<DomainEndUserProfile> {
             Err(AppError::Internal("not implemented".into()))
         }
 
@@ -1899,10 +1875,7 @@ mod tests {
             Err(AppError::Internal("not implemented".into()))
         }
 
-        async fn consume_completion(
-            &self,
-            _token: &str,
-        ) -> AppResult<Option<OAuthCompletionData>> {
+        async fn consume_completion(&self, _token: &str) -> AppResult<Option<OAuthCompletionData>> {
             Err(AppError::Internal("not implemented".into()))
         }
 
@@ -2027,42 +2000,15 @@ mod tests {
 
     #[test]
     fn test_hash_domain_token_avoids_collisions() {
+        // "ab" + "c" vs "a" + "bc" both produce "abc" if naively concatenated.
         let raw_a = "ab";
         let domain_a = "c";
         let raw_b = "a";
         let domain_b = "bc";
 
-        let legacy_a = hash_domain_token_legacy(raw_a, domain_a);
-        let legacy_b = hash_domain_token_legacy(raw_b, domain_b);
-        assert_eq!(legacy_a, legacy_b);
-
         let scoped_a = hash_domain_token(raw_a, domain_a);
         let scoped_b = hash_domain_token(raw_b, domain_b);
         assert_ne!(scoped_a, scoped_b);
-    }
-
-    #[tokio::test]
-    async fn test_consume_magic_link_falls_back_to_legacy_hash() {
-        let store = InMemoryMagicLinkStore::default();
-        let raw_token = "test-token";
-        let domain = "example.com";
-        let session_id = "session-123";
-        let end_user_id = Uuid::new_v4();
-        let domain_id = Uuid::new_v4();
-
-        let legacy_hash = hash_domain_token_legacy(raw_token, domain);
-        store
-            .save(&legacy_hash, end_user_id, domain_id, session_id, 5)
-            .await
-            .expect("save legacy magic link");
-
-        let consumed = consume_magic_link_from_store(&store, raw_token, domain, session_id)
-            .await
-            .expect("consume magic link")
-            .expect("magic link data");
-
-        assert_eq!(consumed.end_user_id, end_user_id);
-        assert_eq!(consumed.domain_id, domain_id);
     }
 
     #[tokio::test]

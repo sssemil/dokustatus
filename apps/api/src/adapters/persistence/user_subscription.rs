@@ -154,39 +154,44 @@ impl UserSubscriptionRepo for PostgresPersistence {
         .await
         .map_err(AppError::from)?;
 
-        Ok(rows.iter().map(|row| {
-            let features_json: serde_json::Value = row.get("p_features");
-            let features: Vec<String> = serde_json::from_value(features_json).unwrap_or_default();
+        Ok(rows
+            .iter()
+            .map(|row| {
+                let features_json: serde_json::Value = row.get("p_features");
+                let features: Vec<String> =
+                    serde_json::from_value(features_json).unwrap_or_default();
 
-            UserSubscriptionWithPlan {
-                subscription: row_to_profile(row),
-                plan: SubscriptionPlanProfile {
-                    id: row.get("p_id"),
-                    domain_id: row.get("p_domain_id"),
-                    stripe_mode: row.get("p_stripe_mode"),
-                    payment_provider: row.get::<Option<PaymentProvider>, _>("p_payment_provider"),
-                    payment_mode: row.get::<Option<PaymentMode>, _>("p_payment_mode"),
-                    code: row.get("p_code"),
-                    name: row.get("p_name"),
-                    description: row.get("p_description"),
-                    price_cents: row.get("p_price_cents"),
-                    currency: row.get("p_currency"),
-                    interval: row.get("p_interval"),
-                    interval_count: row.get("p_interval_count"),
-                    trial_days: row.get("p_trial_days"),
-                    features,
-                    is_public: row.get("p_is_public"),
-                    display_order: row.get("p_display_order"),
-                    stripe_product_id: row.get("p_stripe_product_id"),
-                    stripe_price_id: row.get("p_stripe_price_id"),
-                    is_archived: row.get("p_is_archived"),
-                    archived_at: row.get("p_archived_at"),
-                    created_at: row.get("p_created_at"),
-                    updated_at: row.get("p_updated_at"),
-                },
-                user_email: row.get("user_email"),
-            }
-        }).collect())
+                UserSubscriptionWithPlan {
+                    subscription: row_to_profile(row),
+                    plan: SubscriptionPlanProfile {
+                        id: row.get("p_id"),
+                        domain_id: row.get("p_domain_id"),
+                        stripe_mode: row.get("p_stripe_mode"),
+                        payment_provider: row
+                            .get::<Option<PaymentProvider>, _>("p_payment_provider"),
+                        payment_mode: row.get::<Option<PaymentMode>, _>("p_payment_mode"),
+                        code: row.get("p_code"),
+                        name: row.get("p_name"),
+                        description: row.get("p_description"),
+                        price_cents: row.get("p_price_cents"),
+                        currency: row.get("p_currency"),
+                        interval: row.get("p_interval"),
+                        interval_count: row.get("p_interval_count"),
+                        trial_days: row.get("p_trial_days"),
+                        features,
+                        is_public: row.get("p_is_public"),
+                        display_order: row.get("p_display_order"),
+                        stripe_product_id: row.get("p_stripe_product_id"),
+                        stripe_price_id: row.get("p_stripe_price_id"),
+                        is_archived: row.get("p_is_archived"),
+                        archived_at: row.get("p_archived_at"),
+                        created_at: row.get("p_created_at"),
+                        updated_at: row.get("p_updated_at"),
+                    },
+                    user_email: row.get("user_email"),
+                }
+            })
+            .collect())
     }
 
     async fn list_by_plan(&self, plan_id: Uuid) -> AppResult<Vec<UserSubscriptionProfile>> {
@@ -201,10 +206,7 @@ impl UserSubscriptionRepo for PostgresPersistence {
         Ok(rows.iter().map(row_to_profile).collect())
     }
 
-    async fn create(
-        &self,
-        input: &CreateSubscriptionInput,
-    ) -> AppResult<UserSubscriptionProfile> {
+    async fn create(&self, input: &CreateSubscriptionInput) -> AppResult<UserSubscriptionProfile> {
         let id = Uuid::new_v4();
         let row = sqlx::query(&format!(
             r#"
@@ -335,7 +337,7 @@ impl UserSubscriptionRepo for PostgresPersistence {
                 canceled_at = CURRENT_TIMESTAMP,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $1
-            "#
+            "#,
         )
         .bind(id)
         .execute(&self.pool)
@@ -353,7 +355,11 @@ impl UserSubscriptionRepo for PostgresPersistence {
         Ok(())
     }
 
-    async fn count_active_by_domain_and_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<i64> {
+    async fn count_active_by_domain_and_mode(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+    ) -> AppResult<i64> {
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM user_subscriptions WHERE domain_id = $1 AND stripe_mode = $2 AND status IN ('active', 'trialing')"
         )
@@ -385,7 +391,7 @@ impl UserSubscriptionRepo for PostgresPersistence {
 
     async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<i64> {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM user_subscriptions WHERE domain_id = $1 AND stripe_mode = $2"
+            "SELECT COUNT(*) FROM user_subscriptions WHERE domain_id = $1 AND stripe_mode = $2",
         )
         .bind(domain_id)
         .bind(mode)

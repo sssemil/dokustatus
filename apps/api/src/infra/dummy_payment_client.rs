@@ -6,15 +6,13 @@ use uuid::Uuid;
 use crate::{
     app_error::{AppError, AppResult},
     application::ports::payment_provider::{
-        CheckoutResult, CheckoutUrls, CustomerInfo, CustomerId, InvoiceInfo, InvoicePdfResult,
+        CheckoutResult, CheckoutUrls, CustomerId, CustomerInfo, InvoiceInfo, InvoicePdfResult,
         PaymentProviderPort, PlanChangePreview, PlanChangeResult, PlanChangeType, PlanInfo,
         SubscriptionId, SubscriptionInfo, SubscriptionResult,
     },
     domain::entities::{
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
-        payment_scenario::PaymentScenario,
-        user_subscription::SubscriptionStatus,
+        payment_mode::PaymentMode, payment_provider::PaymentProvider,
+        payment_scenario::PaymentScenario, user_subscription::SubscriptionStatus,
     },
 };
 

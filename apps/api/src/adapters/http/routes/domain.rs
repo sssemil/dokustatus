@@ -13,13 +13,12 @@ use crate::{
     adapters::http::app_state::AppState,
     app_error::{AppError, AppResult},
     application::{
-        jwt, validators::is_valid_email,
+        jwt,
         use_cases::domain_billing::{CreatePlanInput, UpdatePlanInput},
+        validators::is_valid_email,
     },
     domain::entities::{
-        domain::DomainStatus,
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
+        domain::DomainStatus, payment_mode::PaymentMode, payment_provider::PaymentProvider,
     },
 };
 
@@ -86,20 +85,53 @@ pub fn router() -> Router<AppState> {
         .route("/{domain_id}/billing/mode", patch(set_billing_mode))
         .route("/{domain_id}/billing/plans", get(list_billing_plans))
         .route("/{domain_id}/billing/plans", post(create_billing_plan))
-        .route("/{domain_id}/billing/plans/reorder", put(reorder_billing_plans))
-        .route("/{domain_id}/billing/plans/{plan_id}", patch(update_billing_plan))
-        .route("/{domain_id}/billing/plans/{plan_id}", delete(archive_billing_plan))
-        .route("/{domain_id}/billing/subscribers", get(list_billing_subscribers))
-        .route("/{domain_id}/billing/subscribers/{user_id}/grant", post(grant_subscription))
-        .route("/{domain_id}/billing/subscribers/{user_id}/revoke", delete(revoke_subscription))
+        .route(
+            "/{domain_id}/billing/plans/reorder",
+            put(reorder_billing_plans),
+        )
+        .route(
+            "/{domain_id}/billing/plans/{plan_id}",
+            patch(update_billing_plan),
+        )
+        .route(
+            "/{domain_id}/billing/plans/{plan_id}",
+            delete(archive_billing_plan),
+        )
+        .route(
+            "/{domain_id}/billing/subscribers",
+            get(list_billing_subscribers),
+        )
+        .route(
+            "/{domain_id}/billing/subscribers/{user_id}/grant",
+            post(grant_subscription),
+        )
+        .route(
+            "/{domain_id}/billing/subscribers/{user_id}/revoke",
+            delete(revoke_subscription),
+        )
         .route("/{domain_id}/billing/analytics", get(get_billing_analytics))
         .route("/{domain_id}/billing/payments", get(list_billing_payments))
-        .route("/{domain_id}/billing/payments/export", get(export_billing_payments))
+        .route(
+            "/{domain_id}/billing/payments/export",
+            get(export_billing_payments),
+        )
         // Payment Providers
-        .route("/{domain_id}/billing/providers", get(list_billing_providers))
-        .route("/{domain_id}/billing/providers", post(enable_billing_provider))
-        .route("/{domain_id}/billing/providers/{provider}/{mode}", delete(disable_billing_provider))
-        .route("/{domain_id}/billing/providers/{provider}/{mode}/active", patch(set_provider_active))
+        .route(
+            "/{domain_id}/billing/providers",
+            get(list_billing_providers),
+        )
+        .route(
+            "/{domain_id}/billing/providers",
+            post(enable_billing_provider),
+        )
+        .route(
+            "/{domain_id}/billing/providers/{provider}/{mode}",
+            delete(disable_billing_provider),
+        )
+        .route(
+            "/{domain_id}/billing/providers/{provider}/{mode}/active",
+            patch(set_provider_active),
+        )
 }
 
 #[derive(Deserialize)]
@@ -1522,15 +1554,18 @@ async fn list_billing_payments(
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
 
     // Parse status filter
-    let status = query.status.as_deref().and_then(|s| s.parse::<PaymentStatus>().ok());
+    let status = query
+        .status
+        .as_deref()
+        .and_then(|s| s.parse::<PaymentStatus>().ok());
 
     // Parse date filters (timestamps to NaiveDateTime)
-    let date_from = query.date_from.and_then(|ts| {
-        chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc())
-    });
-    let date_to = query.date_to.and_then(|ts| {
-        chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc())
-    });
+    let date_from = query
+        .date_from
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc()));
+    let date_to = query
+        .date_to
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc()));
 
     let filters = PaymentListFilters {
         status,
@@ -1606,15 +1641,18 @@ async fn export_billing_payments(
     let (_, owner_id) = current_user(&jar, &app_state)?;
 
     // Parse status filter
-    let status = query.status.as_deref().and_then(|s| s.parse::<PaymentStatus>().ok());
+    let status = query
+        .status
+        .as_deref()
+        .and_then(|s| s.parse::<PaymentStatus>().ok());
 
     // Parse date filters
-    let date_from = query.date_from.and_then(|ts| {
-        chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc())
-    });
-    let date_to = query.date_to.and_then(|ts| {
-        chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc())
-    });
+    let date_from = query
+        .date_from
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc()));
+    let date_to = query
+        .date_to
+        .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0).map(|dt| dt.naive_utc()));
 
     let filters = PaymentListFilters {
         status,
@@ -1728,7 +1766,13 @@ async fn set_provider_active(
 
     app_state
         .billing_use_cases
-        .set_provider_active(owner_id, path.domain_id, path.provider, path.mode, payload.is_active)
+        .set_provider_active(
+            owner_id,
+            path.domain_id,
+            path.provider,
+            path.mode,
+            payload.is_active,
+        )
         .await?;
 
     Ok(StatusCode::NO_CONTENT)

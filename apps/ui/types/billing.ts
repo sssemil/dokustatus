@@ -45,14 +45,6 @@ export interface StripeConfigStatus {
   live: ModeConfigStatus | null;
 }
 
-// Legacy interface for backwards compatibility
-export interface StripeConfig {
-  publishable_key: string | null;
-  has_secret_key: boolean;
-  is_connected: boolean;
-  // NOTE: No using_fallback field - each domain must configure their own Stripe account.
-}
-
 export interface SubscriptionPlan {
   id: string;
   stripe_mode: StripeMode;

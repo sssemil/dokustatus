@@ -8,9 +8,9 @@ use crate::{
     application::use_cases::domain_billing::{
         CreatePlanInput, SubscriptionPlanProfile, SubscriptionPlanRepo, UpdatePlanInput,
     },
-    domain::entities::stripe_mode::StripeMode,
     domain::entities::payment_mode::PaymentMode,
     domain::entities::payment_provider::PaymentProvider,
+    domain::entities::stripe_mode::StripeMode,
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> SubscriptionPlanProfile {
@@ -206,7 +206,12 @@ impl SubscriptionPlanRepo for PostgresPersistence {
         .bind(&input.interval)
         .bind(input.interval_count)
         .bind(input.trial_days)
-        .bind(input.features.as_ref().map(|f| serde_json::to_value(f).unwrap_or(serde_json::json!([]))))
+        .bind(
+            input
+                .features
+                .as_ref()
+                .map(|f| serde_json::to_value(f).unwrap_or(serde_json::json!([]))),
+        )
         .bind(input.is_public)
         .fetch_one(&self.pool)
         .await
@@ -214,12 +219,7 @@ impl SubscriptionPlanRepo for PostgresPersistence {
         Ok(row_to_profile(row))
     }
 
-    async fn set_stripe_ids(
-        &self,
-        id: Uuid,
-        product_id: &str,
-        price_id: &str,
-    ) -> AppResult<()> {
+    async fn set_stripe_ids(&self, id: Uuid, product_id: &str, price_id: &str) -> AppResult<()> {
         sqlx::query(
             "UPDATE subscription_plans SET stripe_product_id = $2, stripe_price_id = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $1"
         )
@@ -277,7 +277,7 @@ impl SubscriptionPlanRepo for PostgresPersistence {
 
     async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<i64> {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM subscription_plans WHERE domain_id = $1 AND stripe_mode = $2"
+            "SELECT COUNT(*) FROM subscription_plans WHERE domain_id = $1 AND stripe_mode = $2",
         )
         .bind(domain_id)
         .bind(mode)
