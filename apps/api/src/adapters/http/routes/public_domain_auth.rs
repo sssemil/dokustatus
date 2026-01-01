@@ -2491,7 +2491,6 @@ async fn exchange_google_code_typed(
     redirect_uri: &str,
     code_verifier: &str,
 ) -> Result<GoogleTokenResponse, OAuthExchangeError> {
-<<<<<<< HEAD
     let client = http_client::try_build_client().map_err(|e| {
         error!(
             error = %e,
@@ -2501,9 +2500,6 @@ async fn exchange_google_code_typed(
             message: format!("Failed to build HTTP client: {e}"),
         }
     })?;
-=======
-    let client = reqwest::Client::new();
->>>>>>> task/0007-oauth-state-two-phase
 
     let response = client
         .post("https://oauth2.googleapis.com/token")
