@@ -431,17 +431,14 @@ def merge_outbound_task(slug: str) -> bool:
             git_stash_pop()
         return False
 
-    # Commit with simple title and all commits in body
-    commit_msg = f"complete task {slug}\n\nCommits:\n{commits}" if commits else f"complete task {slug}"
-    run(["git", "commit", "-m", commit_msg], check=False)
-
-    # Move directory to done (using git mv to track the change)
+    # Move directory to done before committing (so it's all in one commit)
     if done_dir.exists():
         shutil.rmtree(done_dir)
-
-    # Use git mv for tracked files, then commit
     run(["git", "mv", str(outbound_dir), str(done_dir)], check=False)
-    run(["git", "commit", "-m", f"archive task {slug} to done"], check=False)
+
+    # Single commit with squash merge + archive
+    commit_msg = f"complete task {slug}\n\nCommits:\n{commits}" if commits else f"complete task {slug}"
+    run(["git", "commit", "-m", commit_msg], check=False)
 
     # Cleanup session file and planning state
     if session_file.exists():
