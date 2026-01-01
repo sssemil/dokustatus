@@ -5,8 +5,14 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
+    adapters::persistence::enabled_payment_providers::{
+        EnabledPaymentProviderProfile, EnabledPaymentProvidersRepo,
+    },
     app_error::{AppError, AppResult},
     domain::entities::{
+        billing_state::BillingState,
+        payment_mode::PaymentMode,
+        payment_provider::PaymentProvider,
         payment_status::PaymentStatus,
         stripe_mode::StripeMode,
         user_subscription::SubscriptionStatus,
@@ -37,6 +43,10 @@ pub struct SubscriptionPlanProfile {
     pub id: Uuid,
     pub domain_id: Uuid,
     pub stripe_mode: StripeMode,
+    /// New: payment provider (nullable during migration)
+    pub payment_provider: Option<PaymentProvider>,
+    /// New: payment mode (nullable during migration)
+    pub payment_mode: Option<PaymentMode>,
     pub code: String,
     pub name: String,
     pub description: Option<String>,
@@ -61,6 +71,12 @@ pub struct UserSubscriptionProfile {
     pub id: Uuid,
     pub domain_id: Uuid,
     pub stripe_mode: StripeMode,
+    /// New: payment provider (nullable during migration)
+    pub payment_provider: Option<PaymentProvider>,
+    /// New: payment mode (nullable during migration)
+    pub payment_mode: Option<PaymentMode>,
+    /// New: billing state for provider switching
+    pub billing_state: Option<BillingState>,
     pub end_user_id: Uuid,
     pub plan_id: Uuid,
     pub status: SubscriptionStatus,
@@ -104,6 +120,10 @@ pub struct BillingPaymentProfile {
     pub id: Uuid,
     pub domain_id: Uuid,
     pub stripe_mode: StripeMode,
+    /// New: payment provider (nullable during migration)
+    pub payment_provider: Option<PaymentProvider>,
+    /// New: payment mode (nullable during migration)
+    pub payment_mode: Option<PaymentMode>,
     pub end_user_id: Uuid,
     pub subscription_id: Option<Uuid>,
     pub stripe_invoice_id: String,
@@ -547,6 +567,7 @@ pub trait BillingPaymentRepo: Send + Sync {
 pub struct DomainBillingUseCases {
     domain_repo: Arc<dyn DomainRepo>,
     stripe_config_repo: Arc<dyn BillingStripeConfigRepo>,
+    enabled_providers_repo: Arc<dyn EnabledPaymentProvidersRepo>,
     plan_repo: Arc<dyn SubscriptionPlanRepo>,
     subscription_repo: Arc<dyn UserSubscriptionRepo>,
     event_repo: Arc<dyn SubscriptionEventRepo>,
@@ -560,6 +581,7 @@ impl DomainBillingUseCases {
     pub fn new(
         domain_repo: Arc<dyn DomainRepo>,
         stripe_config_repo: Arc<dyn BillingStripeConfigRepo>,
+        enabled_providers_repo: Arc<dyn EnabledPaymentProvidersRepo>,
         plan_repo: Arc<dyn SubscriptionPlanRepo>,
         subscription_repo: Arc<dyn UserSubscriptionRepo>,
         event_repo: Arc<dyn SubscriptionEventRepo>,
@@ -569,6 +591,7 @@ impl DomainBillingUseCases {
         Self {
             domain_repo,
             stripe_config_repo,
+            enabled_providers_repo,
             plan_repo,
             subscription_repo,
             event_repo,
@@ -737,6 +760,145 @@ impl DomainBillingUseCases {
     /// Check if Stripe is configured for a specific mode.
     pub async fn is_stripe_configured_for_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<bool> {
         Ok(self.stripe_config_repo.get_by_domain_and_mode(domain_id, mode).await?.is_some())
+    }
+
+    // ========================================================================
+    // Payment Provider Methods
+    // ========================================================================
+
+    /// List all enabled payment providers for a domain
+    pub async fn list_enabled_providers(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<Vec<EnabledPaymentProviderProfile>> {
+        self.get_domain_verified(owner_id, domain_id).await?;
+        self.enabled_providers_repo.list_by_domain(domain_id).await
+    }
+
+    /// List only active payment providers for a domain (for checkout display)
+    pub async fn list_active_providers(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Vec<EnabledPaymentProviderProfile>> {
+        self.enabled_providers_repo.list_active_by_domain(domain_id).await
+    }
+
+    /// Enable a payment provider for a domain
+    pub async fn enable_provider(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+        provider: PaymentProvider,
+        mode: PaymentMode,
+    ) -> AppResult<EnabledPaymentProviderProfile> {
+        self.get_domain_verified(owner_id, domain_id).await?;
+
+        // Validate provider supports this mode
+        if !provider.supports_mode(mode) {
+            return Err(AppError::InvalidInput(format!(
+                "{} does not support {} mode",
+                provider.display_name(),
+                mode.as_str()
+            )));
+        }
+
+        // For Stripe, ensure it's configured for the mode
+        if provider == PaymentProvider::Stripe {
+            let stripe_mode = match mode {
+                PaymentMode::Test => StripeMode::Test,
+                PaymentMode::Live => StripeMode::Live,
+            };
+            if !self.is_stripe_configured_for_mode(domain_id, stripe_mode).await? {
+                return Err(AppError::InvalidInput(format!(
+                    "Stripe {} mode must be configured before enabling",
+                    mode.as_str()
+                )));
+            }
+        }
+
+        // Coinbase is not yet implemented
+        if provider == PaymentProvider::Coinbase {
+            return Err(AppError::ProviderNotSupported);
+        }
+
+        // Get current max display_order
+        let existing = self.enabled_providers_repo.list_by_domain(domain_id).await?;
+        let display_order = existing.iter().map(|p| p.display_order).max().unwrap_or(-1) + 1;
+
+        self.enabled_providers_repo.enable(domain_id, provider, mode, display_order).await
+    }
+
+    /// Disable a payment provider for a domain
+    pub async fn disable_provider(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+        provider: PaymentProvider,
+        mode: PaymentMode,
+    ) -> AppResult<()> {
+        self.get_domain_verified(owner_id, domain_id).await?;
+
+        // Check if this is the only active provider
+        let active = self.enabled_providers_repo.list_active_by_domain(domain_id).await?;
+        let is_target = |p: &EnabledPaymentProviderProfile| p.provider == provider && p.mode == mode;
+
+        if active.len() == 1 && active.iter().any(is_target) {
+            return Err(AppError::InvalidInput(
+                "Cannot disable the only active payment provider. Enable another provider first.".into()
+            ));
+        }
+
+        self.enabled_providers_repo.disable(domain_id, provider, mode).await
+    }
+
+    /// Set active status for a provider (toggle on/off without removing)
+    pub async fn set_provider_active(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+        provider: PaymentProvider,
+        mode: PaymentMode,
+        is_active: bool,
+    ) -> AppResult<()> {
+        self.get_domain_verified(owner_id, domain_id).await?;
+
+        // If deactivating, check if this would leave no active providers
+        if !is_active {
+            let active = self.enabled_providers_repo.list_active_by_domain(domain_id).await?;
+            let is_target = |p: &EnabledPaymentProviderProfile| p.provider == provider && p.mode == mode;
+
+            if active.len() == 1 && active.iter().any(is_target) {
+                return Err(AppError::InvalidInput(
+                    "Cannot deactivate the only active payment provider".into()
+                ));
+            }
+        }
+
+        self.enabled_providers_repo.set_active(domain_id, provider, mode, is_active).await
+    }
+
+    /// Update display order for a provider
+    pub async fn set_provider_display_order(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+        provider: PaymentProvider,
+        mode: PaymentMode,
+        display_order: i32,
+    ) -> AppResult<()> {
+        self.get_domain_verified(owner_id, domain_id).await?;
+        self.enabled_providers_repo.set_display_order(domain_id, provider, mode, display_order).await
+    }
+
+    /// Check if a provider is enabled for a domain
+    pub async fn is_provider_enabled(
+        &self,
+        domain_id: Uuid,
+        provider: PaymentProvider,
+        mode: PaymentMode,
+    ) -> AppResult<bool> {
+        self.enabled_providers_repo.is_enabled(domain_id, provider, mode).await
     }
 
     // ========================================================================

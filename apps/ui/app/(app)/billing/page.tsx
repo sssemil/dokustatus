@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, CreditCard, Check, ExternalLink, Receipt, FileText, ChevronLeft, ChevronRight } from 'lucide-react';
+import { ArrowLeft, CreditCard, Check, ExternalLink, Receipt, FileText, ChevronLeft, ChevronRight, TestTube } from 'lucide-react';
 import { Card, Button, Badge, HoldButton, Table } from '@/components/ui';
-import { PlanChangeModal } from '@/components/billing';
+import { PlanChangeModal, DummyCheckoutModal } from '@/components/billing';
 import { useToast } from '@/contexts/ToastContext';
 import { useAppContext } from '../layout';
 import { getRootDomain } from '@/lib/domain-utils';
@@ -17,6 +17,11 @@ import {
   getPaymentStatusLabel,
   getPaymentStatusBadgeColor,
   formatPaymentDate,
+  EnabledPaymentProvider,
+  PaymentProvider,
+  getProviderLabel,
+  getProviderBadgeColor,
+  formatProviderConfig,
 } from '@/types/billing';
 
 type SubscriptionPlan = {
@@ -61,6 +66,11 @@ export default function BillingPage() {
   const [selectedPlanForChange, setSelectedPlanForChange] = useState<SubscriptionPlan | null>(null);
   const [stripePublishableKey, setStripePublishableKey] = useState<string | null>(null);
 
+  // Enabled providers and dummy checkout modal
+  const [enabledProviders, setEnabledProviders] = useState<EnabledPaymentProvider[]>([]);
+  const [dummyCheckoutModalOpen, setDummyCheckoutModalOpen] = useState(false);
+  const [selectedPlanForDummy, setSelectedPlanForDummy] = useState<SubscriptionPlan | null>(null);
+
   const apiDomain = typeof window !== 'undefined' ? getRootDomain(window.location.hostname) : '';
 
   const fetchPayments = useCallback(async (page: number = 1) => {
@@ -87,9 +97,10 @@ export default function BillingPage() {
     if (!apiDomain) return;
     setLoading(true);
     try {
-      const [subRes, plansRes] = await Promise.all([
+      const [subRes, plansRes, providersRes] = await Promise.all([
         fetch(`/api/public/domain/${apiDomain}/billing/subscription`, { credentials: 'include' }),
         fetch(`/api/public/domain/${apiDomain}/billing/plans`, { credentials: 'include' }),
+        fetch(`/api/public/domain/${apiDomain}/billing/providers`, { credentials: 'include' }),
       ]);
 
       if (subRes.ok) {
@@ -99,6 +110,10 @@ export default function BillingPage() {
       if (plansRes.ok) {
         const plansData = await plansRes.json();
         setPlans(plansData.sort((a: SubscriptionPlan, b: SubscriptionPlan) => a.display_order - b.display_order));
+      }
+      if (providersRes.ok) {
+        const providersData = await providersRes.json();
+        setEnabledProviders(providersData.filter((p: EnabledPaymentProvider) => p.is_active));
       }
 
       // Fetch payments
@@ -120,6 +135,24 @@ export default function BillingPage() {
   const currentPlan = hasActiveSubscription && subscription?.plan_code
     ? plans.find((p) => p.code === subscription.plan_code)
     : null;
+
+  // Provider helpers
+  const hasStripeProvider = enabledProviders.some(p => p.provider === 'stripe');
+  const hasDummyProvider = enabledProviders.some(p => p.provider === 'dummy');
+  const hasMultipleProviders = enabledProviders.length > 1;
+
+  const handleDummyCheckout = (planCode: string) => {
+    const plan = plans.find((p) => p.code === planCode);
+    if (plan) {
+      setSelectedPlanForDummy(plan);
+      setDummyCheckoutModalOpen(true);
+    }
+  };
+
+  const handleDummyCheckoutSuccess = () => {
+    addToast('Test subscription created successfully!', 'success');
+    fetchData();
+  };
 
   const handleSubscribe = async (planCode: string) => {
     // If user has an active subscription, open the plan change modal instead
@@ -308,6 +341,7 @@ export default function BillingPage() {
                 <tr className="border-b border-zinc-700">
                   <th className="text-left py-3 px-2 text-zinc-400 font-medium">Date</th>
                   <th className="text-left py-3 px-2 text-zinc-400 font-medium">Plan</th>
+                  <th className="text-left py-3 px-2 text-zinc-400 font-medium">Provider</th>
                   <th className="text-left py-3 px-2 text-zinc-400 font-medium">Amount</th>
                   <th className="text-left py-3 px-2 text-zinc-400 font-medium">Status</th>
                   <th className="text-right py-3 px-2 text-zinc-400 font-medium">Invoice</th>
@@ -321,6 +355,19 @@ export default function BillingPage() {
                     </td>
                     <td className="py-3 px-2 text-zinc-300">
                       {payment.plan_name || '-'}
+                    </td>
+                    <td className="py-3 px-2">
+                      {payment.payment_provider ? (
+                        <Badge variant={
+                          payment.payment_provider === 'stripe' ? 'default' :
+                          payment.payment_provider === 'dummy' ? 'warning' : 'info'
+                        }>
+                          {payment.payment_provider === 'dummy' && <TestTube size={12} className="mr-1" />}
+                          {formatProviderConfig(payment.payment_provider, payment.payment_mode || 'test')}
+                        </Badge>
+                      ) : (
+                        <span className="text-zinc-500">-</span>
+                      )}
                     </td>
                     <td className="py-3 px-2 text-white">
                       {formatPrice(payment.amount_cents, payment.currency)}
@@ -456,17 +503,44 @@ export default function BillingPage() {
                   )}
 
                   {!isCurrentPlan && (
-                    <Button
-                      variant="primary"
-                      className="w-full"
-                      onClick={() => handleSubscribe(plan.code)}
-                      disabled={subscribing === plan.code}
-                    >
-                      {subscribing === plan.code ? 'Processing...' :
-                       hasActiveSubscription && currentPlan
-                         ? (plan.price_cents > currentPlan.price_cents ? 'Upgrade' : 'Downgrade')
-                         : 'Subscribe'}
-                    </Button>
+                    <div className="space-y-2">
+                      {/* Show Stripe button if enabled */}
+                      {hasStripeProvider && (
+                        <Button
+                          variant="primary"
+                          className="w-full"
+                          onClick={() => handleSubscribe(plan.code)}
+                          disabled={subscribing === plan.code}
+                        >
+                          {subscribing === plan.code ? 'Processing...' :
+                           hasActiveSubscription && currentPlan
+                             ? (plan.price_cents > currentPlan.price_cents ? 'Upgrade' : 'Downgrade')
+                             : hasMultipleProviders ? 'Pay with Stripe' : 'Subscribe'}
+                        </Button>
+                      )}
+                      {/* Show dummy button if enabled */}
+                      {hasDummyProvider && (
+                        <Button
+                          variant={hasStripeProvider ? 'ghost' : 'primary'}
+                          className="w-full"
+                          onClick={() => handleDummyCheckout(plan.code)}
+                        >
+                          <TestTube size={14} className="mr-1" />
+                          {hasMultipleProviders ? 'Test Payment' : 'Subscribe (Test)'}
+                        </Button>
+                      )}
+                      {/* Fallback if no providers configured */}
+                      {!hasStripeProvider && !hasDummyProvider && (
+                        <Button
+                          variant="primary"
+                          className="w-full"
+                          onClick={() => handleSubscribe(plan.code)}
+                          disabled={subscribing === plan.code}
+                        >
+                          {subscribing === plan.code ? 'Processing...' : 'Subscribe'}
+                        </Button>
+                      )}
+                    </div>
                   )}
                 </div>
               );
@@ -499,6 +573,20 @@ export default function BillingPage() {
           apiDomain={apiDomain}
           stripePublishableKey={stripePublishableKey}
           onSuccess={handlePlanChangeSuccess}
+        />
+      )}
+
+      {/* Dummy Checkout Modal */}
+      {selectedPlanForDummy && (
+        <DummyCheckoutModal
+          open={dummyCheckoutModalOpen}
+          onClose={() => {
+            setDummyCheckoutModalOpen(false);
+            setSelectedPlanForDummy(null);
+          }}
+          plan={selectedPlanForDummy}
+          apiDomain={apiDomain}
+          onSuccess={handleDummyCheckoutSuccess}
         />
       )}
     </div>

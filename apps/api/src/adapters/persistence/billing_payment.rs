@@ -10,7 +10,10 @@ use crate::{
         BillingPaymentProfile, BillingPaymentRepo, BillingPaymentWithUser, CreatePaymentInput,
         PaginatedPayments, PaymentListFilters, PaymentSummary,
     },
-    domain::entities::{payment_status::PaymentStatus, stripe_mode::StripeMode},
+    domain::entities::{
+        payment_mode::PaymentMode, payment_provider::PaymentProvider, payment_status::PaymentStatus,
+        stripe_mode::StripeMode,
+    },
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> BillingPaymentProfile {
@@ -18,6 +21,8 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> BillingPaymentProfile {
         id: row.get("id"),
         domain_id: row.get("domain_id"),
         stripe_mode: row.get("stripe_mode"),
+        payment_provider: row.get::<Option<PaymentProvider>, _>("payment_provider"),
+        payment_mode: row.get::<Option<PaymentMode>, _>("payment_mode"),
         end_user_id: row.get("end_user_id"),
         subscription_id: row.get("subscription_id"),
         stripe_invoice_id: row.get("stripe_invoice_id"),
@@ -51,6 +56,8 @@ fn row_to_payment_with_user(row: sqlx::postgres::PgRow) -> BillingPaymentWithUse
             id: row.get("id"),
             domain_id: row.get("domain_id"),
             stripe_mode: row.get("stripe_mode"),
+            payment_provider: row.get::<Option<PaymentProvider>, _>("payment_provider"),
+            payment_mode: row.get::<Option<PaymentMode>, _>("payment_mode"),
             end_user_id: row.get("end_user_id"),
             subscription_id: row.get("subscription_id"),
             stripe_invoice_id: row.get("stripe_invoice_id"),
@@ -80,7 +87,8 @@ fn row_to_payment_with_user(row: sqlx::postgres::PgRow) -> BillingPaymentWithUse
 }
 
 const SELECT_COLS: &str = r#"
-    bp.id, bp.domain_id, bp.stripe_mode, bp.end_user_id, bp.subscription_id,
+    bp.id, bp.domain_id, bp.stripe_mode, bp.payment_provider, bp.payment_mode,
+    bp.end_user_id, bp.subscription_id,
     bp.stripe_invoice_id, bp.stripe_payment_intent_id, bp.stripe_customer_id,
     bp.amount_cents, bp.amount_paid_cents, bp.amount_refunded_cents, bp.currency, bp.status,
     bp.plan_id, bp.plan_code, bp.plan_name,

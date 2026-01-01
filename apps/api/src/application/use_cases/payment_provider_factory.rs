@@ -1,0 +1,145 @@
+use std::sync::Arc;
+use uuid::Uuid;
+
+use crate::{
+    app_error::{AppError, AppResult},
+    application::ports::payment_provider::PaymentProviderPort,
+    domain::entities::{
+        payment_mode::PaymentMode,
+        payment_provider::PaymentProvider,
+    },
+    infra::{
+        crypto::ProcessCipher,
+        dummy_payment_client::DummyPaymentClient,
+        stripe_payment_adapter::StripePaymentAdapter,
+    },
+};
+
+use super::domain_billing::BillingStripeConfigRepo;
+
+/// Factory for creating payment provider instances based on configuration.
+///
+/// The factory handles:
+/// - Decrypting stored credentials
+/// - Validating provider + mode combinations
+/// - Instantiating the appropriate provider client
+pub struct PaymentProviderFactory {
+    cipher: ProcessCipher,
+    config_repo: Arc<dyn BillingStripeConfigRepo>,
+}
+
+impl PaymentProviderFactory {
+    pub fn new(cipher: ProcessCipher, config_repo: Arc<dyn BillingStripeConfigRepo>) -> Self {
+        Self { cipher, config_repo }
+    }
+
+    /// Get a payment provider instance for the given domain, provider, and mode.
+    ///
+    /// # Arguments
+    /// * `domain_id` - The domain to get the provider for
+    /// * `provider` - The payment provider type
+    /// * `mode` - The payment mode (test/live)
+    ///
+    /// # Returns
+    /// An instance of the payment provider implementing PaymentProviderPort
+    ///
+    /// # Errors
+    /// - `ProviderNotSupported` if the provider is not yet implemented (e.g., Coinbase)
+    /// - `ProviderNotConfigured` if the provider requires configuration but none exists
+    /// - `InvalidInput` if the provider doesn't support the requested mode
+    pub async fn get(
+        &self,
+        domain_id: Uuid,
+        provider: PaymentProvider,
+        mode: PaymentMode,
+    ) -> AppResult<Arc<dyn PaymentProviderPort>> {
+        // Validate that the provider supports this mode
+        if !provider.supports_mode(mode) {
+            return Err(AppError::InvalidInput(format!(
+                "{} does not support {} mode",
+                provider.display_name(),
+                mode.as_str()
+            )));
+        }
+
+        match provider {
+            PaymentProvider::Stripe => {
+                self.get_stripe_provider(domain_id, mode).await
+            }
+            PaymentProvider::Dummy => {
+                // Dummy provider doesn't need configuration
+                Ok(Arc::new(DummyPaymentClient::new(domain_id)))
+            }
+            PaymentProvider::Coinbase => {
+                // Coinbase is not yet implemented
+                Err(AppError::ProviderNotSupported)
+            }
+        }
+    }
+
+    /// Get a Stripe provider for the given domain and mode.
+    async fn get_stripe_provider(
+        &self,
+        domain_id: Uuid,
+        mode: PaymentMode,
+    ) -> AppResult<Arc<dyn PaymentProviderPort>> {
+        // Convert PaymentMode to StripeMode for the existing repo
+        // This is temporary until we migrate the repo to use PaymentMode
+        let stripe_mode = match mode {
+            PaymentMode::Test => crate::domain::entities::stripe_mode::StripeMode::Test,
+            PaymentMode::Live => crate::domain::entities::stripe_mode::StripeMode::Live,
+        };
+
+        // Fetch the Stripe configuration
+        let config = self
+            .config_repo
+            .get_by_domain_and_mode(domain_id, stripe_mode)
+            .await?
+            .ok_or(AppError::ProviderNotConfigured)?;
+
+        // Decrypt the secret key
+        let secret_key = self.cipher.decrypt(&config.stripe_secret_key_encrypted)?;
+
+        Ok(Arc::new(StripePaymentAdapter::new(secret_key, mode)))
+    }
+
+    /// Check if a provider is configured for the given domain.
+    ///
+    /// For providers that don't require configuration (e.g., Dummy), this always returns true.
+    pub async fn is_configured(
+        &self,
+        domain_id: Uuid,
+        provider: PaymentProvider,
+        mode: PaymentMode,
+    ) -> AppResult<bool> {
+        match provider {
+            PaymentProvider::Dummy => {
+                // Dummy is always "configured" - no external setup needed
+                Ok(provider.supports_mode(mode))
+            }
+            PaymentProvider::Stripe => {
+                let stripe_mode = match mode {
+                    PaymentMode::Test => crate::domain::entities::stripe_mode::StripeMode::Test,
+                    PaymentMode::Live => crate::domain::entities::stripe_mode::StripeMode::Live,
+                };
+                let config = self
+                    .config_repo
+                    .get_by_domain_and_mode(domain_id, stripe_mode)
+                    .await?;
+                Ok(config.is_some())
+            }
+            PaymentProvider::Coinbase => {
+                // Coinbase is not yet implemented
+                Ok(false)
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Note: Tests would require mocking the config repo and cipher
+    // For now, we just verify the type structure compiles correctly
+}

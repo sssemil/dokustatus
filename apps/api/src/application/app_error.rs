@@ -17,6 +17,9 @@ pub enum AppError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("Validation error: {0}")]
+    ValidationError(String),
+
     #[error("Account suspended")]
     AccountSuspended,
 
@@ -32,6 +35,15 @@ pub enum AppError {
     #[error("Session mismatch - please use the same browser/device where you requested the link")]
     SessionMismatch,
 
+    #[error("Payment declined: {0}")]
+    PaymentDeclined(String),
+
+    #[error("Payment provider not configured")]
+    ProviderNotConfigured,
+
+    #[error("Payment provider not supported")]
+    ProviderNotSupported,
+
     #[error("Internal error: {0}")]
     Internal(String),
 }
@@ -43,11 +55,15 @@ pub enum ErrorCode {
     InvalidApiKey,
     RateLimited,
     InvalidInput,
+    ValidationError,
     AccountSuspended,
     TooManyDocuments,
     NotFound,
     Forbidden,
     SessionMismatch,
+    PaymentDeclined,
+    ProviderNotConfigured,
+    ProviderNotSupported,
     InternalError,
 }
 
@@ -59,11 +75,15 @@ impl ErrorCode {
             ErrorCode::InvalidApiKey => "INVALID_API_KEY",
             ErrorCode::RateLimited => "RATE_LIMITED",
             ErrorCode::InvalidInput => "INVALID_INPUT",
+            ErrorCode::ValidationError => "VALIDATION_ERROR",
             ErrorCode::AccountSuspended => "ACCOUNT_SUSPENDED",
             ErrorCode::TooManyDocuments => "TOO_MANY_DOCUMENTS",
             ErrorCode::NotFound => "NOT_FOUND",
             ErrorCode::Forbidden => "FORBIDDEN",
             ErrorCode::SessionMismatch => "SESSION_MISMATCH",
+            ErrorCode::PaymentDeclined => "PAYMENT_DECLINED",
+            ErrorCode::ProviderNotConfigured => "PROVIDER_NOT_CONFIGURED",
+            ErrorCode::ProviderNotSupported => "PROVIDER_NOT_SUPPORTED",
             ErrorCode::InternalError => "INTERNAL_ERROR",
         }
     }

@@ -16,7 +16,11 @@ use crate::{
         jwt, validators::is_valid_email,
         use_cases::domain_billing::{CreatePlanInput, UpdatePlanInput},
     },
-    domain::entities::domain::DomainStatus,
+    domain::entities::{
+        domain::DomainStatus,
+        payment_mode::PaymentMode,
+        payment_provider::PaymentProvider,
+    },
 };
 
 pub fn router() -> Router<AppState> {
@@ -91,6 +95,11 @@ pub fn router() -> Router<AppState> {
         .route("/{domain_id}/billing/analytics", get(get_billing_analytics))
         .route("/{domain_id}/billing/payments", get(list_billing_payments))
         .route("/{domain_id}/billing/payments/export", get(export_billing_payments))
+        // Payment Providers
+        .route("/{domain_id}/billing/providers", get(list_billing_providers))
+        .route("/{domain_id}/billing/providers", post(enable_billing_provider))
+        .route("/{domain_id}/billing/providers/{provider}/{mode}", delete(disable_billing_provider))
+        .route("/{domain_id}/billing/providers/{provider}/{mode}/active", patch(set_provider_active))
 }
 
 #[derive(Deserialize)]
@@ -1626,4 +1635,96 @@ async fn export_billing_payments(
         ],
         csv,
     ))
+}
+
+// ============================================================================
+// Payment Provider Handlers
+// ============================================================================
+
+/// GET /api/domains/{id}/billing/providers
+/// List all enabled payment providers for this domain
+async fn list_billing_providers(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let providers = app_state
+        .billing_use_cases
+        .list_enabled_providers(owner_id, domain_id)
+        .await?;
+
+    Ok(Json(providers))
+}
+
+#[derive(Deserialize)]
+struct EnableProviderPayload {
+    provider: PaymentProvider,
+    mode: PaymentMode,
+}
+
+/// POST /api/domains/{id}/billing/providers
+/// Enable a payment provider for this domain
+async fn enable_billing_provider(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<EnableProviderPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    let provider = app_state
+        .billing_use_cases
+        .enable_provider(owner_id, domain_id, payload.provider, payload.mode)
+        .await?;
+
+    Ok((StatusCode::CREATED, Json(provider)))
+}
+
+#[derive(Deserialize)]
+struct ProviderPath {
+    domain_id: Uuid,
+    provider: PaymentProvider,
+    mode: PaymentMode,
+}
+
+/// DELETE /api/domains/{id}/billing/providers/{provider}/{mode}
+/// Disable a payment provider for this domain
+async fn disable_billing_provider(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(path): Path<ProviderPath>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .billing_use_cases
+        .disable_provider(owner_id, path.domain_id, path.provider, path.mode)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct SetProviderActivePayload {
+    is_active: bool,
+}
+
+/// PATCH /api/domains/{id}/billing/providers/{provider}/{mode}/active
+/// Toggle active status for a provider
+async fn set_provider_active(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(path): Path<ProviderPath>,
+    Json(payload): Json<SetProviderActivePayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state)?;
+
+    app_state
+        .billing_use_cases
+        .set_provider_active(owner_id, path.domain_id, path.provider, path.mode, payload.is_active)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
 }

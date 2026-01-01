@@ -11,6 +11,7 @@ pub mod domain_auth_google_oauth;
 pub mod domain_auth_magic_link;
 pub mod domain_end_user;
 pub mod domain_role;
+pub mod enabled_payment_providers;
 pub mod subscription_event;
 pub mod subscription_plan;
 pub mod user_subscription;

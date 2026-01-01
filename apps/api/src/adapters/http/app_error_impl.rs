@@ -50,6 +50,22 @@ impl IntoResponse for AppError {
                         .to_string(),
                 ),
             ),
+            AppError::ValidationError(msg) => {
+                error_resp(StatusCode::BAD_REQUEST, ErrorCode::ValidationError, Some(msg))
+            }
+            AppError::PaymentDeclined(msg) => {
+                error_resp(StatusCode::PAYMENT_REQUIRED, ErrorCode::PaymentDeclined, Some(msg))
+            }
+            AppError::ProviderNotConfigured => error_resp(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::ProviderNotConfigured,
+                Some("Payment provider is not configured for this domain".to_string()),
+            ),
+            AppError::ProviderNotSupported => error_resp(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::ProviderNotSupported,
+                Some("This payment provider is not yet supported".to_string()),
+            ),
             AppError::Internal(_) => error_resp(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 ErrorCode::InternalError,

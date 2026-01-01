@@ -2,6 +2,7 @@ use crate::{
     adapters::{
         dns::HickoryDnsVerifier, http::app_state::AppState,
         persistence::domain_role::DomainRoleRepo,
+        persistence::enabled_payment_providers::EnabledPaymentProvidersRepo,
     },
     application::use_cases::api_key::{ApiKeyRepo, ApiKeyUseCases},
     application::use_cases::domain_auth::{
@@ -95,6 +96,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
 
     // Billing use cases
     let billing_stripe_config_repo = postgres_arc.clone() as Arc<dyn BillingStripeConfigRepo>;
+    let enabled_providers_repo = postgres_arc.clone() as Arc<dyn EnabledPaymentProvidersRepo>;
     let subscription_plan_repo = postgres_arc.clone() as Arc<dyn SubscriptionPlanRepo>;
     let user_subscription_repo = postgres_arc.clone() as Arc<dyn UserSubscriptionRepo>;
     let subscription_event_repo = postgres_arc.clone() as Arc<dyn SubscriptionEventRepo>;
@@ -105,6 +107,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let billing_use_cases = DomainBillingUseCases::new(
         domain_repo_arc,
         billing_stripe_config_repo,
+        enabled_providers_repo,
         subscription_plan_repo,
         user_subscription_repo,
         subscription_event_repo,

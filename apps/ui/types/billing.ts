@@ -1,5 +1,37 @@
 // Billing Types for Reauth
 
+// ============================================================================
+// Payment Provider Types
+// ============================================================================
+
+export type PaymentProvider = 'stripe' | 'dummy' | 'coinbase';
+export type PaymentMode = 'test' | 'live';
+export type BillingState = 'active' | 'pending_switch' | 'switch_failed';
+
+export type PaymentScenario =
+  | 'success'
+  | 'decline'
+  | 'insufficient_funds'
+  | 'three_d_secure'
+  | 'expired_card'
+  | 'processing_error';
+
+export interface EnabledPaymentProvider {
+  id: string;
+  domain_id: string;
+  provider: PaymentProvider;
+  mode: PaymentMode;
+  is_active: boolean;
+  display_order: number;
+  created_at: string | null;
+}
+
+export interface ProviderConfig {
+  provider: PaymentProvider;
+  mode: PaymentMode;
+}
+
+// Legacy type alias for backwards compatibility
 export type StripeMode = 'test' | 'live';
 
 export interface ModeConfigStatus {
@@ -24,6 +56,8 @@ export interface StripeConfig {
 export interface SubscriptionPlan {
   id: string;
   stripe_mode: StripeMode;
+  payment_provider: PaymentProvider | null;
+  payment_mode: PaymentMode | null;
   code: string;
   name: string;
   description: string | null;
@@ -49,6 +83,9 @@ export interface UserSubscription {
   plan_name: string;
   plan_code: string;
   status: SubscriptionStatus;
+  payment_provider: PaymentProvider | null;
+  payment_mode: PaymentMode | null;
+  billing_state: BillingState | null;
   current_period_start: string | null;
   current_period_end: string | null;
   trial_start: string | null;
@@ -214,6 +251,8 @@ export interface BillingPayment {
   amount_refunded_cents: number;
   currency: string;
   status: PaymentStatus;
+  payment_provider: PaymentProvider | null;
+  payment_mode: PaymentMode | null;
   plan_code: string | null;
   plan_name: string | null;
   invoice_url: string | null;
@@ -364,4 +403,132 @@ export function formatEffectiveDate(timestamp: number): string {
     month: 'long',
     day: 'numeric',
   });
+}
+
+// ============================================================================
+// Payment Provider Helper Functions
+// ============================================================================
+
+export function getProviderLabel(provider: PaymentProvider): string {
+  switch (provider) {
+    case 'stripe':
+      return 'Stripe';
+    case 'dummy':
+      return 'Test Provider';
+    case 'coinbase':
+      return 'Coinbase Commerce';
+    default:
+      return provider;
+  }
+}
+
+export function getProviderBadgeColor(provider: PaymentProvider): string {
+  switch (provider) {
+    case 'stripe':
+      return 'purple';
+    case 'dummy':
+      return 'gray';
+    case 'coinbase':
+      return 'blue';
+    default:
+      return 'gray';
+  }
+}
+
+export function getPaymentModeLabel(mode: PaymentMode): string {
+  return mode === 'test' ? 'Test' : 'Live';
+}
+
+export function getPaymentModeBadgeColor(mode: PaymentMode): 'yellow' | 'green' {
+  return mode === 'test' ? 'yellow' : 'green';
+}
+
+export function formatProviderConfig(provider: PaymentProvider, mode: PaymentMode): string {
+  const providerLabel = getProviderLabel(provider);
+  return mode === 'live' ? providerLabel : `${providerLabel} (Test)`;
+}
+
+export function getScenarioLabel(scenario: PaymentScenario): string {
+  switch (scenario) {
+    case 'success':
+      return 'Success';
+    case 'decline':
+      return 'Card Declined';
+    case 'insufficient_funds':
+      return 'Insufficient Funds';
+    case 'three_d_secure':
+      return '3D Secure Required';
+    case 'expired_card':
+      return 'Expired Card';
+    case 'processing_error':
+      return 'Processing Error';
+    default:
+      return scenario;
+  }
+}
+
+export function getScenarioDescription(scenario: PaymentScenario): string {
+  switch (scenario) {
+    case 'success':
+      return 'Payment will succeed immediately';
+    case 'decline':
+      return 'Card will be declined by the issuer';
+    case 'insufficient_funds':
+      return 'Card will fail due to insufficient funds';
+    case 'three_d_secure':
+      return 'Payment requires 3D Secure authentication';
+    case 'expired_card':
+      return 'Card is expired and will be rejected';
+    case 'processing_error':
+      return 'A processing error will occur';
+    default:
+      return '';
+  }
+}
+
+export function getBillingStateLabel(state: BillingState): string {
+  switch (state) {
+    case 'active':
+      return 'Active';
+    case 'pending_switch':
+      return 'Switching Provider';
+    case 'switch_failed':
+      return 'Switch Failed';
+    default:
+      return state;
+  }
+}
+
+export function getBillingStateBadgeColor(state: BillingState): string {
+  switch (state) {
+    case 'active':
+      return 'green';
+    case 'pending_switch':
+      return 'yellow';
+    case 'switch_failed':
+      return 'red';
+    default:
+      return 'gray';
+  }
+}
+
+// ============================================================================
+// Dummy Checkout Types
+// ============================================================================
+
+export interface DummyCheckoutPayload {
+  plan_code: string;
+  scenario: PaymentScenario;
+}
+
+export interface DummyCheckoutResponse {
+  success: boolean;
+  requires_confirmation: boolean;
+  confirmation_token: string | null;
+  error_message: string | null;
+  subscription_id: string | null;
+}
+
+export interface DummyConfirmPayload {
+  confirmation_token: string;
 }

@@ -9,6 +9,9 @@ use crate::{
         CreateSubscriptionInput, StripeSubscriptionUpdate, SubscriptionPlanProfile,
         UserSubscriptionProfile, UserSubscriptionRepo, UserSubscriptionWithPlan,
     },
+    domain::entities::billing_state::BillingState,
+    domain::entities::payment_mode::PaymentMode,
+    domain::entities::payment_provider::PaymentProvider,
     domain::entities::stripe_mode::StripeMode,
     domain::entities::user_subscription::SubscriptionStatus,
 };
@@ -18,6 +21,9 @@ fn row_to_profile(row: &sqlx::postgres::PgRow) -> UserSubscriptionProfile {
         id: row.get("id"),
         domain_id: row.get("domain_id"),
         stripe_mode: row.get("stripe_mode"),
+        payment_provider: row.get::<Option<PaymentProvider>, _>("payment_provider"),
+        payment_mode: row.get::<Option<PaymentMode>, _>("payment_mode"),
+        billing_state: row.get::<Option<BillingState>, _>("billing_state"),
         end_user_id: row.get("end_user_id"),
         plan_id: row.get("plan_id"),
         status: row.get("status"),
@@ -38,7 +44,8 @@ fn row_to_profile(row: &sqlx::postgres::PgRow) -> UserSubscriptionProfile {
 }
 
 const SELECT_COLS: &str = r#"
-    id, domain_id, stripe_mode, end_user_id, plan_id, status, stripe_customer_id, stripe_subscription_id,
+    id, domain_id, stripe_mode, payment_provider, payment_mode, billing_state,
+    end_user_id, plan_id, status, stripe_customer_id, stripe_subscription_id,
     current_period_start, current_period_end, trial_start, trial_end,
     cancel_at_period_end, canceled_at, manually_granted, granted_by, granted_at,
     created_at, updated_at
@@ -119,11 +126,14 @@ impl UserSubscriptionRepo for PostgresPersistence {
         let rows = sqlx::query(
             r#"
             SELECT
-                s.id, s.domain_id, s.stripe_mode, s.end_user_id, s.plan_id, s.status, s.stripe_customer_id, s.stripe_subscription_id,
+                s.id, s.domain_id, s.stripe_mode, s.payment_provider, s.payment_mode, s.billing_state,
+                s.end_user_id, s.plan_id, s.status, s.stripe_customer_id, s.stripe_subscription_id,
                 s.current_period_start, s.current_period_end, s.trial_start, s.trial_end,
                 s.cancel_at_period_end, s.canceled_at, s.manually_granted, s.granted_by, s.granted_at,
                 s.created_at, s.updated_at,
-                p.id as p_id, p.domain_id as p_domain_id, p.stripe_mode as p_stripe_mode, p.code as p_code, p.name as p_name,
+                p.id as p_id, p.domain_id as p_domain_id, p.stripe_mode as p_stripe_mode,
+                p.payment_provider as p_payment_provider, p.payment_mode as p_payment_mode,
+                p.code as p_code, p.name as p_name,
                 p.description as p_description, p.price_cents as p_price_cents, p.currency as p_currency,
                 p.interval as p_interval, p.interval_count as p_interval_count, p.trial_days as p_trial_days,
                 p.features as p_features, p.is_public as p_is_public, p.display_order as p_display_order,
@@ -154,6 +164,8 @@ impl UserSubscriptionRepo for PostgresPersistence {
                     id: row.get("p_id"),
                     domain_id: row.get("p_domain_id"),
                     stripe_mode: row.get("p_stripe_mode"),
+                    payment_provider: row.get::<Option<PaymentProvider>, _>("p_payment_provider"),
+                    payment_mode: row.get::<Option<PaymentMode>, _>("p_payment_mode"),
                     code: row.get("p_code"),
                     name: row.get("p_name"),
                     description: row.get("p_description"),

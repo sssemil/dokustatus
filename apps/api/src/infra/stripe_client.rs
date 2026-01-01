@@ -754,10 +754,13 @@ pub struct StripeInvoice {
     pub customer: String,
     pub amount_due: i64,
     pub amount_paid: i64,
+    pub currency: String,
     pub status: Option<String>,
     pub hosted_invoice_url: Option<String>,
     pub invoice_pdf: Option<String>,
-    pub created: i64,
+    pub number: Option<String>,
+    pub billing_reason: Option<String>,
+    pub created: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

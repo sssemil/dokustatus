@@ -9,6 +9,8 @@ use crate::{
         CreatePlanInput, SubscriptionPlanProfile, SubscriptionPlanRepo, UpdatePlanInput,
     },
     domain::entities::stripe_mode::StripeMode,
+    domain::entities::payment_mode::PaymentMode,
+    domain::entities::payment_provider::PaymentProvider,
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> SubscriptionPlanProfile {
@@ -19,6 +21,8 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> SubscriptionPlanProfile {
         id: row.get("id"),
         domain_id: row.get("domain_id"),
         stripe_mode: row.get("stripe_mode"),
+        payment_provider: row.get::<Option<PaymentProvider>, _>("payment_provider"),
+        payment_mode: row.get::<Option<PaymentMode>, _>("payment_mode"),
         code: row.get("code"),
         name: row.get("name"),
         description: row.get("description"),
@@ -40,7 +44,8 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> SubscriptionPlanProfile {
 }
 
 const SELECT_COLS: &str = r#"
-    id, domain_id, stripe_mode, code, name, description, price_cents, currency,
+    id, domain_id, stripe_mode, payment_provider, payment_mode,
+    code, name, description, price_cents, currency,
     interval, interval_count, trial_days, features, is_public, display_order,
     stripe_product_id, stripe_price_id, is_archived, archived_at, created_at, updated_at
 "#;

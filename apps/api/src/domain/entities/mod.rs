@@ -1,4 +1,5 @@
 pub mod api_key;
+pub mod billing_state;
 pub mod billing_stripe_config;
 pub mod domain;
 pub mod domain_auth_config;
@@ -6,6 +7,9 @@ pub mod domain_auth_google_oauth;
 pub mod domain_auth_magic_link;
 pub mod domain_end_user;
 pub mod domain_role;
+pub mod payment_mode;
+pub mod payment_provider;
+pub mod payment_scenario;
 pub mod payment_status;
 pub mod stripe_mode;
 pub mod subscription_plan;

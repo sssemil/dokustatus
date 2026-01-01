@@ -6,13 +6,14 @@ import Link from 'next/link';
 import {
   ExternalLink, Globe, Trash2, RefreshCw, AlertTriangle,
   Mail, Key, Users, Shield, Settings, MoreVertical, Plus, Check, ChevronRight,
-  CreditCard, DollarSign, TrendingUp, Receipt, FileText, Download, ChevronLeft, Search, X
+  CreditCard, DollarSign, TrendingUp, Receipt, FileText, Download, ChevronLeft, Search, X, TestTube
 } from 'lucide-react';
 import {
   StripeConfigStatus, StripeMode, SubscriptionPlan, UserSubscription, BillingAnalytics,
   formatPrice, formatInterval, getStatusBadgeColor, getStatusLabel, getModeLabel, getModeBadgeColor,
   BillingPayment, PaymentSummary, DashboardPaymentListResponse, PaymentListFilters,
-  getPaymentStatusLabel, getPaymentStatusBadgeColor, formatPaymentDate, formatPaymentDateTime
+  getPaymentStatusLabel, getPaymentStatusBadgeColor, formatPaymentDate, formatPaymentDateTime,
+  EnabledPaymentProvider, PaymentProvider, PaymentMode, getProviderLabel
 } from '@/types/billing';
 import {
   Card, Button, Badge, Input, Toggle, Tabs, Modal, ConfirmModal,
@@ -168,6 +169,10 @@ export default function DomainDetailPage() {
   const [paymentEmailSearch, setPaymentEmailSearch] = useState('');
   const [exportingPayments, setExportingPayments] = useState(false);
 
+  // Payment providers state
+  const [enabledProviders, setEnabledProviders] = useState<EnabledPaymentProvider[]>([]);
+  const [enablingProvider, setEnablingProvider] = useState<string | null>(null);
+
   // Tab change handler
   const handleTabChange = useCallback((tab: Tab) => {
     setActiveTab(tab);
@@ -320,10 +325,61 @@ export default function DomainDetailPage() {
     fetchPayments(1, {});
   };
 
+  const fetchEnabledProviders = useCallback(async () => {
+    if (!domain) return;
+    try {
+      const res = await fetch(`/api/domains/${domainId}/billing/providers`, { credentials: 'include' });
+      if (res.ok) {
+        const data = await res.json();
+        setEnabledProviders(data);
+      }
+    } catch { /* ignore */ }
+  }, [domainId, domain]);
+
+  const handleEnableProvider = async (provider: PaymentProvider, mode: PaymentMode) => {
+    setEnablingProvider(`${provider}_${mode}`);
+    try {
+      const res = await fetch(`/api/domains/${domainId}/billing/providers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider, mode }),
+        credentials: 'include',
+      });
+      if (res.ok) {
+        addToast(`${getProviderLabel(provider)} enabled`, 'success');
+        fetchEnabledProviders();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || 'Failed to enable provider', 'error');
+      }
+    } catch {
+      addToast('Network error', 'error');
+    } finally {
+      setEnablingProvider(null);
+    }
+  };
+
+  const handleDisableProvider = async (provider: PaymentProvider, mode: PaymentMode) => {
+    try {
+      const res = await fetch(`/api/domains/${domainId}/billing/providers/${provider}/${mode}`, {
+        method: 'DELETE',
+        credentials: 'include',
+      });
+      if (res.ok) {
+        addToast('Provider disabled', 'success');
+        fetchEnabledProviders();
+      } else {
+        addToast('Failed to disable provider', 'error');
+      }
+    } catch {
+      addToast('Network error', 'error');
+    }
+  };
+
   useEffect(() => { fetchData(); }, [fetchData]);
   useEffect(() => { if ((activeTab === 'users' || activeTab === 'overview') && domain) { fetchEndUsers(); fetchRoles(); } }, [activeTab, domain, fetchEndUsers, fetchRoles]);
   useEffect(() => { if ((activeTab === 'api' || activeTab === 'overview') && domain) fetchApiKeys(); }, [activeTab, domain, fetchApiKeys]);
-  useEffect(() => { if (activeTab === 'billing' && domain) { fetchBillingData(); fetchPayments(1, paymentFilters); } }, [activeTab, domain, fetchBillingData, fetchPayments, paymentFilters]);
+  useEffect(() => { if (activeTab === 'billing' && domain) { fetchBillingData(); fetchPayments(1, paymentFilters); fetchEnabledProviders(); } }, [activeTab, domain, fetchBillingData, fetchPayments, paymentFilters, fetchEnabledProviders]);
 
   // Poll for verification status
   useEffect(() => {
@@ -803,6 +859,57 @@ export default function DomainDetailPage() {
       </Card>
     );
   }
+
+  // Provider toggle row component
+  const ProviderToggleRow = ({
+    provider,
+    mode,
+    label,
+    description,
+    icon: Icon = CreditCard,
+    enabled,
+    loading,
+  }: {
+    provider: PaymentProvider;
+    mode: PaymentMode;
+    label: string;
+    description: string;
+    icon?: React.ElementType;
+    enabled: boolean;
+    loading?: boolean;
+  }) => (
+    <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
+      <div className="flex items-center gap-3">
+        <Icon size={20} className={enabled ? 'text-green-400' : 'text-zinc-500'} />
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="font-medium text-white">{label}</span>
+            {enabled && <Badge variant="success">Enabled</Badge>}
+          </div>
+          <p className="text-sm text-zinc-400">{description}</p>
+        </div>
+      </div>
+      <div>
+        {enabled ? (
+          <HoldButton
+            onComplete={() => handleDisableProvider(provider, mode)}
+            variant="danger"
+            duration={2000}
+          >
+            Disable
+          </HoldButton>
+        ) : (
+          <Button
+            variant="primary"
+            onClick={() => handleEnableProvider(provider, mode)}
+            disabled={loading}
+          >
+            {loading ? 'Enabling...' : 'Enable'}
+          </Button>
+        )}
+      </div>
+    </div>
+  );
 
   const tabs = [
     { id: 'overview' as Tab, label: 'Overview' },
@@ -1287,6 +1394,52 @@ export default function DomainDetailPage() {
               </Card>
             </div>
           )}
+
+          {/* Payment Providers */}
+          <Card className="p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+                  <CreditCard size={20} className="text-purple-400" />
+                  Payment Providers
+                </h2>
+                <p className="text-sm text-zinc-400 mt-1">Enable payment providers for end-users.</p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {/* Stripe Test */}
+              <ProviderToggleRow
+                provider="stripe"
+                mode="test"
+                label="Stripe (Test)"
+                description="Accept test payments via Stripe"
+                enabled={enabledProviders.some(p => p.provider === 'stripe' && p.mode === 'test')}
+                loading={enablingProvider === 'stripe_test'}
+              />
+
+              {/* Stripe Live */}
+              <ProviderToggleRow
+                provider="stripe"
+                mode="live"
+                label="Stripe (Live)"
+                description="Accept real payments via Stripe"
+                enabled={enabledProviders.some(p => p.provider === 'stripe' && p.mode === 'live')}
+                loading={enablingProvider === 'stripe_live'}
+              />
+
+              {/* Dummy Test Provider */}
+              <ProviderToggleRow
+                provider="dummy"
+                mode="test"
+                label="Test Provider"
+                description="Simulated payments for testing (no real charges)"
+                icon={TestTube}
+                enabled={enabledProviders.some(p => p.provider === 'dummy' && p.mode === 'test')}
+                loading={enablingProvider === 'dummy_test'}
+              />
+            </div>
+          </Card>
 
           {/* Stripe Configuration */}
           <Card className="p-6">

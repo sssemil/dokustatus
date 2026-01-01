@@ -22,6 +22,11 @@ use crate::{
         },
         validators::is_valid_email,
     },
+    domain::entities::{
+        payment_mode::PaymentMode,
+        payment_provider::PaymentProvider,
+        payment_scenario::PaymentScenario,
+    },
 };
 
 /// Appends a cookie to the headers, handling parse errors gracefully
@@ -248,6 +253,11 @@ pub fn router() -> Router<AppState> {
         .route("/{domain}/billing/payments", get(get_user_payments))
         .route("/{domain}/billing/plan-change/preview", get(preview_plan_change))
         .route("/{domain}/billing/plan-change", post(change_plan))
+        // Provider routes
+        .route("/{domain}/billing/providers", get(get_available_providers))
+        .route("/{domain}/billing/checkout/dummy", post(create_dummy_checkout))
+        .route("/{domain}/billing/dummy/confirm", post(confirm_dummy_checkout))
+        .route("/{domain}/billing/dummy/scenarios", get(get_dummy_scenarios))
         // Mode-specific webhook endpoints
         .route("/{domain}/billing/webhook/test", post(handle_webhook_test))
         .route("/{domain}/billing/webhook/live", post(handle_webhook_live))
@@ -1472,7 +1482,10 @@ struct PaymentResponse {
     amount_refunded_cents: i32,
     currency: String,
     status: String,
+    payment_provider: Option<PaymentProvider>,
+    payment_mode: Option<PaymentMode>,
     plan_name: Option<String>,
+    plan_code: Option<String>,
     invoice_url: Option<String>,
     invoice_pdf: Option<String>,
     invoice_number: Option<String>,
@@ -1511,7 +1524,10 @@ async fn get_user_payments(
             amount_refunded_cents: p.payment.amount_refunded_cents,
             currency: p.payment.currency,
             status: p.payment.status.as_str().to_string(),
+            payment_provider: p.payment.payment_provider,
+            payment_mode: p.payment.payment_mode,
             plan_name: p.payment.plan_name,
+            plan_code: p.payment.plan_code,
             invoice_url: p.payment.hosted_invoice_url,
             invoice_pdf: p.payment.invoice_pdf_url,
             invoice_number: p.payment.invoice_number,
@@ -2326,4 +2342,257 @@ async fn parse_google_id_token(
     }
 
     Ok((claims.sub, claims.email, claims.email_verified))
+}
+
+// ============================================================================
+// Payment Provider Handlers
+// ============================================================================
+
+#[derive(Serialize)]
+struct AvailableProvider {
+    id: Uuid,
+    domain_id: Uuid,
+    provider: PaymentProvider,
+    mode: PaymentMode,
+    is_active: bool,
+    display_order: i32,
+    created_at: Option<chrono::NaiveDateTime>,
+}
+
+/// GET /api/public/domain/{domain}/billing/providers
+/// Returns the list of active payment providers for this domain
+async fn get_available_providers(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    let domain = app_state
+        .domain_auth_use_cases
+        .get_domain_by_name(&root_domain)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    let active_providers = app_state
+        .billing_use_cases
+        .list_active_providers(domain.id)
+        .await?;
+
+    let response: Vec<AvailableProvider> = active_providers
+        .into_iter()
+        .map(|p| AvailableProvider {
+            id: p.id,
+            domain_id: p.domain_id,
+            provider: p.provider,
+            mode: p.mode,
+            is_active: p.is_active,
+            display_order: p.display_order,
+            created_at: p.created_at,
+        })
+        .collect();
+
+    Ok(Json(response))
+}
+
+#[derive(Serialize)]
+struct DummyScenarioInfo {
+    scenario: PaymentScenario,
+    display_name: String,
+    description: String,
+    test_card: String,
+}
+
+/// GET /api/public/domain/{domain}/billing/dummy/scenarios
+/// Returns available test scenarios for the dummy payment provider
+async fn get_dummy_scenarios(
+    State(_app_state): State<AppState>,
+    Path(_hostname): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    let scenarios = vec![
+        DummyScenarioInfo {
+            scenario: PaymentScenario::Success,
+            display_name: "Success".to_string(),
+            description: "Payment completes successfully".to_string(),
+            test_card: "4242 4242 4242 4242".to_string(),
+        },
+        DummyScenarioInfo {
+            scenario: PaymentScenario::Decline,
+            display_name: "Card Declined".to_string(),
+            description: "Card is declined by the issuer".to_string(),
+            test_card: "4000 0000 0000 0002".to_string(),
+        },
+        DummyScenarioInfo {
+            scenario: PaymentScenario::InsufficientFunds,
+            display_name: "Insufficient Funds".to_string(),
+            description: "Card has insufficient funds".to_string(),
+            test_card: "4000 0000 0000 9995".to_string(),
+        },
+        DummyScenarioInfo {
+            scenario: PaymentScenario::ThreeDSecure,
+            display_name: "3D Secure Required".to_string(),
+            description: "Requires additional authentication".to_string(),
+            test_card: "4000 0000 0000 3220".to_string(),
+        },
+        DummyScenarioInfo {
+            scenario: PaymentScenario::ExpiredCard,
+            display_name: "Expired Card".to_string(),
+            description: "Card has expired".to_string(),
+            test_card: "4000 0000 0000 0069".to_string(),
+        },
+        DummyScenarioInfo {
+            scenario: PaymentScenario::ProcessingError,
+            display_name: "Processing Error".to_string(),
+            description: "A processing error occurred".to_string(),
+            test_card: "4000 0000 0000 0119".to_string(),
+        },
+    ];
+
+    Ok(Json(scenarios))
+}
+
+#[derive(Deserialize)]
+struct DummyCheckoutPayload {
+    plan_code: String,
+    scenario: PaymentScenario,
+}
+
+#[derive(Serialize)]
+struct DummyCheckoutResponse {
+    success: bool,
+    requires_confirmation: bool,
+    confirmation_token: Option<String>,
+    error_message: Option<String>,
+    subscription_id: Option<String>,
+}
+
+/// POST /api/public/domain/{domain}/billing/checkout/dummy
+/// Creates a test subscription using the dummy payment provider
+async fn create_dummy_checkout(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    cookies: CookieJar,
+    Json(payload): Json<DummyCheckoutPayload>,
+) -> AppResult<impl IntoResponse> {
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get user from token
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+
+    // Verify dummy provider is enabled
+    let is_enabled = app_state
+        .billing_use_cases
+        .is_provider_enabled(domain_id, PaymentProvider::Dummy, PaymentMode::Test)
+        .await?;
+
+    if !is_enabled {
+        return Err(AppError::InvalidInput(
+            "Dummy payment provider is not enabled for this domain".into(),
+        ));
+    }
+
+    // Get the plan
+    let _plan = app_state
+        .billing_use_cases
+        .get_plan_by_code(domain_id, &payload.plan_code)
+        .await?
+        .ok_or(AppError::NotFound)?;
+
+    // For now, return a simulated response based on scenario
+    // Full implementation would use the PaymentProviderFactory and DummyPaymentClient
+    let response = match payload.scenario {
+        PaymentScenario::Success => DummyCheckoutResponse {
+            success: true,
+            requires_confirmation: false,
+            confirmation_token: None,
+            error_message: None,
+            subscription_id: Some(format!("dummy_sub_{}", Uuid::new_v4())),
+        },
+        PaymentScenario::ThreeDSecure => DummyCheckoutResponse {
+            success: false,
+            requires_confirmation: true,
+            confirmation_token: Some(format!("3ds_token_{}", Uuid::new_v4())),
+            error_message: None,
+            subscription_id: None,
+        },
+        PaymentScenario::Decline => DummyCheckoutResponse {
+            success: false,
+            requires_confirmation: false,
+            confirmation_token: None,
+            error_message: Some("Your card was declined".into()),
+            subscription_id: None,
+        },
+        PaymentScenario::InsufficientFunds => DummyCheckoutResponse {
+            success: false,
+            requires_confirmation: false,
+            confirmation_token: None,
+            error_message: Some("Your card has insufficient funds".into()),
+            subscription_id: None,
+        },
+        PaymentScenario::ExpiredCard => DummyCheckoutResponse {
+            success: false,
+            requires_confirmation: false,
+            confirmation_token: None,
+            error_message: Some("Your card has expired".into()),
+            subscription_id: None,
+        },
+        PaymentScenario::ProcessingError => DummyCheckoutResponse {
+            success: false,
+            requires_confirmation: false,
+            confirmation_token: None,
+            error_message: Some("A processing error occurred. Please try again.".into()),
+            subscription_id: None,
+        },
+    };
+
+    // Log for debugging
+    tracing::info!(
+        domain_id = %domain_id,
+        user_id = %user_id,
+        scenario = ?payload.scenario,
+        "Dummy checkout processed"
+    );
+
+    Ok(Json(response))
+}
+
+#[derive(Deserialize)]
+struct DummyConfirmPayload {
+    confirmation_token: String,
+}
+
+/// POST /api/public/domain/{domain}/billing/dummy/confirm
+/// Confirms a 3DS payment for the dummy provider
+async fn confirm_dummy_checkout(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    cookies: CookieJar,
+    Json(payload): Json<DummyConfirmPayload>,
+) -> AppResult<impl IntoResponse> {
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // Get user from token
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+
+    // Verify the token looks valid (starts with 3ds_token_)
+    if !payload.confirmation_token.starts_with("3ds_token_") {
+        return Err(AppError::InvalidInput("Invalid confirmation token".into()));
+    }
+
+    // Simulate successful 3DS confirmation
+    let response = DummyCheckoutResponse {
+        success: true,
+        requires_confirmation: false,
+        confirmation_token: None,
+        error_message: None,
+        subscription_id: Some(format!("dummy_sub_{}", Uuid::new_v4())),
+    };
+
+    tracing::info!(
+        domain_id = %domain_id,
+        user_id = %user_id,
+        token = %payload.confirmation_token,
+        "Dummy 3DS confirmation processed"
+    );
+
+    Ok(Json(response))
 }
