@@ -257,7 +257,7 @@ def run_planning_phase(slug: str) -> bool:
 
 def setup_task_for_work(slug: str, task_dir: Path) -> bool:
     """
-    Move task to in-progress and switch to task branch.
+    Switch to task branch, move task to in-progress, and commit.
     Returns True if successful.
     """
     import shutil
@@ -267,18 +267,10 @@ def setup_task_for_work(slug: str, task_dir: Path) -> bool:
 
     print(f"Setting up task {slug} on branch {branch}")
 
-    # Move task directory to in-progress if not already there
-    if task_dir.parent != TASKS_IN_PROGRESS:
-        if target_dir.exists():
-            shutil.rmtree(target_dir)
-        # Use git mv to track the move, then commit
-        run(["git", "mv", str(task_dir), str(target_dir)], check=False)
-        run(["git", "commit", "-m", f"start task {slug}: todo → in-progress"], check=False)
-
     # Stash any dirty changes before switching
     stashed = git_stash_if_dirty()
 
-    # Ensure branch exists and switch
+    # FIRST: create/switch to task branch
     if git_branch_exists(branch):
         if not git_switch(branch):
             print(f"Failed to switch to branch {branch}")
@@ -291,6 +283,13 @@ def setup_task_for_work(slug: str, task_dir: Path) -> bool:
             if stashed:
                 git_stash_pop()
             return False
+
+    # THEN: move task directory to in-progress and commit (on task branch)
+    if task_dir.parent != TASKS_IN_PROGRESS:
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+        run(["git", "mv", str(task_dir), str(target_dir)], check=False)
+        run(["git", "commit", "-m", f"start task {slug}: todo → in-progress"], check=False)
 
     return True
 
