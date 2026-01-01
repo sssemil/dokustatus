@@ -173,6 +173,10 @@ export default function DomainDetailPage() {
   const [enabledProviders, setEnabledProviders] = useState<EnabledPaymentProvider[]>([]);
   const [enablingProvider, setEnablingProvider] = useState<string | null>(null);
 
+  // Config modal state
+  const [authConfigModal, setAuthConfigModal] = useState<'magic_link' | 'google_oauth' | null>(null);
+  const [stripeConfigModal, setStripeConfigModal] = useState<'test' | 'live' | null>(null);
+
   // Tab change handler
   const handleTabChange = useCallback((tab: Tab) => {
     setActiveTab(tab);
@@ -861,22 +865,27 @@ export default function DomainDetailPage() {
   }
 
   // Provider toggle row component
-  const ProviderToggleRow = ({
-    provider,
-    mode,
+  // Unified provider row component for auth and payment providers
+  const ProviderRow = ({
+    icon: Icon,
     label,
     description,
-    icon: Icon = CreditCard,
     enabled,
+    configured,
+    onToggle,
+    onSettings,
     loading,
+    showSettings = true,
   }: {
-    provider: PaymentProvider;
-    mode: PaymentMode;
+    icon: React.ElementType;
     label: string;
     description: string;
-    icon?: React.ElementType;
     enabled: boolean;
+    configured?: boolean;
+    onToggle: () => void;
+    onSettings?: () => void;
     loading?: boolean;
+    showSettings?: boolean;
   }) => (
     <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
       <div className="flex items-center gap-3">
@@ -885,14 +894,22 @@ export default function DomainDetailPage() {
           <div className="flex items-center gap-2">
             <span className="font-medium text-white">{label}</span>
             {enabled && <Badge variant="success">Enabled</Badge>}
+            {enabled && configured === false && (
+              <Badge variant="warning">Not configured</Badge>
+            )}
           </div>
           <p className="text-sm text-zinc-400">{description}</p>
         </div>
       </div>
-      <div>
+      <div className="flex items-center gap-2">
+        {showSettings && onSettings && (
+          <Button variant="ghost" size="sm" onClick={onSettings}>
+            <Settings size={16} />
+          </Button>
+        )}
         {enabled ? (
           <HoldButton
-            onComplete={() => handleDisableProvider(provider, mode)}
+            onComplete={onToggle}
             variant="danger"
             duration={2000}
           >
@@ -901,7 +918,7 @@ export default function DomainDetailPage() {
         ) : (
           <Button
             variant="primary"
-            onClick={() => handleEnableProvider(provider, mode)}
+            onClick={onToggle}
             disabled={loading}
           >
             {loading ? 'Enabling...' : 'Enable'}
@@ -1102,7 +1119,7 @@ export default function DomainDetailPage() {
 
       {/* Auth Tab */}
       {activeTab === 'auth' && (
-        <form onSubmit={handleSaveConfig} className="space-y-4">
+        <div className="space-y-4">
           {/* Login URL */}
           <Card className="p-6">
             <h2 className="text-lg font-semibold text-white mb-2">Login URL</h2>
@@ -1114,106 +1131,73 @@ export default function DomainDetailPage() {
             </p>
           </Card>
 
-          {/* Magic Link */}
+          {/* Authentication Methods */}
           <Card className="p-6">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <Mail size={20} className="text-blue-400" />
-                  Magic Link
+                  <Shield size={20} className="text-blue-400" />
+                  Authentication Methods
                 </h2>
-                <p className="text-sm text-zinc-400 mt-1">Allow users to sign in with a magic link.</p>
+                <p className="text-sm text-zinc-400 mt-1">Configure how users sign in.</p>
               </div>
-              <Toggle enabled={magicLinkEnabled} onChange={setMagicLinkEnabled} />
             </div>
 
-            {magicLinkEnabled && (
-              <div className="border-t border-zinc-800 pt-4 mt-4 space-y-4">
-                {authConfig?.magic_link_config?.has_api_key ? (
-                  <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                    <div className="flex items-center gap-2">
-                      <Check size={16} className="text-emerald-400" />
-                      <span className="text-sm text-emerald-200">Using custom email: {authConfig.magic_link_config.from_email}</span>
-                    </div>
-                    <HoldButton onComplete={handleRemoveCustomConfig} variant="danger" duration={2000}>Remove</HoldButton>
-                  </div>
-                ) : authConfig?.using_fallback && (
-                  <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                    <p className="text-sm text-blue-200">Using reauth&apos;s shared email service ({authConfig.fallback_from_email})</p>
-                    <p className="text-xs text-blue-300/70 mt-1">Add your own Resend API key for custom branding.</p>
-                  </div>
-                )}
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-zinc-300">Resend API Key</label>
-                  <Input type="password" value={resendApiKey} onChange={(e) => setResendApiKey(e.target.value)} placeholder={authConfig?.magic_link_config?.has_api_key ? '••••••••' : 'Enter API key'} />
-                  <p className="text-xs text-zinc-500">Get your key from <a href="https://resend.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-400">resend.com</a></p>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-zinc-300">From Email</label>
-                  <Input type="email" value={fromEmail} onChange={(e) => setFromEmail(e.target.value)} placeholder={authConfig?.fallback_from_email || 'noreply@yourdomain.com'} />
-                </div>
-              </div>
-            )}
+            <div className="space-y-3">
+              <ProviderRow
+                icon={Mail}
+                label="Magic Link"
+                description="Sign in via email link"
+                enabled={magicLinkEnabled}
+                configured={authConfig?.magic_link_config?.has_api_key || authConfig?.using_fallback}
+                onToggle={() => {
+                  const newValue = !magicLinkEnabled;
+                  setMagicLinkEnabled(newValue);
+                  // Auto-save toggle
+                  handleSaveConfig({ preventDefault: () => {} } as React.FormEvent);
+                }}
+                onSettings={() => setAuthConfigModal('magic_link')}
+              />
+              <ProviderRow
+                icon={Globe}
+                label="Google OAuth"
+                description="Sign in with Google account"
+                enabled={googleOAuthEnabled}
+                configured={authConfig?.google_oauth_config?.has_client_secret || authConfig?.using_google_fallback}
+                onToggle={() => {
+                  const newValue = !googleOAuthEnabled;
+                  setGoogleOAuthEnabled(newValue);
+                  // Auto-save toggle
+                  handleSaveConfig({ preventDefault: () => {} } as React.FormEvent);
+                }}
+                onSettings={() => setAuthConfigModal('google_oauth')}
+              />
+            </div>
           </Card>
 
-          {/* Google OAuth */}
+          {/* Redirect URL */}
           <Card className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-lg font-semibold text-white">Google OAuth</h2>
-                <p className="text-sm text-zinc-400 mt-1">Allow users to sign in with Google.</p>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-zinc-300">Redirect URL</label>
+              <div className="flex gap-2">
+                <Input
+                  value={redirectUrl}
+                  onChange={(e) => setRedirectUrl(e.target.value)}
+                  placeholder="https://yourapp.com/callback"
+                  className="flex-1"
+                />
+                <Button
+                  variant="primary"
+                  onClick={(e) => handleSaveConfig(e as unknown as React.FormEvent)}
+                  disabled={saving}
+                >
+                  {saving ? 'Saving...' : 'Save'}
+                </Button>
               </div>
-              <Toggle enabled={googleOAuthEnabled} onChange={setGoogleOAuthEnabled} />
+              <p className="text-xs text-zinc-500">Where to redirect users after successful authentication.</p>
             </div>
-
-            {googleOAuthEnabled && (
-              <div className="border-t border-zinc-800 pt-4 mt-4 space-y-4">
-                {authConfig?.google_oauth_config?.has_client_secret ? (
-                  <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
-                    <div className="flex items-center gap-2">
-                      <Check size={16} className="text-emerald-400" />
-                      <span className="text-sm text-emerald-200">Using custom OAuth (Client: {authConfig.google_oauth_config.client_id_prefix}...)</span>
-                    </div>
-                    <HoldButton onComplete={handleRemoveGoogleOAuthConfig} variant="danger" duration={2000}>Remove</HoldButton>
-                  </div>
-                ) : authConfig?.using_google_fallback && (
-                  <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
-                    <p className="text-sm text-blue-200">Using reauth&apos;s shared Google OAuth</p>
-                  </div>
-                )}
-
-                <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3 border border-zinc-700">
-                  <div className="flex items-center justify-between">
-                    <h3 className="font-medium text-white text-sm">Redirect URI</h3>
-                    <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400">Open Console</a>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 bg-zinc-900 px-3 py-2 rounded border border-zinc-800 text-xs text-zinc-300 font-mono break-all">
-                      https://reauth.{domain.domain}/callback/google
-                    </code>
-                    <CopyButton text={`https://reauth.${domain.domain}/callback/google`} />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-zinc-300">Google Client ID</label>
-                  <Input value={googleClientId} onChange={(e) => setGoogleClientId(e.target.value)} placeholder={authConfig?.google_oauth_config?.has_client_secret ? `${authConfig.google_oauth_config.client_id_prefix}...` : 'Enter Client ID'} />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-zinc-300">Google Client Secret</label>
-                  <Input type="password" value={googleClientSecret} onChange={(e) => setGoogleClientSecret(e.target.value)} placeholder={authConfig?.google_oauth_config?.has_client_secret ? '••••••••' : 'Enter Client Secret'} />
-                </div>
-              </div>
-            )}
           </Card>
-
-          <Button type="submit" variant="primary" disabled={saving}>
-            {saving ? 'Saving...' : 'Save changes'}
-          </Button>
-        </form>
+        </div>
       )}
 
       {/* Users Tab */}
@@ -1409,208 +1393,81 @@ export default function DomainDetailPage() {
 
             <div className="space-y-3">
               {/* Stripe Test */}
-              <ProviderToggleRow
-                provider="stripe"
-                mode="test"
+              <ProviderRow
+                icon={CreditCard}
                 label="Stripe (Test)"
                 description="Accept test payments via Stripe"
                 enabled={enabledProviders.some(p => p.provider === 'stripe' && p.mode === 'test')}
+                configured={billingConfig?.test != null}
+                onToggle={() => enabledProviders.some(p => p.provider === 'stripe' && p.mode === 'test')
+                  ? handleDisableProvider('stripe', 'test')
+                  : handleEnableProvider('stripe', 'test')}
+                onSettings={() => setStripeConfigModal('test')}
                 loading={enablingProvider === 'stripe_test'}
               />
 
               {/* Stripe Live */}
-              <ProviderToggleRow
-                provider="stripe"
-                mode="live"
+              <ProviderRow
+                icon={CreditCard}
                 label="Stripe (Live)"
                 description="Accept real payments via Stripe"
                 enabled={enabledProviders.some(p => p.provider === 'stripe' && p.mode === 'live')}
+                configured={billingConfig?.live != null}
+                onToggle={() => enabledProviders.some(p => p.provider === 'stripe' && p.mode === 'live')
+                  ? handleDisableProvider('stripe', 'live')
+                  : handleEnableProvider('stripe', 'live')}
+                onSettings={() => setStripeConfigModal('live')}
                 loading={enablingProvider === 'stripe_live'}
               />
 
               {/* Dummy Test Provider */}
-              <ProviderToggleRow
-                provider="dummy"
-                mode="test"
+              <ProviderRow
+                icon={TestTube}
                 label="Test Provider"
                 description="Simulated payments for testing (no real charges)"
-                icon={TestTube}
                 enabled={enabledProviders.some(p => p.provider === 'dummy' && p.mode === 'test')}
+                onToggle={() => enabledProviders.some(p => p.provider === 'dummy' && p.mode === 'test')
+                  ? handleDisableProvider('dummy', 'test')
+                  : handleEnableProvider('dummy', 'test')}
+                showSettings={false}
                 loading={enablingProvider === 'dummy_test'}
               />
             </div>
           </Card>
 
-          {/* Stripe Configuration */}
-          <Card className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-                  <CreditCard size={20} className="text-purple-400" />
-                  Stripe Configuration
-                </h2>
-                <p className="text-sm text-zinc-400 mt-1">Connect your Stripe account to accept payments.</p>
+          {/* Active Mode Switcher */}
+          {billingConfig && (billingConfig.test || billingConfig.live) && (
+            <div className="flex items-center gap-4 p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
+              <span className="text-sm text-zinc-300">Active Payment Mode:</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                    billingConfig.active_mode === 'test'
+                      ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
+                      : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'
+                  }`}
+                  onClick={() => billingConfig.test && handleSwitchBillingMode('test')}
+                  disabled={!billingConfig.test || switchingMode || billingConfig.active_mode === 'test'}
+                >
+                  Test {billingConfig.test && '✓'}
+                </button>
+                <button
+                  type="button"
+                  className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
+                    billingConfig.active_mode === 'live'
+                      ? 'bg-green-500/20 text-green-300 border border-green-500/30'
+                      : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'
+                  }`}
+                  onClick={() => billingConfig.live && handleSwitchBillingMode('live')}
+                  disabled={!billingConfig.live || switchingMode || billingConfig.active_mode === 'live'}
+                >
+                  Live {billingConfig.live && '✓'}
+                </button>
               </div>
-              {billingConfig && (
-                <div className="flex items-center gap-2">
-                  <Badge variant={billingConfig.active_mode === 'test' ? 'warning' : 'success'}>
-                    {billingConfig.active_mode === 'test' ? '🧪 Test Mode' : '🔴 Live Mode'}
-                  </Badge>
-                </div>
-              )}
+              {switchingMode && <span className="text-xs text-zinc-500">Switching...</span>}
             </div>
-
-            {/* Active Mode Toggle */}
-            {billingConfig && (billingConfig.test || billingConfig.live) && (
-              <div className="flex items-center gap-4 mb-6 p-3 bg-zinc-800/50 rounded-lg border border-zinc-700">
-                <span className="text-sm text-zinc-300">Active Mode:</span>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-                      billingConfig.active_mode === 'test'
-                        ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/30'
-                        : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'
-                    }`}
-                    onClick={() => billingConfig.test && handleSwitchBillingMode('test')}
-                    disabled={!billingConfig.test || switchingMode || billingConfig.active_mode === 'test'}
-                  >
-                    Test {billingConfig.test && '✓'}
-                  </button>
-                  <button
-                    type="button"
-                    className={`px-3 py-1.5 rounded text-sm font-medium transition-colors ${
-                      billingConfig.active_mode === 'live'
-                        ? 'bg-green-500/20 text-green-300 border border-green-500/30'
-                        : 'bg-zinc-700 text-zinc-400 hover:bg-zinc-600'
-                    }`}
-                    onClick={() => billingConfig.live && handleSwitchBillingMode('live')}
-                    disabled={!billingConfig.live || switchingMode || billingConfig.active_mode === 'live'}
-                  >
-                    Live {billingConfig.live && '✓'}
-                  </button>
-                </div>
-                {switchingMode && <span className="text-xs text-zinc-500">Switching...</span>}
-              </div>
-            )}
-
-            {/* Mode Configuration Status */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-              {/* Test Mode */}
-              <div className={`p-4 rounded-lg border ${editingMode === 'test' ? 'border-yellow-500/50 bg-yellow-500/5' : 'border-zinc-700 bg-zinc-800/30'}`}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-zinc-300">Test Mode</span>
-                    {billingConfig?.test ? (
-                      <Badge variant="success">Connected</Badge>
-                    ) : (
-                      <Badge variant="default">Not configured</Badge>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setEditingMode('test')}
-                    className={`text-xs px-2 py-1 rounded ${editingMode === 'test' ? 'bg-yellow-500/20 text-yellow-300' : 'text-zinc-400 hover:text-zinc-200'}`}
-                  >
-                    {editingMode === 'test' ? 'Editing' : 'Edit'}
-                  </button>
-                </div>
-                {billingConfig?.test && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-zinc-500">Key: {billingConfig.test.publishable_key_last4}</span>
-                    <HoldButton onComplete={() => handleRemoveBillingConfig('test')} variant="danger" duration={2000}>
-                      Disconnect
-                    </HoldButton>
-                  </div>
-                )}
-              </div>
-
-              {/* Live Mode */}
-              <div className={`p-4 rounded-lg border ${editingMode === 'live' ? 'border-green-500/50 bg-green-500/5' : 'border-zinc-700 bg-zinc-800/30'}`}>
-                <div className="flex items-center justify-between mb-2">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-zinc-300">Live Mode</span>
-                    {billingConfig?.live ? (
-                      <Badge variant="success">Connected</Badge>
-                    ) : (
-                      <Badge variant="default">Not configured</Badge>
-                    )}
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setEditingMode('live')}
-                    className={`text-xs px-2 py-1 rounded ${editingMode === 'live' ? 'bg-green-500/20 text-green-300' : 'text-zinc-400 hover:text-zinc-200'}`}
-                  >
-                    {editingMode === 'live' ? 'Editing' : 'Edit'}
-                  </button>
-                </div>
-                {billingConfig?.live && (
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs text-zinc-500">Key: {billingConfig.live.publishable_key_last4}</span>
-                    <HoldButton onComplete={() => handleRemoveBillingConfig('live')} variant="danger" duration={2000}>
-                      Disconnect
-                    </HoldButton>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {/* Configuration Form */}
-            <div className={`p-4 rounded-lg border ${editingMode === 'test' ? 'border-yellow-500/30 bg-yellow-500/5' : 'border-green-500/30 bg-green-500/5'}`}>
-              <div className="flex items-center gap-2 mb-4">
-                <h3 className="text-sm font-medium text-zinc-200">
-                  Configure {editingMode === 'test' ? 'Test' : 'Live'} Mode
-                </h3>
-                <Badge variant={editingMode === 'test' ? 'warning' : 'success'}>
-                  {editingMode === 'test' ? '🧪 Test' : '🔴 Live'}
-                </Badge>
-              </div>
-              <form onSubmit={handleSaveBillingConfig} className="space-y-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-zinc-300">Stripe Secret Key</label>
-                  <Input
-                    type="password"
-                    value={stripeSecretKey}
-                    onChange={(e) => setStripeSecretKey(e.target.value)}
-                    placeholder={editingMode === 'test' ? 'sk_test_...' : 'sk_live_...'}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-zinc-300">Stripe Publishable Key</label>
-                  <Input
-                    value={stripePublishableKey}
-                    onChange={(e) => setStripePublishableKey(e.target.value)}
-                    placeholder={editingMode === 'test' ? 'pk_test_...' : 'pk_live_...'}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-zinc-300">Webhook Secret</label>
-                  <Input
-                    type="password"
-                    value={stripeWebhookSecret}
-                    onChange={(e) => setStripeWebhookSecret(e.target.value)}
-                    placeholder="whsec_..."
-                  />
-                  <div className="mt-2">
-                    <p className="text-xs text-zinc-500 mb-2">
-                      Configure your {editingMode} webhook endpoint in Stripe:
-                    </p>
-                    <div className="flex items-center gap-2 bg-zinc-900 border border-zinc-700 rounded-lg p-2">
-                      <code className="text-xs text-zinc-300 flex-1 overflow-x-auto whitespace-nowrap">
-                        https://reauth.{domain?.domain}/api/public/domain/reauth.{domain?.domain}/billing/webhook/{editingMode}
-                      </code>
-                      <CopyButton
-                        text={`https://reauth.${domain?.domain}/api/public/domain/reauth.${domain?.domain}/billing/webhook/${editingMode}`}
-                      />
-                    </div>
-                  </div>
-                </div>
-                <Button type="submit" variant="primary" disabled={savingBillingConfig}>
-                  {savingBillingConfig ? 'Saving...' : `Save ${editingMode === 'test' ? 'Test' : 'Live'} Configuration`}
-                </Button>
-              </form>
-            </div>
-          </Card>
+          )}
 
           {/* Subscription Plans */}
           <Card className="p-6">
@@ -2138,6 +1995,267 @@ export default function DomainDetailPage() {
             </Button>
           </div>
         </form>
+      </Modal>
+
+      {/* Magic Link Config Modal */}
+      <Modal
+        open={authConfigModal === 'magic_link'}
+        onClose={() => setAuthConfigModal(null)}
+        title="Magic Link Configuration"
+      >
+        <div className="space-y-4">
+          {/* Current status */}
+          {authConfig?.magic_link_config?.has_api_key ? (
+            <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+              <div className="flex items-center gap-2">
+                <Check size={16} className="text-emerald-400" />
+                <span className="text-sm text-emerald-200">Using custom email: {authConfig.magic_link_config.from_email}</span>
+              </div>
+              <HoldButton onComplete={() => { handleRemoveCustomConfig(); setAuthConfigModal(null); }} variant="danger" duration={2000}>
+                Remove
+              </HoldButton>
+            </div>
+          ) : authConfig?.using_fallback && (
+            <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+              <p className="text-sm text-blue-200">Using reauth&apos;s shared email service ({authConfig.fallback_from_email})</p>
+              <p className="text-xs text-blue-300/70 mt-1">Add your own Resend API key for custom branding.</p>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">Resend API Key</label>
+            <Input
+              type="password"
+              value={resendApiKey}
+              onChange={(e) => setResendApiKey(e.target.value)}
+              placeholder={authConfig?.magic_link_config?.has_api_key ? '••••••••' : 'Enter API key'}
+            />
+            <p className="text-xs text-zinc-500">
+              Get your key from{' '}
+              <a href="https://resend.com/api-keys" target="_blank" rel="noopener noreferrer" className="text-blue-400">
+                resend.com
+              </a>
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">From Email</label>
+            <Input
+              type="email"
+              value={fromEmail}
+              onChange={(e) => setFromEmail(e.target.value)}
+              placeholder={authConfig?.fallback_from_email || 'noreply@yourdomain.com'}
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setAuthConfigModal(null)}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={(e) => {
+                handleSaveConfig(e as unknown as React.FormEvent);
+                setAuthConfigModal(null);
+              }}
+              disabled={saving}
+            >
+              {saving ? 'Saving...' : 'Save Configuration'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Google OAuth Config Modal */}
+      <Modal
+        open={authConfigModal === 'google_oauth'}
+        onClose={() => setAuthConfigModal(null)}
+        title="Google OAuth Configuration"
+      >
+        <div className="space-y-4">
+          {/* Current status */}
+          {authConfig?.google_oauth_config?.has_client_secret ? (
+            <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+              <div className="flex items-center gap-2">
+                <Check size={16} className="text-emerald-400" />
+                <span className="text-sm text-emerald-200">Using custom OAuth (Client: {authConfig.google_oauth_config.client_id_prefix}...)</span>
+              </div>
+              <HoldButton onComplete={() => { handleRemoveGoogleOAuthConfig(); setAuthConfigModal(null); }} variant="danger" duration={2000}>
+                Remove
+              </HoldButton>
+            </div>
+          ) : authConfig?.using_google_fallback && (
+            <div className="p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+              <p className="text-sm text-blue-200">Using reauth&apos;s shared Google OAuth</p>
+            </div>
+          )}
+
+          {/* Redirect URI info */}
+          <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3 border border-zinc-700">
+            <div className="flex items-center justify-between">
+              <h3 className="font-medium text-white text-sm">Redirect URI</h3>
+              <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer" className="text-xs text-blue-400">
+                Open Console
+              </a>
+            </div>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-zinc-900 px-3 py-2 rounded border border-zinc-800 text-xs text-zinc-300 font-mono break-all">
+                https://reauth.{domain.domain}/callback/google
+              </code>
+              <CopyButton text={`https://reauth.${domain.domain}/callback/google`} />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">Google Client ID</label>
+            <Input
+              value={googleClientId}
+              onChange={(e) => setGoogleClientId(e.target.value)}
+              placeholder={authConfig?.google_oauth_config?.has_client_secret ? `${authConfig.google_oauth_config.client_id_prefix}...` : 'Enter Client ID'}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">Google Client Secret</label>
+            <Input
+              type="password"
+              value={googleClientSecret}
+              onChange={(e) => setGoogleClientSecret(e.target.value)}
+              placeholder={authConfig?.google_oauth_config?.has_client_secret ? '••••••••' : 'Enter Client Secret'}
+            />
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setAuthConfigModal(null)}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={(e) => {
+                handleSaveConfig(e as unknown as React.FormEvent);
+                setAuthConfigModal(null);
+              }}
+              disabled={saving}
+            >
+              {saving ? 'Saving...' : 'Save Configuration'}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Stripe Config Modal */}
+      <Modal
+        open={stripeConfigModal !== null}
+        onClose={() => setStripeConfigModal(null)}
+        title={`Stripe ${stripeConfigModal === 'test' ? 'Test' : 'Live'} Configuration`}
+        size="lg"
+      >
+        <div className="space-y-4">
+          {/* Mode indicator */}
+          <div className={`p-3 rounded-lg border ${
+            stripeConfigModal === 'test'
+              ? 'bg-yellow-500/10 border-yellow-500/30'
+              : 'bg-green-500/10 border-green-500/30'
+          }`}>
+            <div className="flex items-center gap-2">
+              <Badge variant={stripeConfigModal === 'test' ? 'warning' : 'success'}>
+                {stripeConfigModal === 'test' ? '🧪 Test Mode' : '🔴 Live Mode'}
+              </Badge>
+              <span className="text-sm text-zinc-300">
+                {stripeConfigModal === 'test'
+                  ? 'Use test API keys from Stripe dashboard'
+                  : 'Use live API keys - real transactions will be processed'}
+              </span>
+            </div>
+          </div>
+
+          {/* Current status */}
+          {stripeConfigModal === 'test' && billingConfig?.test && (
+            <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+              <div className="flex items-center gap-2">
+                <Check size={16} className="text-emerald-400" />
+                <span className="text-sm text-emerald-200">Connected - Key: {billingConfig.test.publishable_key_last4}</span>
+              </div>
+              <HoldButton
+                onComplete={() => { handleRemoveBillingConfig('test'); setStripeConfigModal(null); }}
+                variant="danger"
+                duration={2000}
+              >
+                Disconnect
+              </HoldButton>
+            </div>
+          )}
+          {stripeConfigModal === 'live' && billingConfig?.live && (
+            <div className="flex items-center justify-between p-3 bg-emerald-500/10 border border-emerald-500/20 rounded-lg">
+              <div className="flex items-center gap-2">
+                <Check size={16} className="text-emerald-400" />
+                <span className="text-sm text-emerald-200">Connected - Key: {billingConfig.live.publishable_key_last4}</span>
+              </div>
+              <HoldButton
+                onComplete={() => { handleRemoveBillingConfig('live'); setStripeConfigModal(null); }}
+                variant="danger"
+                duration={2000}
+              >
+                Disconnect
+              </HoldButton>
+            </div>
+          )}
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">Secret Key</label>
+            <Input
+              type="password"
+              value={stripeSecretKey}
+              onChange={(e) => setStripeSecretKey(e.target.value)}
+              placeholder={stripeConfigModal === 'test' ? 'sk_test_...' : 'sk_live_...'}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">Publishable Key</label>
+            <Input
+              value={stripePublishableKey}
+              onChange={(e) => setStripePublishableKey(e.target.value)}
+              placeholder={stripeConfigModal === 'test' ? 'pk_test_...' : 'pk_live_...'}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <label className="text-sm font-medium text-zinc-300">Webhook Secret</label>
+            <Input
+              type="password"
+              value={stripeWebhookSecret}
+              onChange={(e) => setStripeWebhookSecret(e.target.value)}
+              placeholder="whsec_..."
+            />
+          </div>
+
+          {/* Webhook URL info */}
+          <div className="bg-zinc-800/50 rounded-lg p-4 space-y-2 border border-zinc-700">
+            <label className="text-sm font-medium text-zinc-300">Webhook URL</label>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 bg-zinc-900 px-3 py-2 rounded border border-zinc-800 text-xs text-zinc-300 font-mono break-all">
+                https://reauth.{domain.domain}/webhook/stripe
+              </code>
+              <CopyButton text={`https://reauth.${domain.domain}/webhook/stripe`} />
+            </div>
+            <p className="text-xs text-zinc-500">Add this URL in your Stripe webhook settings</p>
+          </div>
+
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="ghost" onClick={() => setStripeConfigModal(null)}>Cancel</Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                // Temporarily set editingMode to the modal mode for save handler
+                const previousMode = editingMode;
+                setEditingMode(stripeConfigModal!);
+                handleSaveBillingConfig({ preventDefault: () => {} } as React.FormEvent);
+                setEditingMode(previousMode);
+                setStripeConfigModal(null);
+              }}
+              disabled={savingBillingConfig || !stripeSecretKey || !stripePublishableKey}
+            >
+              {savingBillingConfig ? 'Saving...' : 'Save Configuration'}
+            </Button>
+          </div>
+        </div>
       </Modal>
     </div>
   );
