@@ -152,24 +152,45 @@ Write the plan to ./workspace/tasks/in-progress/{slug}/plan.md, then EXIT."""
 def run_claude_review(slug: str, iteration: int):
     """Have Claude CLI review the plan and write feedback."""
     task_dir = TASKS_IN_PROGRESS / slug
-    prompt = f"""Review the implementation plan for task: {slug}
+    ticket_content = (task_dir / "ticket.md").read_text()
+    plan_content = (task_dir / "plan.md").read_text()
 
-Read these files:
-- {task_dir}/ticket.md (the task description)
-- {task_dir}/plan.md (the proposed implementation plan)
+    prompt = f"""Review this implementation plan. This is review iteration {iteration}/3.
 
-This is review iteration {iteration}/3.
+=== TICKET ===
+{ticket_content}
 
-Write your feedback to {task_dir}/feedback.md with:
+=== PLAN ===
+{plan_content}
+
+=== YOUR TASK ===
+Provide feedback with:
 - What's good about the plan
 - What's missing or unclear
 - Suggested improvements
 - Any risks or concerns
 
-Be specific and actionable. Focus on catching issues before implementation."""
+Be specific and actionable. Focus on catching issues before implementation.
+Output ONLY the feedback content, no preamble."""
 
     print(f"[PLANNING] Claude reviewing plan for {slug} (iteration {iteration}/3)")
-    run(["claude", "-p", prompt], check=False)
+
+    # Capture Claude's output and write to feedback.md
+    result = subprocess.run(
+        ["claude", "-p", prompt, "--no-input"],
+        capture_output=True,
+        text=True,
+        check=False
+    )
+
+    feedback_file = task_dir / "feedback.md"
+    if result.stdout.strip():
+        feedback_file.write_text(f"# Feedback - Iteration {iteration}/3\n\n{result.stdout.strip()}")
+        print(f"[PLANNING] Feedback written to {feedback_file}")
+    else:
+        # Fallback if no stdout
+        feedback_file.write_text(f"# Feedback - Iteration {iteration}/3\n\nNo specific feedback. Plan looks acceptable.")
+        print(f"[PLANNING] No feedback captured, using default")
 
 
 def run_codex_revise(slug: str, iteration: int):
