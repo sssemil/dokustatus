@@ -85,13 +85,14 @@ def run_agent_with_logs(
     input_text: str | None = None,
     tail_lines: int = 3,
     watch_file: Path | None = None,
-    watch_min_size: int = 100
+    watch_min_size: int = 100,
+    use_script: bool = False
 ) -> int:
     """
     Run an agent command, streaming output to log file and showing last N lines in terminal.
 
     If watch_file is provided, kills the process once that file exists and has >= watch_min_size bytes.
-    This is a fallback to prevent agents from spinning after completing their task.
+    If use_script is True, wraps command with `script` to capture TUI output.
 
     Returns the exit code.
     """
@@ -99,19 +100,26 @@ def run_agent_with_logs(
 
     # Track last N lines for display
     last_lines: deque[str] = deque(maxlen=tail_lines)
+    lines_displayed = 0
     killed_by_watcher = False
 
     def display_tail():
-        """Clear and redisplay the last N lines."""
-        if last_lines:
-            sys.stdout.write(f"\r\033[K")  # Clear current line
-            for i, line in enumerate(last_lines):
-                display = line[:100] + "..." if len(line) > 100 else line
-                if i < len(last_lines) - 1:
-                    sys.stdout.write(f"  {display}\n")
-                else:
-                    sys.stdout.write(f"  {display}")
-            sys.stdout.flush()
+        """Clear previous lines and redisplay the last N lines."""
+        nonlocal lines_displayed
+        if not last_lines:
+            return
+
+        # Move cursor up to overwrite previous output
+        if lines_displayed > 0:
+            sys.stdout.write(f"\033[{lines_displayed}A")
+
+        # Clear and print each line
+        for line in last_lines:
+            display = line[:100] + "..." if len(line) > 100 else line
+            sys.stdout.write(f"\033[2K  {display}\n")
+
+        lines_displayed = len(last_lines)
+        sys.stdout.flush()
 
     def file_watcher(proc: subprocess.Popen):
         """Watch for expected output file and kill process when it's ready."""
@@ -131,38 +139,55 @@ def run_agent_with_logs(
 
     print(f"[{label}] Logging to {log_file}")
 
-    with open(log_file, "w") as f:
-        process = subprocess.Popen(
-            cmd,
-            stdin=subprocess.PIPE if input_text else None,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1
-        )
+    # Build command - wrap with script if needed to capture TUI output
+    if use_script:
+        # script -q -c "command" logfile captures terminal output including TUI
+        cmd_str = " ".join(cmd)
+        actual_cmd = ["script", "-q", "-c", cmd_str, str(log_file)]
+        # For script mode, we read from script's stdout for tail display
+        # The log file is created by script itself
+    else:
+        actual_cmd = cmd
 
-        # Start file watcher thread if watch_file provided
-        if watch_file:
-            watcher_thread = threading.Thread(target=file_watcher, args=(process,), daemon=True)
-            watcher_thread.start()
+    process = subprocess.Popen(
+        actual_cmd,
+        stdin=subprocess.PIPE if input_text else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
+    )
 
-        # Send input if provided
-        if input_text and process.stdin:
-            process.stdin.write(input_text)
-            process.stdin.close()
+    # Start file watcher thread if watch_file provided
+    if watch_file:
+        watcher_thread = threading.Thread(target=file_watcher, args=(process,), daemon=True)
+        watcher_thread.start()
 
-        # Read output line by line
+    # Send input if provided
+    if input_text and process.stdin:
+        process.stdin.write(input_text)
+        process.stdin.close()
+
+    # For non-script mode, also write to log file manually
+    if not use_script:
+        with open(log_file, "w") as f:
+            if process.stdout:
+                for line in process.stdout:
+                    line = line.rstrip('\n')
+                    f.write(line + "\n")
+                    f.flush()
+                    last_lines.append(line)
+                    display_tail()
+    else:
+        # For script mode, just read stdout for tail display
         if process.stdout:
             for line in process.stdout:
                 line = line.rstrip('\n')
-                f.write(line + "\n")
-                f.flush()
                 last_lines.append(line)
                 display_tail()
 
-        process.wait()
+    process.wait()
 
-    print()
     if killed_by_watcher:
         print(f"[{label}] Terminated (output file ready)")
     else:
@@ -268,10 +293,11 @@ Then stop."""
         label=f"Claude {plan_file}",
         input_text=prompt,
         watch_file=expected_plan,
-        watch_min_size=100  # Plan should be at least 100 bytes
+        watch_min_size=100,  # Plan should be at least 100 bytes
+        use_script=True  # Capture TUI output
     )
 
-    # Commit the plan (Claude should have written it)
+    # Commit the plan and log
     run(["git", "add", str(task_dir)], check=False)
     run(["git", "commit", "-m", f"plan {slug}: create {plan_file}"], check=False)
 
@@ -481,6 +507,10 @@ decide otherwise and justify it in History."""
         log_file=log_file,
         label=f"Codex exec {slug}"
     )
+
+    # Commit the execution log
+    run(["git", "add", str(log_file)], check=False)
+    run(["git", "commit", "-m", f"log: codex exec {slug}"], check=False)
 
 
 def merge_outbound_task(slug: str) -> bool:
