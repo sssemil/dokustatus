@@ -425,6 +425,11 @@ def merge_outbound_task(slug: str) -> bool:
 
     run(["git", "pull", "--ff-only"], check=False)
 
+    # Get all commits from task branch for the commit message body
+    commits = run_capture([
+        "git", "log", "--oneline", f"main..{branch}"
+    ], check=False)
+
     result = subprocess.run(["git", "merge", "--squash", branch], check=False)
     if result.returncode != 0:
         print("Merge failed — leaving branch unmerged")
@@ -432,7 +437,9 @@ def merge_outbound_task(slug: str) -> bool:
             git_stash_pop()
         return False
 
-    run(["git", "commit", "-m", f"complete task {slug} — squash merge"], check=False)
+    # Commit with simple title and all commits in body
+    commit_msg = f"complete task {slug}\n\nCommits:\n{commits}" if commits else f"complete task {slug}"
+    run(["git", "commit", "-m", commit_msg], check=False)
 
     # Move directory to done (using git mv to track the change)
     if done_dir.exists():
