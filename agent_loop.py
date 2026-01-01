@@ -492,10 +492,12 @@ def main():
         validate_in_progress_state_or_die()
 
         # CASE 1: outbound task → merge
-        outbound_dirs = [
-            d for d in TASKS_OUTBOUND.iterdir()
-            if d.is_dir() and (d / "ticket.md").exists()
-        ]
+        outbound_dirs = []
+        if TASKS_OUTBOUND.exists():
+            outbound_dirs = [
+                d for d in TASKS_OUTBOUND.iterdir()
+                if d.is_dir() and (d / "ticket.md").exists()
+            ]
         if outbound_dirs:
             slug = outbound_dirs[0].name
             merge_outbound_task(slug)
