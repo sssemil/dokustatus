@@ -570,7 +570,25 @@ def main():
         planning_files = list(SESSIONS_DIR.glob("*.planning"))
         if planning_files:
             slug = planning_files[0].stem
-            task_dir = TASKS_IN_PROGRESS / slug
+            in_progress_dir = TASKS_IN_PROGRESS / slug
+            todo_dir = TASKS_TODO / slug
+
+            # Check if task is actually in in-progress
+            if not (in_progress_dir.exists() and (in_progress_dir / "ticket.md").exists()):
+                # Task not in in-progress - check if it's in todo
+                if todo_dir.exists() and (todo_dir / "ticket.md").exists():
+                    # Move it to in-progress first
+                    print(f"[PLANNING] Task {slug} still in todo, setting up...")
+                    if not setup_task_for_work(slug, todo_dir):
+                        print(f"[PLANNING] Failed to setup task {slug}")
+                        time.sleep(2)
+                        continue
+                else:
+                    # Task doesn't exist anywhere - stale planning file
+                    print(f"[PLANNING] Stale planning file for {slug}, cleaning up")
+                    planning_files[0].unlink()
+                    time.sleep(2)
+                    continue
 
             # Ensure we're on the right branch
             branch = f"task/{slug}"
