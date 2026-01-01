@@ -7,14 +7,19 @@
 Agent loop that manages codex tasks through todo -> in-progress -> outbound -> done workflow.
 """
 
+import fcntl
 import os
+import signal
 import subprocess
 import sys
 import time
 import threading
 from collections import deque
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
+from typing import Optional
 
 WORKSPACE = Path("./workspace")
 TASKS_TODO = WORKSPACE / "tasks" / "todo"
@@ -23,6 +28,91 @@ TASKS_OUTBOUND = WORKSPACE / "tasks" / "outbound"
 TASKS_DONE = WORKSPACE / "tasks" / "done"
 SESSIONS_DIR = WORKSPACE / "sessions"
 LOGS_DIR = WORKSPACE / "logs"
+
+# Parallel execution settings
+WORKTREES_ROOT = Path("..") / "worktrees"
+MAX_CONCURRENT_TASKS = 3
+MERGE_LOCK_FILE = WORKSPACE / ".merge.lock"
+
+
+# =============================================================================
+# Data Structures for Parallel Task Management
+# =============================================================================
+
+class TaskPhase(Enum):
+    """Task lifecycle phases."""
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    OUTBOUND = "outbound"
+    MERGING = "merging"
+
+
+@dataclass
+class ActiveTask:
+    """Represents a task being worked on in a worktree."""
+    slug: str
+    worktree_path: Path
+    branch: str
+    phase: TaskPhase
+    process: Optional[subprocess.Popen] = None
+    planning_iteration: int = 0
+    log_handle: Optional[object] = field(default=None, repr=False)
+    output_thread: Optional[threading.Thread] = field(default=None, repr=False)
+
+    @property
+    def is_alive(self) -> bool:
+        """Check if the subprocess is still running."""
+        if self.process is None:
+            return False
+        return self.process.poll() is None
+
+    def worktree_task_dir(self, status: str = "in-progress") -> Path:
+        """Get task directory path within the worktree."""
+        return self.worktree_path / "workspace" / "tasks" / status / self.slug
+
+
+@dataclass
+class ParallelTaskManager:
+    """Manages multiple concurrent tasks."""
+    active_tasks: dict[str, ActiveTask] = field(default_factory=dict)
+    merge_queue: list[str] = field(default_factory=list)
+
+    def can_start_new_task(self) -> bool:
+        """Check if we can start another task."""
+        return len(self.active_tasks) < MAX_CONCURRENT_TASKS
+
+    def get_task(self, slug: str) -> Optional[ActiveTask]:
+        """Get a task by slug."""
+        return self.active_tasks.get(slug)
+
+    def add_task(self, task: ActiveTask):
+        """Add a task to the manager."""
+        self.active_tasks[task.slug] = task
+
+    def remove_task(self, slug: str):
+        """Remove a task from the manager."""
+        if slug in self.active_tasks:
+            del self.active_tasks[slug]
+        if slug in self.merge_queue:
+            self.merge_queue.remove(slug)
+
+    def queue_for_merge(self, slug: str):
+        """Add a task to the merge queue."""
+        if slug not in self.merge_queue:
+            self.merge_queue.append(slug)
+
+    def next_to_merge(self) -> Optional[str]:
+        """Get the next task slug to merge."""
+        return self.merge_queue[0] if self.merge_queue else None
+
+    def get_running_tasks(self) -> list[ActiveTask]:
+        """Get all tasks with running subprocesses."""
+        return [t for t in self.active_tasks.values() if t.is_alive]
+
+    def get_tasks_in_phase(self, phase: TaskPhase) -> list[ActiveTask]:
+        """Get all tasks in a specific phase."""
+        return [t for t in self.active_tasks.values() if t.phase == phase]
+
 
 # Task directory structure:
 # workspace/tasks/todo/<slug>/ticket.md - the task description
@@ -34,6 +124,995 @@ def setup_directories():
     """Create required directories if they don't exist."""
     for d in [TASKS_TODO, TASKS_IN_PROGRESS, TASKS_OUTBOUND, TASKS_DONE, SESSIONS_DIR, LOGS_DIR]:
         d.mkdir(parents=True, exist_ok=True)
+    # Also ensure worktrees root exists
+    WORKTREES_ROOT.mkdir(parents=True, exist_ok=True)
+
+
+# =============================================================================
+# Worktree Management Functions
+# =============================================================================
+
+def sanitize_slug(slug: str) -> str:
+    """Sanitize a slug to prevent path traversal attacks."""
+    # Remove any path separators and dangerous characters
+    sanitized = slug.replace("/", "-").replace("\\", "-").replace("..", "-")
+    # Only allow alphanumeric, dash, underscore
+    return "".join(c for c in sanitized if c.isalnum() or c in "-_")
+
+
+def create_worktree(slug: str) -> Optional[Path]:
+    """
+    Create a git worktree for a task.
+    Returns the worktree path or None on failure.
+    """
+    slug = sanitize_slug(slug)
+    branch = f"task/{slug}"
+    worktree_path = (WORKTREES_ROOT / f"task-{slug}").resolve()
+
+    # Ensure parent directory exists
+    WORKTREES_ROOT.mkdir(parents=True, exist_ok=True)
+
+    # Remove stale worktree if exists
+    if worktree_path.exists():
+        print(f"[WORKTREE] Removing stale worktree: {worktree_path}")
+        cleanup_worktree(slug)
+
+    # Create branch from main if it doesn't exist
+    if not git_branch_exists(branch):
+        result = subprocess.run(
+            ["git", "branch", branch, "main"],
+            capture_output=True, check=False
+        )
+        if result.returncode != 0:
+            print(f"[WORKTREE] Failed to create branch {branch}")
+            return None
+
+    # Create the worktree
+    result = subprocess.run(
+        ["git", "worktree", "add", str(worktree_path), branch],
+        capture_output=True, text=True, check=False
+    )
+
+    if result.returncode != 0:
+        print(f"[WORKTREE] Failed to create worktree: {result.stderr}")
+        return None
+
+    print(f"[WORKTREE] Created: {worktree_path} on branch {branch}")
+    return worktree_path
+
+
+def cleanup_worktree(slug: str) -> bool:
+    """
+    Remove a worktree and optionally its branch.
+    Returns True if successful.
+    """
+    import shutil
+
+    slug = sanitize_slug(slug)
+    worktree_path = (WORKTREES_ROOT / f"task-{slug}").resolve()
+
+    # Safety check: verify path matches expected pattern
+    if not str(worktree_path).startswith(str(WORKTREES_ROOT.resolve())):
+        print(f"[WORKTREE] Safety check failed: {worktree_path} not under {WORKTREES_ROOT}")
+        return False
+
+    # Remove worktree via git (handles git metadata)
+    result = subprocess.run(
+        ["git", "worktree", "remove", "--force", str(worktree_path)],
+        capture_output=True, check=False
+    )
+
+    if result.returncode != 0:
+        # Fallback: manually remove if git command fails
+        if worktree_path.exists():
+            shutil.rmtree(worktree_path, ignore_errors=True)
+        # Prune stale worktree entries
+        subprocess.run(["git", "worktree", "prune"], check=False)
+
+    print(f"[WORKTREE] Cleaned up: {worktree_path}")
+    return True
+
+
+def list_worktrees() -> list[dict]:
+    """
+    List all git worktrees with their paths and branches.
+    Returns list of {path, branch, head} dicts.
+    """
+    result = subprocess.run(
+        ["git", "worktree", "list", "--porcelain"],
+        capture_output=True, text=True, check=False
+    )
+
+    worktrees = []
+    current: dict = {}
+
+    for line in result.stdout.strip().split('\n'):
+        if not line:
+            continue
+        if line.startswith('worktree '):
+            if current:
+                worktrees.append(current)
+            current = {'path': line[9:]}
+        elif line.startswith('HEAD '):
+            current['head'] = line[5:]
+        elif line.startswith('branch '):
+            current['branch'] = line[7:]
+
+    if current:
+        worktrees.append(current)
+
+    return worktrees
+
+
+def is_worktree_healthy(worktree_path: Path) -> bool:
+    """Check if a worktree exists and has a valid git state."""
+    if not worktree_path.exists():
+        return False
+
+    git_file = worktree_path / ".git"
+    if not git_file.exists():
+        return False
+
+    # Check git status works
+    result = subprocess.run(
+        ["git", "-C", str(worktree_path), "status", "--porcelain"],
+        capture_output=True, check=False
+    )
+    return result.returncode == 0
+
+
+def get_worktree_for_slug(slug: str) -> Optional[Path]:
+    """Get the worktree path for a task slug, if it exists."""
+    slug = sanitize_slug(slug)
+    worktree_path = (WORKTREES_ROOT / f"task-{slug}").resolve()
+    if is_worktree_healthy(worktree_path):
+        return worktree_path
+    return None
+
+
+# =============================================================================
+# Non-Blocking Subprocess Execution
+# =============================================================================
+
+def drain_output(process: subprocess.Popen, log_file: Path, label: str):
+    """
+    Drain stdout/stderr from a process to a log file.
+    Runs in a separate thread to prevent pipe deadlock.
+    """
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        with open(log_file, "w") as f:
+            if process.stdout:
+                for line in process.stdout:
+                    line = line.rstrip('\n')
+                    f.write(line + "\n")
+                    f.flush()
+    except Exception as e:
+        print(f"[{label}] Output drain error: {e}")
+
+
+def start_agent_subprocess(
+    task: ActiveTask,
+    cmd: list[str],
+    log_file: Path,
+    label: str,
+    input_text: Optional[str] = None
+) -> subprocess.Popen:
+    """
+    Start an agent subprocess without blocking.
+    Returns the Popen object for tracking.
+    """
+    log_file.parent.mkdir(parents=True, exist_ok=True)
+
+    # Force non-TTY environment
+    env = os.environ.copy()
+    env.pop("TERM", None)
+
+    print(f"[{label}] Starting in {task.worktree_path}, logging to {log_file}")
+
+    process = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE if input_text else None,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+        cwd=str(task.worktree_path),  # Run in worktree!
+        env=env
+    )
+
+    if input_text and process.stdin:
+        process.stdin.write(input_text)
+        process.stdin.close()
+
+    # Start output drain thread to prevent pipe deadlock
+    output_thread = threading.Thread(
+        target=drain_output,
+        args=(process, log_file, label),
+        daemon=True
+    )
+    output_thread.start()
+
+    task.process = process
+    task.output_thread = output_thread
+
+    return process
+
+
+def check_task_subprocess(task: ActiveTask) -> tuple[bool, Optional[int]]:
+    """
+    Check if a task's subprocess is still running.
+    Returns (is_running, exit_code_if_finished).
+    """
+    if task.process is None:
+        return (False, None)
+
+    exit_code = task.process.poll()
+    if exit_code is None:
+        return (True, None)
+    else:
+        return (False, exit_code)
+
+
+def kill_task_subprocess(task: ActiveTask, timeout: int = 30):
+    """Gracefully terminate a task's subprocess."""
+    if task.process is None:
+        return
+
+    if task.is_alive:
+        print(f"[KILL] Terminating task {task.slug} (PID {task.process.pid})")
+        task.process.terminate()
+        try:
+            task.process.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            print(f"[KILL] Force killing task {task.slug}")
+            task.process.kill()
+            task.process.wait()
+
+
+# =============================================================================
+# State Persistence
+# =============================================================================
+
+def persist_task_state(task: ActiveTask):
+    """Write task state to worktree for crash recovery."""
+    state_file = task.worktree_path / ".task-state"
+    state_file.write_text(f"{task.phase.value}\n{task.planning_iteration}\n")
+
+
+def load_task_state(worktree_path: Path) -> tuple[TaskPhase, int]:
+    """Load task state from worktree."""
+    state_file = worktree_path / ".task-state"
+    if state_file.exists():
+        try:
+            lines = state_file.read_text().strip().split("\n")
+            phase = TaskPhase(lines[0]) if lines else TaskPhase.PLANNING
+            iteration = int(lines[1]) if len(lines) > 1 else 0
+            return phase, iteration
+        except (ValueError, IndexError):
+            pass
+    return TaskPhase.PLANNING, 0
+
+
+# =============================================================================
+# Merge Freeze Protocol
+# =============================================================================
+
+def request_merge_freeze(task: ActiveTask):
+    """Signal agent to stop gracefully by touching .merge-requested file."""
+    freeze_file = task.worktree_path / ".merge-requested"
+    freeze_file.touch()
+    print(f"[FREEZE] Requested merge freeze for {task.slug}")
+
+
+def wait_for_clean_worktree(task: ActiveTask, timeout: int = 60) -> bool:
+    """Wait for agent to exit and worktree to be clean."""
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        if not task.is_alive:
+            # Verify clean working tree
+            result = subprocess.run(
+                ["git", "-C", str(task.worktree_path), "status", "--porcelain"],
+                capture_output=True, text=True
+            )
+            if not result.stdout.strip():
+                return True
+            # Worktree dirty - commit any pending changes
+            subprocess.run(
+                ["git", "-C", str(task.worktree_path), "add", "-A"],
+                check=False
+            )
+            subprocess.run(
+                ["git", "-C", str(task.worktree_path), "commit", "-m", "auto-commit before merge"],
+                check=False
+            )
+            return True
+        time.sleep(2)
+
+    print(f"[FREEZE] Timeout waiting for {task.slug} to stop")
+    return False
+
+
+# =============================================================================
+# Merge Lock Management
+# =============================================================================
+
+def acquire_merge_lock() -> Optional[int]:
+    """
+    Acquire exclusive merge lock.
+    Returns file descriptor or None if lock unavailable.
+    """
+    MERGE_LOCK_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+    try:
+        fd = os.open(str(MERGE_LOCK_FILE), os.O_CREAT | os.O_RDWR)
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        # Write PID for stale lock detection
+        os.write(fd, str(os.getpid()).encode())
+        return fd
+    except (OSError, IOError):
+        return None
+
+
+def release_merge_lock(fd: int):
+    """Release the merge lock."""
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+    except (OSError, IOError):
+        pass
+
+
+def check_stale_merge_lock() -> bool:
+    """Check if merge lock is stale (held by dead process) and clean up if so."""
+    if not MERGE_LOCK_FILE.exists():
+        return False
+
+    try:
+        with open(MERGE_LOCK_FILE, 'r') as f:
+            pid_str = f.read().strip()
+            if pid_str:
+                pid = int(pid_str)
+                # Check if process is still alive
+                try:
+                    os.kill(pid, 0)  # Signal 0 just checks existence
+                    return False  # Process still alive
+                except OSError:
+                    # Process dead, lock is stale
+                    print(f"[LOCK] Removing stale merge lock from dead PID {pid}")
+                    MERGE_LOCK_FILE.unlink()
+                    return True
+    except (ValueError, OSError):
+        pass
+    return False
+
+
+# =============================================================================
+# Worktree-Aware Task Setup
+# =============================================================================
+
+def setup_task_in_worktree(slug: str, manager: ParallelTaskManager) -> Optional[ActiveTask]:
+    """
+    Set up a task to run in its own worktree.
+    Creates worktree, moves task to in-progress, returns ActiveTask.
+    """
+    import shutil
+
+    slug = sanitize_slug(slug)
+    todo_dir = TASKS_TODO / slug
+
+    # Verify task exists in todo
+    if not todo_dir.exists() or not (todo_dir / "ticket.md").exists():
+        print(f"[SETUP] Task {slug} not found in todo")
+        return None
+
+    # Create the worktree
+    worktree_path = create_worktree(slug)
+    if not worktree_path:
+        return None
+
+    branch = f"task/{slug}"
+
+    # In the worktree, the task should still be in todo (same as main)
+    # Move it from todo to in-progress within the worktree
+    worktree_todo = worktree_path / "workspace" / "tasks" / "todo" / slug
+    worktree_in_progress = worktree_path / "workspace" / "tasks" / "in-progress" / slug
+
+    # Ensure in-progress dir exists
+    (worktree_path / "workspace" / "tasks" / "in-progress").mkdir(parents=True, exist_ok=True)
+
+    # Move task directory in worktree
+    if worktree_todo.exists():
+        shutil.move(str(worktree_todo), str(worktree_in_progress))
+
+        # Commit the move in the worktree
+        subprocess.run(
+            ["git", "-C", str(worktree_path), "add", "-A"],
+            check=False
+        )
+        subprocess.run(
+            ["git", "-C", str(worktree_path), "commit", "-m", f"start task {slug}: todo -> in-progress"],
+            check=False
+        )
+
+    # Create ActiveTask
+    task = ActiveTask(
+        slug=slug,
+        worktree_path=worktree_path,
+        branch=branch,
+        phase=TaskPhase.PLANNING
+    )
+
+    manager.add_task(task)
+    persist_task_state(task)
+    print(f"[SETUP] Task {slug} ready in worktree {worktree_path}")
+
+    return task
+
+
+# =============================================================================
+# Safe Rebase Before Merge
+# =============================================================================
+
+MAX_REBASE_ATTEMPTS = 3
+
+
+def rebase_before_merge(task: ActiveTask) -> bool:
+    """
+    Rebase task branch onto latest main before merging.
+    Returns True if successful, False if conflicts require manual intervention.
+    """
+    for attempt in range(MAX_REBASE_ATTEMPTS):
+        # Fetch latest main
+        subprocess.run(
+            ["git", "-C", str(task.worktree_path), "fetch", "origin", "main"],
+            capture_output=True, check=False
+        )
+
+        result = subprocess.run(
+            ["git", "-C", str(task.worktree_path), "rebase", "origin/main"],
+            capture_output=True, text=True, check=False
+        )
+
+        if result.returncode == 0:
+            print(f"[REBASE] Successfully rebased {task.slug} onto main")
+            return True
+
+        print(f"[REBASE] Attempt {attempt + 1}/{MAX_REBASE_ATTEMPTS} failed for {task.slug}")
+
+        # Abort failed rebase
+        subprocess.run(
+            ["git", "-C", str(task.worktree_path), "rebase", "--abort"],
+            capture_output=True, check=False
+        )
+
+    # Mark for manual intervention
+    (task.worktree_path / ".needs-manual-rebase").touch()
+    print(f"[REBASE] {task.slug} needs manual intervention")
+    return False
+
+
+# =============================================================================
+# Async Planning Functions (Non-Blocking)
+# =============================================================================
+
+def start_claude_planning_async(task: ActiveTask, version: int) -> subprocess.Popen:
+    """Start Claude planning in the task's worktree (non-blocking)."""
+    plan_file = f"plan-v{version}.md"
+    log_dir = task.worktree_task_dir() / "agent_logs"
+    log_file = log_dir / f"claude-plan-v{version}.log"
+
+    if version == 1:
+        prompt = f"""Create a detailed implementation plan for task: {task.slug}
+
+Read the ticket at ./workspace/tasks/in-progress/{task.slug}/ticket.md
+
+Explore the codebase to understand:
+- Current implementation patterns
+- Files that will need modification
+- Testing patterns used
+
+Write a detailed plan to ./workspace/tasks/in-progress/{task.slug}/{plan_file} with:
+- Summary of what needs to be done
+- Step-by-step implementation approach
+- Specific files to modify (with paths)
+- Testing approach
+- Edge cases to handle
+
+Then stop."""
+    else:
+        prompt = f"""Revise the implementation plan for task: {task.slug}. This is revision {version}/3.
+
+Read:
+- ./workspace/tasks/in-progress/{task.slug}/ticket.md (the task)
+- ./workspace/tasks/in-progress/{task.slug}/plan-v{version - 1}.md (previous plan)
+- ./workspace/tasks/in-progress/{task.slug}/feedback-{version - 1}.md (feedback to address)
+
+Create an improved plan at ./workspace/tasks/in-progress/{task.slug}/{plan_file}
+Address the feedback while keeping what works well.
+
+Then stop."""
+
+    return start_agent_subprocess(
+        task=task,
+        cmd=[
+            "claude", "-p",
+            "--tools", "Read,Write,Glob,Grep,Edit,Bash",
+            "--dangerously-skip-permissions"
+        ],
+        log_file=log_file,
+        label=f"Claude plan-v{version} ({task.slug})",
+        input_text=prompt
+    )
+
+
+def start_codex_review_async(task: ActiveTask, iteration: int) -> subprocess.Popen:
+    """Start Codex review in the task's worktree (non-blocking)."""
+    log_dir = task.worktree_task_dir() / "agent_logs"
+    log_file = log_dir / f"codex-review-{iteration}.log"
+
+    prompt = f"""Review the implementation plan for task: {task.slug}
+
+Read ./workspace/tasks/in-progress/{task.slug}/ticket.md (the task)
+Read ./workspace/tasks/in-progress/{task.slug}/plan-v{iteration}.md (the plan)
+
+Write feedback to ./workspace/tasks/in-progress/{task.slug}/feedback-{iteration}.md with:
+- What's good about the plan
+- What's missing or unclear
+- Suggested improvements
+- Any risks or concerns
+
+Be specific and actionable. Focus on catching issues before implementation.
+Then EXIT."""
+
+    return start_agent_subprocess(
+        task=task,
+        cmd=[
+            "codex", "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-C", ".",
+            prompt
+        ],
+        log_file=log_file,
+        label=f"Codex review-{iteration} ({task.slug})"
+    )
+
+
+def start_task_execution_async(task: ActiveTask) -> subprocess.Popen:
+    """Start Codex execution in the task's worktree (non-blocking)."""
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = task.worktree_task_dir() / "agent_logs"
+    log_file = log_dir / f"codex-exec-{timestamp}.log"
+
+    prompt = f"""You are working on task: {task.slug}
+
+Task directory: ./workspace/tasks/in-progress/{task.slug}/
+- ticket.md: The task description
+- plan.md: The implementation plan (already reviewed and finalized)
+
+This branch is dedicated to this task: task/{task.slug}
+You are running in an isolated worktree at {task.worktree_path}
+
+The plan.md has been reviewed 3 times and is ready for implementation.
+Follow the plan closely.
+
+IMPORTANT: Check for .merge-requested file periodically. If it exists, commit your
+work immediately and stop - the orchestrator needs to merge.
+
+You are responsible for:
+- Implementing according to plan.md
+- Making bounded edits to the codebase
+- Appending timestamped History entries to ticket.md
+- Committing your own changes
+
+Completion protocol:
+
+When the task is fully complete:
+1) Append a final History entry to ticket.md describing completion
+2) Move the entire task directory to:
+   ./workspace/tasks/outbound/{task.slug}/
+3) EXIT the session
+
+Do NOT merge to main yourself.
+The script will handle squash-merge once the directory
+appears in outbound.
+
+Stay focused on this task."""
+
+    task.phase = TaskPhase.EXECUTING
+    persist_task_state(task)
+
+    return start_agent_subprocess(
+        task=task,
+        cmd=[
+            "codex", "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            "-C", ".",
+            prompt
+        ],
+        log_file=log_file,
+        label=f"Codex exec ({task.slug})"
+    )
+
+
+# =============================================================================
+# Recovery Functions
+# =============================================================================
+
+def recover_existing_worktrees(manager: ParallelTaskManager):
+    """
+    On startup, recover state from existing worktrees.
+    """
+    worktrees = list_worktrees()
+
+    for wt in worktrees:
+        path = Path(wt.get('path', ''))
+        branch = wt.get('branch', '')
+
+        # Skip main worktree
+        if not branch.startswith('refs/heads/task/'):
+            continue
+
+        slug = branch.replace('refs/heads/task/', '')
+
+        print(f"[RECOVER] Found existing worktree for {slug} at {path}")
+
+        # Check for incomplete merge/rebase
+        merge_head = path / ".git" / "MERGE_HEAD"
+        rebase_dir = path / ".git" / "rebase-merge"
+
+        if merge_head.exists():
+            print(f"[RECOVER] Aborting incomplete merge in {slug}")
+            subprocess.run(["git", "-C", str(path), "merge", "--abort"], check=False)
+
+        if rebase_dir.exists():
+            print(f"[RECOVER] Aborting incomplete rebase in {slug}")
+            subprocess.run(["git", "-C", str(path), "rebase", "--abort"], check=False)
+
+        # Load persisted state
+        phase, iteration = load_task_state(path)
+
+        # Override phase based on directory structure
+        in_progress = path / "workspace" / "tasks" / "in-progress" / slug
+        outbound = path / "workspace" / "tasks" / "outbound" / slug
+
+        if outbound.exists() and (outbound / "ticket.md").exists():
+            phase = TaskPhase.OUTBOUND
+        elif in_progress.exists() and (in_progress / "plan.md").exists():
+            phase = TaskPhase.EXECUTING
+        elif in_progress.exists():
+            phase = TaskPhase.PLANNING
+
+        task = ActiveTask(
+            slug=slug,
+            worktree_path=path,
+            branch=f"task/{slug}",
+            phase=phase,
+            planning_iteration=iteration
+        )
+
+        manager.add_task(task)
+
+        if phase == TaskPhase.OUTBOUND:
+            manager.queue_for_merge(slug)
+            print(f"[RECOVER] {slug} queued for merge")
+        else:
+            print(f"[RECOVER] {slug} in phase {phase.value}, iteration {iteration}")
+
+
+def setup_signal_handlers(manager: ParallelTaskManager):
+    """Setup handlers for graceful shutdown."""
+
+    def signal_handler(signum, frame):
+        print(f"\n[SHUTDOWN] Received signal {signum}, cleaning up...")
+
+        for task in manager.active_tasks.values():
+            if task.is_alive:
+                print(f"[SHUTDOWN] Terminating {task.slug}...")
+                kill_task_subprocess(task, timeout=30)
+
+        print("[SHUTDOWN] Cleanup complete, exiting.")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+
+
+# =============================================================================
+# Merge Task from Worktree
+# =============================================================================
+
+def merge_task_from_worktree(task: ActiveTask, manager: ParallelTaskManager) -> bool:
+    """
+    Merge a completed task from its worktree to main.
+    First-wins: if merge succeeds, task is done.
+    Returns True on success.
+    """
+    import shutil
+
+    # Acquire merge lock (only one merge at a time)
+    lock_fd = acquire_merge_lock()
+    if lock_fd is None:
+        print(f"[MERGE] Cannot acquire lock, another merge in progress")
+        return False
+
+    try:
+        task.phase = TaskPhase.MERGING
+        persist_task_state(task)
+
+        # Request merge freeze and wait for clean worktree
+        request_merge_freeze(task)
+        if not wait_for_clean_worktree(task, timeout=60):
+            # Force kill if still running
+            kill_task_subprocess(task, timeout=10)
+
+        # Commit any pending changes in worktree
+        subprocess.run(
+            ["git", "-C", str(task.worktree_path), "add", "-A"],
+            capture_output=True, check=False
+        )
+        subprocess.run(
+            ["git", "-C", str(task.worktree_path), "commit", "-m", f"finalize task {task.slug}"],
+            capture_output=True, check=False
+        )
+
+        # Rebase onto latest main before merging
+        if not rebase_before_merge(task):
+            print(f"[MERGE] Rebase failed for {task.slug}, needs manual intervention")
+            task.phase = TaskPhase.OUTBOUND  # Revert phase
+            persist_task_state(task)
+            return False
+
+        # Push worktree branch (for merge) - this handles case where origin is configured
+        subprocess.run(
+            ["git", "-C", str(task.worktree_path), "push", "-u", "origin", task.branch, "--force"],
+            capture_output=True, check=False
+        )
+
+        # In main repo, perform squash merge
+        # Ensure we're on main
+        current = git_current_branch()
+        if current != "main":
+            run(["git", "switch", "main"], check=False)
+
+        run(["git", "fetch", "origin"], check=False)
+        run(["git", "pull", "--ff-only"], check=False)
+
+        # Get commits for message
+        commits = run_capture([
+            "git", "log", "--oneline", f"main..{task.branch}"
+        ], check=False)
+
+        # Squash merge
+        result = subprocess.run(
+            ["git", "merge", "--squash", task.branch],
+            capture_output=True, text=True, check=False
+        )
+
+        if result.returncode != 0:
+            print(f"[MERGE] Squash merge failed for {task.slug}: {result.stderr}")
+            # Abort merge
+            subprocess.run(["git", "merge", "--abort"], check=False)
+            task.phase = TaskPhase.OUTBOUND
+            persist_task_state(task)
+            return False
+
+        # Move outbound to done in main repo
+        outbound_dir = TASKS_OUTBOUND / task.slug
+        done_dir = TASKS_DONE / task.slug
+
+        # Also need to handle the worktree's outbound dir - copy to main's done
+        worktree_outbound = task.worktree_path / "workspace" / "tasks" / "outbound" / task.slug
+        if worktree_outbound.exists():
+            if done_dir.exists():
+                shutil.rmtree(done_dir)
+            shutil.copytree(str(worktree_outbound), str(done_dir))
+            run(["git", "add", str(done_dir)], check=False)
+
+        # If there's also a local outbound dir, remove it
+        if outbound_dir.exists():
+            shutil.rmtree(outbound_dir)
+
+        # Commit
+        commit_msg = f"complete task {task.slug}\n\nCommits:\n{commits}" if commits else f"complete task {task.slug}"
+        run(["git", "commit", "-m", commit_msg], check=False)
+
+        # Delete remote task branch (if exists)
+        subprocess.run(["git", "push", "origin", "--delete", task.branch], capture_output=True, check=False)
+
+        # Delete local task branch
+        subprocess.run(["git", "branch", "-D", task.branch], capture_output=True, check=False)
+
+        # Cleanup worktree
+        cleanup_worktree(task.slug)
+
+        # Cleanup session files
+        session_file = session_file_for(task.slug)
+        if session_file.exists():
+            session_file.unlink()
+        planning_file = SESSIONS_DIR / f"{task.slug}.planning"
+        if planning_file.exists():
+            planning_file.unlink()
+
+        # Remove from task manager
+        manager.remove_task(task.slug)
+
+        print(f"[MERGE] Successfully merged and archived: {task.slug}")
+        return True
+
+    finally:
+        release_merge_lock(lock_fd)
+
+
+# =============================================================================
+# Parallel Main Loop Helper Functions
+# =============================================================================
+
+def check_completed_tasks(manager: ParallelTaskManager):
+    """Check each active task for completion (outbound directory)."""
+    for task in list(manager.active_tasks.values()):
+        if task.phase not in (TaskPhase.EXECUTING, TaskPhase.PLANNING):
+            continue
+
+        outbound_dir = task.worktree_path / "workspace" / "tasks" / "outbound" / task.slug
+
+        if outbound_dir.exists() and (outbound_dir / "ticket.md").exists():
+            print(f"[COMPLETE] Task {task.slug} ready for merge")
+            task.phase = TaskPhase.OUTBOUND
+            persist_task_state(task)
+            manager.queue_for_merge(task.slug)
+
+
+def process_merge_queue(manager: ParallelTaskManager):
+    """Process one task from the merge queue."""
+    slug = manager.next_to_merge()
+    if slug is None:
+        return
+
+    task = manager.get_task(slug)
+    if task is None:
+        manager.merge_queue.remove(slug)
+        return
+
+    # Check for manual intervention flag
+    if (task.worktree_path / ".needs-manual-rebase").exists():
+        print(f"[MERGE] {slug} needs manual intervention, skipping")
+        return
+
+    # Wait for subprocess to finish
+    if task.is_alive:
+        print(f"[MERGE] Waiting for {slug} subprocess to finish...")
+        request_merge_freeze(task)
+        return
+
+    if merge_task_from_worktree(task, manager):
+        print(f"[MERGE] {slug} merged successfully")
+    else:
+        print(f"[MERGE] {slug} merge failed, will retry")
+
+
+def advance_planning_tasks(manager: ParallelTaskManager):
+    """Advance planning phase for all tasks in PLANNING phase."""
+    for task in list(manager.get_tasks_in_phase(TaskPhase.PLANNING)):
+        # If subprocess is still running, skip
+        if task.is_alive:
+            continue
+
+        # Check planning progress based on files
+        task_dir = task.worktree_task_dir()
+        plan_v3 = task_dir / "plan-v3.md"
+        plan_final = task_dir / "plan.md"
+        feedback_3 = task_dir / "feedback-3.md"
+
+        # If plan.md exists, planning is complete
+        if plan_final.exists():
+            print(f"[PLANNING] {task.slug} complete, starting execution")
+            start_task_execution_async(task)
+            continue
+
+        # Determine current iteration from files
+        # Each iteration: Claude creates plan-v{n}, Codex creates feedback-{n}
+        iteration = task.planning_iteration
+
+        if iteration == 0:
+            # Start: Claude creates plan-v1
+            plan_v1 = task_dir / "plan-v1.md"
+            if not plan_v1.exists():
+                start_claude_planning_async(task, version=1)
+            else:
+                task.planning_iteration = 1
+                persist_task_state(task)
+
+        elif iteration == 1:
+            # Codex reviews plan-v1 → feedback-1, then Claude creates plan-v2
+            feedback_1 = task_dir / "feedback-1.md"
+            plan_v2 = task_dir / "plan-v2.md"
+            if not feedback_1.exists():
+                start_codex_review_async(task, iteration=1)
+            elif not plan_v2.exists():
+                start_claude_planning_async(task, version=2)
+            else:
+                task.planning_iteration = 2
+                persist_task_state(task)
+
+        elif iteration == 2:
+            # Codex reviews plan-v2 → feedback-2, then Claude creates plan-v3
+            feedback_2 = task_dir / "feedback-2.md"
+            if not feedback_2.exists():
+                start_codex_review_async(task, iteration=2)
+            elif not plan_v3.exists():
+                start_claude_planning_async(task, version=3)
+            else:
+                task.planning_iteration = 3
+                persist_task_state(task)
+
+        elif iteration >= 3:
+            # Codex final review → feedback-3, then copy plan-v3 to plan.md
+            if not feedback_3.exists():
+                start_codex_review_async(task, iteration=3)
+            elif plan_v3.exists() and not plan_final.exists():
+                # Copy plan-v3 to plan.md
+                plan_final.write_text(plan_v3.read_text())
+                # Commit in worktree
+                subprocess.run(
+                    ["git", "-C", str(task.worktree_path), "add", "-A"],
+                    check=False
+                )
+                subprocess.run(
+                    ["git", "-C", str(task.worktree_path), "commit", "-m", f"plan {task.slug}: finalize plan.md from plan-v3"],
+                    check=False
+                )
+                print(f"[PLANNING] {task.slug} finalized, starting execution")
+                start_task_execution_async(task)
+
+
+def start_new_task_if_available(manager: ParallelTaskManager):
+    """Pick next task from todo and start it in a worktree."""
+    if not manager.can_start_new_task():
+        return
+
+    next_task_dir = pick_next_task()
+    if next_task_dir is None:
+        return
+
+    slug = next_task_dir.name
+
+    # Don't start if already active
+    if manager.get_task(slug) is not None:
+        return
+
+    print(f"[NEW] Starting task {slug}")
+    task = setup_task_in_worktree(slug, manager)
+    if task:
+        # Start planning
+        start_claude_planning_async(task, version=1)
+
+
+def handle_execution_tasks(manager: ParallelTaskManager):
+    """Handle execution phase tasks - restart if crashed."""
+    for task in list(manager.get_tasks_in_phase(TaskPhase.EXECUTING)):
+        is_running, exit_code = check_task_subprocess(task)
+
+        if not is_running and exit_code is not None:
+            # Subprocess finished - check if task completed
+            outbound_dir = task.worktree_path / "workspace" / "tasks" / "outbound" / task.slug
+
+            if outbound_dir.exists() and (outbound_dir / "ticket.md").exists():
+                # Task completed successfully
+                print(f"[EXEC] Task {task.slug} completed, queuing for merge")
+                task.phase = TaskPhase.OUTBOUND
+                persist_task_state(task)
+                manager.queue_for_merge(task.slug)
+            elif exit_code != 0:
+                # Task crashed - restart
+                print(f"[EXEC] Task {task.slug} crashed (exit {exit_code}), restarting...")
+                start_task_execution_async(task)
+            else:
+                # Exited 0 but not complete - restart
+                print(f"[EXEC] Task {task.slug} exited but not complete, restarting...")
+                start_task_execution_async(task)
 
 
 def session_file_for(slug: str) -> Path:
@@ -716,108 +1795,82 @@ def is_planning_complete(slug: str) -> bool:
         return False
 
 
-def main():
+def main_parallel():
+    """
+    Parallel main loop that manages multiple concurrent tasks.
+    Each task runs in its own git worktree.
+    """
     setup_directories()
+
+    # Check for stale merge lock from previous crash
+    check_stale_merge_lock()
+
+    # Create task manager
+    manager = ParallelTaskManager()
+
+    # Setup signal handlers for graceful shutdown
+    setup_signal_handlers(manager)
+
+    # Recover any existing worktrees from previous runs
+    recover_existing_worktrees(manager)
+
+    # Restart any tasks that were running
+    for task in list(manager.active_tasks.values()):
+        if task.phase == TaskPhase.PLANNING:
+            print(f"[RECOVER] Restarting planning for {task.slug}")
+            # Will be picked up by advance_planning_tasks
+        elif task.phase == TaskPhase.EXECUTING:
+            print(f"[RECOVER] Restarting execution for {task.slug}")
+            start_task_execution_async(task)
+
+    print(f"[STARTUP] Parallel agent loop started (max {MAX_CONCURRENT_TASKS} concurrent tasks)")
+    print(f"[STARTUP] Worktrees location: {WORKTREES_ROOT.resolve()}")
 
     while True:
         step_ts = datetime.now().isoformat()
-        print(f"[{step_ts}] loop tick")
+        active_count = len(manager.active_tasks)
+        running_count = len(manager.get_running_tasks())
+        print(f"[{step_ts}] loop tick - {active_count} active, {running_count} running")
 
-        validate_in_progress_state_or_die()
+        # PHASE 1: Check completed tasks → queue for merge
+        check_completed_tasks(manager)
 
-        # Commit any new files dropped into workspace/ between tasks
-        # Only do this when on main branch (between tasks, not during task work)
-        if git_current_branch() == "main":
+        # PHASE 2: Process merge queue (one at a time, first-wins)
+        process_merge_queue(manager)
+
+        # PHASE 3: Advance planning for tasks in PLANNING phase
+        advance_planning_tasks(manager)
+
+        # PHASE 4: Start new tasks if capacity available
+        start_new_task_if_available(manager)
+
+        # PHASE 5: Handle execution tasks (restart if crashed)
+        handle_execution_tasks(manager)
+
+        # Commit any housekeeping files in main repo
+        # Only when no tasks are actively merging
+        if git_current_branch() == "main" and not manager.get_tasks_in_phase(TaskPhase.MERGING):
             commit_new_workspace_files()
 
-        # CASE 1: outbound task → merge
-        outbound_dirs = []
-        if TASKS_OUTBOUND.exists():
-            outbound_dirs = [
-                d for d in TASKS_OUTBOUND.iterdir()
-                if d.is_dir() and (d / "ticket.md").exists()
-            ]
-        if outbound_dirs:
-            slug = outbound_dirs[0].name
-            merge_outbound_task(slug)
-            time.sleep(2)
-            continue
+        # Status summary
+        if manager.active_tasks:
+            for task in manager.active_tasks.values():
+                status = "running" if task.is_alive else "idle"
+                print(f"  [{task.slug}] {task.phase.value} ({status})")
 
-        # CASE 2: task in planning phase → continue planning
-        planning_files = list(SESSIONS_DIR.glob("*.planning"))
-        if planning_files:
-            slug = planning_files[0].stem
-            in_progress_dir = TASKS_IN_PROGRESS / slug
-            todo_dir = TASKS_TODO / slug
+        if not manager.active_tasks and not pick_next_task():
+            print("Idle — no tasks")
 
-            # Check if task is actually in in-progress
-            if not (in_progress_dir.exists() and (in_progress_dir / "ticket.md").exists()):
-                # Task not in in-progress - check if it's in todo
-                if todo_dir.exists() and (todo_dir / "ticket.md").exists():
-                    # Move it to in-progress first
-                    print(f"[PLANNING] Task {slug} still in todo, setting up...")
-                    if not setup_task_for_work(slug, todo_dir):
-                        print(f"[PLANNING] Failed to setup task {slug}")
-                        time.sleep(2)
-                        continue
-                    # Reset planning to iteration 0 since we just set up the task
-                    planning_files[0].write_text("0")
-                else:
-                    # Task doesn't exist anywhere - stale planning file
-                    print(f"[PLANNING] Stale planning file for {slug}, cleaning up")
-                    planning_files[0].unlink()
-                    time.sleep(2)
-                    continue
+        time.sleep(5)  # Poll every 5 seconds
 
-            # Verify plan-v1 exists before proceeding past iteration 0
-            plan_v1 = in_progress_dir / "plan-v1.md"
-            if not plan_v1.exists():
-                # Reset to 0 so Claude creates the initial plan
-                print(f"[PLANNING] plan-v1.md missing, resetting to iteration 0")
-                planning_files[0].write_text("0")
 
-            # Ensure we're on the right branch
-            branch = f"task/{slug}"
-            if git_branch_exists(branch):
-                git_switch(branch)
-
-            if run_planning_phase(slug):
-                # Planning complete, will start execution on next tick
-                print(f"[PLANNING] Complete for {slug}, ready for execution")
-            time.sleep(2)
-            continue
-
-        # CASE 3: task in progress (planning complete) → resume or execute
-        if current_in_progress_count() == 1:
-            task_dir = the_single_in_progress_task()
-            if task_dir:
-                slug = task_dir.name
-                if is_planning_complete(slug):
-                    # Planning done, execute
-                    resume_task_session(slug)
-                else:
-                    # Need to start planning
-                    planning_state = SESSIONS_DIR / f"{slug}.planning"
-                    planning_state.write_text("0")
-                time.sleep(3)
-                continue
-
-        # CASE 4: pick next task from todo
-        next_task = pick_next_task()
-        if next_task:
-            slug = next_task.name  # Directory name is the slug
-
-            # Set up task and start planning
-            if setup_task_for_work(slug, next_task):
-                planning_state = SESSIONS_DIR / f"{slug}.planning"
-                planning_state.write_text("0")
-                print(f"[NEW TASK] {slug} - starting planning phase")
-            time.sleep(2)
-            continue
-
-        print("Idle — no tasks")
-        time.sleep(10)
+# Keep old main for backwards compatibility (can be removed later)
+def main():
+    """Original sequential main loop (deprecated, use main_parallel)."""
+    print("[DEPRECATED] Sequential main() is deprecated. Use main_parallel() for parallel execution.")
+    print("[DEPRECATED] Running main_parallel() instead...")
+    main_parallel()
 
 
 if __name__ == "__main__":
-    main()
+    main_parallel()
