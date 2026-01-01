@@ -127,70 +127,60 @@ def git_stash_pop():
 # =============================================================================
 
 def run_claude_planning(slug: str, version: int, feedback_content: str = ""):
-    """Have Claude CLI create a versioned plan."""
+    """Have Claude CLI create a versioned plan (with codebase exploration)."""
     task_dir = TASKS_IN_PROGRESS / slug
-    plan_file = task_dir / f"plan-v{version}.md"
-
-    ticket_content = (task_dir / "ticket.md").read_text()
+    plan_file = f"plan-v{version}.md"
 
     if version == 1:
-        prompt = f"""Create a detailed implementation plan for this task.
+        prompt = f"""Create a detailed implementation plan for task: {slug}
 
-=== TICKET ===
-{ticket_content}
+Read the ticket at ./workspace/tasks/in-progress/{slug}/ticket.md
 
-=== YOUR TASK ===
-Create a plan with:
+Explore the codebase to understand:
+- Current implementation patterns
+- Files that will need modification
+- Testing patterns used
+
+Write a detailed plan to ./workspace/tasks/in-progress/{slug}/{plan_file} with:
 - Summary of what needs to be done
 - Step-by-step implementation approach
-- Files to modify
+- Specific files to modify (with paths)
 - Testing approach
 - Edge cases to handle
 
-Output ONLY the plan content in markdown, no preamble."""
+Then stop."""
     else:
-        prev_plan = (task_dir / f"plan-v{version - 1}.md").read_text() if (task_dir / f"plan-v{version - 1}.md").exists() else ""
-        prompt = f"""Revise this implementation plan based on the feedback. This is revision {version}/3.
+        prompt = f"""Revise the implementation plan for task: {slug}. This is revision {version}/3.
 
-=== TICKET ===
-{ticket_content}
+Read:
+- ./workspace/tasks/in-progress/{slug}/ticket.md (the task)
+- ./workspace/tasks/in-progress/{slug}/plan-v{version - 1}.md (previous plan)
+- ./workspace/tasks/in-progress/{slug}/feedback-{version - 1}.md (feedback to address)
 
-=== PREVIOUS PLAN (v{version - 1}) ===
-{prev_plan}
+Create an improved plan at ./workspace/tasks/in-progress/{slug}/{plan_file}
+Address the feedback while keeping what works well.
 
-=== FEEDBACK ===
-{feedback_content}
+Then stop."""
 
-=== YOUR TASK ===
-Create an improved plan addressing the feedback while keeping what works well.
-Output ONLY the revised plan content in markdown, no preamble."""
+    print(f"[PLANNING] Claude creating {plan_file} for {slug}")
 
-    print(f"[PLANNING] Claude creating plan-v{version}.md for {slug}")
-
+    # Run Claude with file access (not -p mode), pipe prompt via stdin
     result = subprocess.run(
-        ["claude", "-p", prompt],
+        ["claude", "--dangerously-skip-permissions"],
+        input=prompt,
         capture_output=True,
         text=True,
         check=False
     )
 
-    # Claude CLI may output to stdout or stderr depending on mode
-    output = result.stdout.strip() or result.stderr.strip()
+    if result.returncode != 0:
+        print(f"[PLANNING] Claude exited with code {result.returncode}")
+        if result.stderr:
+            print(f"[PLANNING] stderr: {result.stderr[:500]}")
 
-    if output:
-        plan_file.write_text(output)
-        print(f"[PLANNING] Plan written to {plan_file}")
-    else:
-        print(f"[PLANNING] ERROR: No output from Claude CLI")
-        print(f"[PLANNING] stdout: {result.stdout[:200] if result.stdout else '(empty)'}")
-        print(f"[PLANNING] stderr: {result.stderr[:200] if result.stderr else '(empty)'}")
-        print(f"[PLANNING] returncode: {result.returncode}")
-        plan_file.write_text(f"# Plan v{version}\n\nNo plan generated - check logs.")
-        print(f"[PLANNING] Using placeholder")
-
-    # Commit the plan
+    # Commit the plan (Claude should have written it)
     run(["git", "add", str(task_dir)], check=False)
-    run(["git", "commit", "-m", f"plan {slug}: create plan-v{version}.md"], check=False)
+    run(["git", "commit", "-m", f"plan {slug}: create {plan_file}"], check=False)
 
 
 def run_codex_review(slug: str, iteration: int):
