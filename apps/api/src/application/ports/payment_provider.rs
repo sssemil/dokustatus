@@ -242,7 +242,14 @@ pub trait PaymentProviderPort: Send + Sync {
         domain_id: Uuid,
     ) -> AppResult<CustomerId>;
 
-    /// Get customer information by ID
+    /// Get customer information by ID from the payment provider.
+    ///
+    /// # Provider Behavior
+    /// - **Stripe**: Queries the Stripe API for customer data
+    /// - **Dummy**: Returns `None` - customer data is in the local database only
+    /// - **Coinbase**: Not yet implemented
+    ///
+    /// For dummy provider, customer data is only available in the local database.
     async fn get_customer(&self, customer_id: &CustomerId) -> AppResult<Option<CustomerInfo>>;
 
     // ========================================================================
@@ -277,7 +284,18 @@ pub trait PaymentProviderPort: Send + Sync {
     // Subscription Lifecycle
     // ========================================================================
 
-    /// Get subscription information
+    /// Get subscription information from the payment provider.
+    ///
+    /// # Provider Behavior
+    /// - **Stripe**: Queries the Stripe API for current subscription state
+    /// - **Dummy**: Returns `None` - subscription state is in the local database only
+    /// - **Coinbase**: Not yet implemented (returns `ProviderNotSupported` from factory)
+    ///
+    /// # Return Value
+    /// - `Some(info)` - Subscription found in external provider
+    /// - `None` - Subscription not found or provider doesn't support external lookup
+    ///
+    /// For dummy provider, callers should use `UserSubscriptionRepo` to read subscription state.
     async fn get_subscription(
         &self,
         subscription_id: &SubscriptionId,

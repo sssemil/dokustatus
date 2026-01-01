@@ -1,6 +1,18 @@
+//! # Dummy Payment Client
+//!
+//! A payment provider implementation for local development and testing.
+//!
+//! ## Lookup Behavior
+//!
+//! Unlike external providers (Stripe), the dummy provider does **not** support
+//! external lookups. The following methods return `None`:
+//! - `get_subscription()` - Use `UserSubscriptionRepo` instead
+//! - `get_customer()` - Customer data is database-only
+//!
+//! This is intentional: dummy subscriptions/customers are created inline and
+//! persisted to the local database. The database is the source of truth.
 use async_trait::async_trait;
 use chrono::{DateTime, Duration, Utc};
-use std::collections::HashMap;
 use uuid::Uuid;
 
 use crate::{
@@ -151,18 +163,9 @@ impl PaymentProviderPort for DummyPaymentClient {
         Ok(customer_id)
     }
 
-    async fn get_customer(&self, customer_id: &CustomerId) -> AppResult<Option<CustomerInfo>> {
-        // For dummy provider, we can't look up stored customers
-        // Just return basic info based on the customer ID
-        if customer_id.as_str().starts_with("dummy_cus_") {
-            Ok(Some(CustomerInfo {
-                customer_id: customer_id.clone(),
-                email: None,
-                metadata: HashMap::new(),
-            }))
-        } else {
-            Ok(None)
-        }
+    async fn get_customer(&self, _customer_id: &CustomerId) -> AppResult<Option<CustomerInfo>> {
+        tracing::trace!("Dummy provider: get_customer not supported, use database");
+        Ok(None)
     }
 
     // ========================================================================
@@ -300,28 +303,10 @@ impl PaymentProviderPort for DummyPaymentClient {
 
     async fn get_subscription(
         &self,
-        subscription_id: &SubscriptionId,
+        _subscription_id: &SubscriptionId,
     ) -> AppResult<Option<SubscriptionInfo>> {
-        // Dummy provider can't look up stored subscriptions
-        // This would need to be handled by the database
-        if subscription_id.as_str().starts_with("dummy_sub_") {
-            let now = Utc::now();
-            Ok(Some(SubscriptionInfo {
-                subscription_id: subscription_id.clone(),
-                customer_id: CustomerId::new("dummy_cus_unknown"),
-                status: SubscriptionStatus::Active,
-                current_period_start: Some(now),
-                current_period_end: Some(now + Duration::days(30)),
-                trial_start: None,
-                trial_end: None,
-                cancel_at_period_end: false,
-                canceled_at: None,
-                price_id: None,
-                subscription_item_id: None,
-            }))
-        } else {
-            Ok(None)
-        }
+        tracing::trace!("Dummy provider: get_subscription not supported, use database");
+        Ok(None)
     }
 
     async fn cancel_subscription(
@@ -505,6 +490,30 @@ mod tests {
             .unwrap();
 
         assert!(customer_id.as_str().starts_with("dummy_cus_"));
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_returns_none() {
+        let client = DummyPaymentClient::new(Uuid::new_v4());
+
+        let result = client
+            .get_subscription(&SubscriptionId::new("dummy_sub_test"))
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_customer_returns_none() {
+        let client = DummyPaymentClient::new(Uuid::new_v4());
+
+        let result = client
+            .get_customer(&CustomerId::new("dummy_cus_test"))
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
     }
 
     #[tokio::test]
