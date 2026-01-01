@@ -126,21 +126,23 @@ def git_stash_pop():
 # Planning Phase Functions
 # =============================================================================
 
-def run_codex_planning(slug: str):
-    """Have codex create the initial plan.md."""
+def run_codex_planning(slug: str, version: int):
+    """Have codex create a versioned plan."""
     task_dir = TASKS_IN_PROGRESS / slug
+    plan_file = f"plan-v{version}.md"
+
     prompt = f"""Read ./workspace/tasks/in-progress/{slug}/ticket.md
 
-Create a detailed plan.md in the same directory with:
+Create a detailed implementation plan with:
 - Summary of what needs to be done
 - Step-by-step implementation approach
 - Files to modify
 - Testing approach
 - Edge cases to handle
 
-Write the plan to ./workspace/tasks/in-progress/{slug}/plan.md, then EXIT."""
+Write the plan to ./workspace/tasks/in-progress/{slug}/{plan_file}, then EXIT."""
 
-    print(f"[PLANNING] Codex creating initial plan for {slug}")
+    print(f"[PLANNING] Codex creating {plan_file} for {slug}")
     run([
         "codex", "exec",
         "--dangerously-bypass-approvals-and-sandbox",
@@ -148,19 +150,26 @@ Write the plan to ./workspace/tasks/in-progress/{slug}/plan.md, then EXIT."""
         prompt
     ], check=False)
 
+    # Commit the plan
+    run(["git", "add", str(task_dir)], check=False)
+    run(["git", "commit", "-m", f"plan {slug}: create {plan_file}"], check=False)
+
 
 def run_claude_review(slug: str, iteration: int):
-    """Have Claude CLI review the plan and write feedback."""
+    """Have Claude CLI review the plan and write versioned feedback."""
     task_dir = TASKS_IN_PROGRESS / slug
+    plan_file = task_dir / f"plan-v{iteration}.md"
+    feedback_file = task_dir / f"feedback-{iteration}.md"
+
     ticket_content = (task_dir / "ticket.md").read_text()
-    plan_content = (task_dir / "plan.md").read_text()
+    plan_content = plan_file.read_text() if plan_file.exists() else ""
 
     prompt = f"""Review this implementation plan. This is review iteration {iteration}/3.
 
 === TICKET ===
 {ticket_content}
 
-=== PLAN ===
+=== PLAN (v{iteration}) ===
 {plan_content}
 
 === YOUR TASK ===
@@ -173,9 +182,8 @@ Provide feedback with:
 Be specific and actionable. Focus on catching issues before implementation.
 Output ONLY the feedback content, no preamble."""
 
-    print(f"[PLANNING] Claude reviewing plan for {slug} (iteration {iteration}/3)")
+    print(f"[PLANNING] Claude reviewing plan-v{iteration}.md for {slug}")
 
-    # Capture Claude's output and write to feedback.md
     result = subprocess.run(
         ["claude", "-p", prompt, "--no-input"],
         capture_output=True,
@@ -183,28 +191,34 @@ Output ONLY the feedback content, no preamble."""
         check=False
     )
 
-    feedback_file = task_dir / "feedback.md"
     if result.stdout.strip():
         feedback_file.write_text(f"# Feedback - Iteration {iteration}/3\n\n{result.stdout.strip()}")
         print(f"[PLANNING] Feedback written to {feedback_file}")
     else:
-        # Fallback if no stdout
         feedback_file.write_text(f"# Feedback - Iteration {iteration}/3\n\nNo specific feedback. Plan looks acceptable.")
         print(f"[PLANNING] No feedback captured, using default")
+
+    # Commit the feedback
+    run(["git", "add", str(task_dir)], check=False)
+    run(["git", "commit", "-m", f"plan {slug}: feedback-{iteration}"], check=False)
 
 
 def run_codex_revise(slug: str, iteration: int):
     """Have codex revise the plan based on Claude's feedback."""
     task_dir = TASKS_IN_PROGRESS / slug
+    current_plan = f"plan-v{iteration}.md"
+    next_plan = f"plan-v{iteration + 1}.md"
+    feedback = f"feedback-{iteration}.md"
+
     prompt = f"""This is plan revision {iteration}/3 for task: {slug}
 
-Read the feedback at ./workspace/tasks/in-progress/{slug}/feedback.md
-Update ./workspace/tasks/in-progress/{slug}/plan.md to address the feedback.
+Read the feedback at ./workspace/tasks/in-progress/{slug}/{feedback}
+Create an improved plan at ./workspace/tasks/in-progress/{slug}/{next_plan}
 
-Keep what's working, improve what was criticized.
+Address the feedback while keeping what works well.
 Then EXIT."""
 
-    print(f"[PLANNING] Codex revising plan for {slug} (iteration {iteration}/3)")
+    print(f"[PLANNING] Codex creating {next_plan} based on {feedback}")
     run([
         "codex", "exec",
         "--dangerously-bypass-approvals-and-sandbox",
@@ -212,14 +226,23 @@ Then EXIT."""
         prompt
     ], check=False)
 
+    # Commit the revised plan
+    run(["git", "add", str(task_dir)], check=False)
+    run(["git", "commit", "-m", f"plan {slug}: create {next_plan}"], check=False)
+
 
 def run_planning_phase(slug: str) -> bool:
     """
     Run the planning review loop.
     Returns True when planning is complete (3 iterations done).
+
+    Iteration flow:
+    - iteration 0: create plan-v1.md
+    - iteration 1: review plan-v1 → feedback-1, revise → plan-v2.md
+    - iteration 2: review plan-v2 → feedback-2, revise → plan-v3.md
+    - iteration 3: review plan-v3 → feedback-3 (final review), copy plan-v3 → plan.md
     """
     task_dir = TASKS_IN_PROGRESS / slug
-    plan_file = task_dir / "plan.md"
     planning_state = SESSIONS_DIR / f"{slug}.planning"
 
     # Get current iteration (0 = not started, 1-3 = in progress)
@@ -232,22 +255,39 @@ def run_planning_phase(slug: str) -> bool:
 
     print(f"[PLANNING] Task {slug} at iteration {iteration}/3")
 
-    # Planning complete after 3 iterations
-    if iteration >= 3:
+    # Iteration 0: Codex creates initial plan-v1
+    if iteration == 0:
+        plan_v1 = task_dir / "plan-v1.md"
+        if not plan_v1.exists():
+            run_codex_planning(slug, version=1)
+        planning_state.write_text("1")
+        return False
+
+    # Iterations 1-3: Claude reviews current plan, Codex revises (except final)
+    if iteration < 3:
+        # Review current plan version (iteration matches plan version)
+        run_claude_review(slug, iteration)
+        # Revise: creates plan-v{iteration+1} from feedback
+        run_codex_revise(slug, iteration)
+        planning_state.write_text(str(iteration + 1))
+        return False
+
+    # Iteration 3: Final review of plan-v3, then copy to plan.md
+    if iteration == 3:
+        run_claude_review(slug, 3)  # Final feedback-3
+
+        # Copy plan-v3.md to plan.md for execution
+        plan_v3 = task_dir / "plan-v3.md"
+        plan_final = task_dir / "plan.md"
+        if plan_v3.exists():
+            plan_final.write_text(plan_v3.read_text())
+            run(["git", "add", str(plan_final)], check=False)
+            run(["git", "commit", "-m", f"plan {slug}: finalize plan.md from plan-v3"], check=False)
+
         print(f"[PLANNING] Complete for {slug}")
         planning_state.unlink(missing_ok=True)
         return True
 
-    # Iteration 0: Codex creates initial plan
-    if iteration == 0 or not plan_file.exists():
-        run_codex_planning(slug)
-        planning_state.write_text("1")
-        return False
-
-    # Iterations 1-3: Claude reviews, Codex revises
-    run_claude_review(slug, iteration)
-    run_codex_revise(slug, iteration)
-    planning_state.write_text(str(iteration + 1))
     return False
 
 
@@ -478,18 +518,21 @@ def is_task_in_planning(slug: str) -> bool:
 
 
 def is_planning_complete(slug: str) -> bool:
-    """Check if planning is complete (iteration >= 3 or no planning file and plan.md exists)."""
+    """Check if planning is complete (plan.md exists, which is copied from plan-v3)."""
     planning_file = SESSIONS_DIR / f"{slug}.planning"
-    plan_file = TASKS_IN_PROGRESS / slug / "plan.md"
+    task_dir = TASKS_IN_PROGRESS / slug
+    plan_final = task_dir / "plan.md"
 
     if not planning_file.exists():
         # No planning file means either not started or complete
-        # Complete if plan.md exists
-        return plan_file.exists()
+        # Complete if final plan.md exists
+        return plan_final.exists()
 
+    # If planning file exists, check iteration
     try:
         iteration = int(planning_file.read_text().strip())
-        return iteration >= 3
+        # Complete only after iteration 3 finishes and plan.md is created
+        return iteration > 3 and plan_final.exists()
     except ValueError:
         return False
 

@@ -53,3 +53,11 @@ infra/secrets/*
 !infra/secrets/.gitkeep
 infra/images/
 infra/images.*/
+
+# Agent loop runtime state
+workspace/sessions/
+workspace/logs/
+
+# Python
+__pycache__/
+*.pyc
