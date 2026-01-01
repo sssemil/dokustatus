@@ -76,6 +76,7 @@ class ActiveTask:
 class ParallelTaskManager:
     """Manages multiple concurrent tasks."""
     max_tasks: int = DEFAULT_MAX_CONCURRENT_TASKS
+    priority_tasks: list[str] = field(default_factory=list)  # Tasks to run first, then regular order
     active_tasks: dict[str, ActiveTask] = field(default_factory=dict)
     merge_queue: list[str] = field(default_factory=list)
 
@@ -1073,9 +1074,10 @@ def advance_planning_tasks(manager: ParallelTaskManager):
 def start_new_task_if_available(manager: ParallelTaskManager):
     """Pick next tasks from todo and start them in worktrees until capacity is full."""
     active_slugs = set(manager.active_tasks.keys())
+    priority = manager.priority_tasks if manager.priority_tasks else None
 
     while manager.can_start_new_task():
-        next_task_dir = pick_next_task(skip_slugs=active_slugs)
+        next_task_dir = pick_next_task(skip_slugs=active_slugs, priority_tasks=priority)
         if next_task_dir is None:
             return
 
@@ -1118,15 +1120,49 @@ def session_file_for(slug: str) -> Path:
     return SESSIONS_DIR / f"{slug}.session"
 
 
-def pick_next_task(skip_slugs: set[str] | None = None) -> Path | None:
-    """Get the next task directory from todo, sorted by name."""
+def match_task_filter(slug: str, filters: list[str]) -> bool:
+    """Check if a task slug matches any of the filter patterns.
+
+    Filters can be:
+    - Full slug: "0005-transactional-domain-delete"
+    - Task number prefix: "0005" or just "5"
+    """
+    for f in filters:
+        # Normalize: "5" -> "0005", "05" -> "0005"
+        if f.isdigit():
+            f = f.zfill(4)
+        if slug == f or slug.startswith(f"{f}-"):
+            return True
+    return False
+
+
+def pick_next_task(skip_slugs: set[str] | None = None, priority_tasks: list[str] | None = None) -> Path | None:
+    """Get the next task directory from todo.
+
+    If priority_tasks is specified, picks from those first (in given order),
+    then falls back to regular sorted order for remaining tasks.
+    """
     skip_slugs = skip_slugs or set()
-    # Look for directories containing ticket.md
-    task_dirs = sorted([
+
+    # Get all available tasks
+    all_task_dirs = [
         d for d in TASKS_TODO.iterdir()
         if d.is_dir() and (d / "ticket.md").exists() and d.name not in skip_slugs
-    ])
-    return task_dirs[0] if task_dirs else None
+    ]
+
+    if not all_task_dirs:
+        return None
+
+    # If priority tasks specified, try those first in order
+    if priority_tasks:
+        for prio in priority_tasks:
+            for d in all_task_dirs:
+                if match_task_filter(d.name, [prio]):
+                    return d
+
+    # Fall back to regular sorted order
+    all_task_dirs.sort(key=lambda d: d.name)
+    return all_task_dirs[0] if all_task_dirs else None
 
 
 def current_in_progress_count() -> int:
@@ -1807,6 +1843,12 @@ def parse_args():
         metavar="N",
         help=f"Maximum concurrent tasks (default: {DEFAULT_MAX_CONCURRENT_TASKS})"
     )
+    parser.add_argument(
+        "tasks",
+        nargs="*",
+        metavar="TASK",
+        help="Priority task numbers to run first (e.g., 5 6 20), then continues with regular order"
+    )
     return parser.parse_args()
 
 
@@ -1822,8 +1864,8 @@ def main_parallel():
     # Check for stale merge lock from previous crash
     check_stale_merge_lock()
 
-    # Create task manager with configured max tasks
-    manager = ParallelTaskManager(max_tasks=args.max_jobs)
+    # Create task manager with configured max tasks and priority tasks
+    manager = ParallelTaskManager(max_tasks=args.max_jobs, priority_tasks=args.tasks)
 
     # Setup signal handlers for graceful shutdown
     setup_signal_handlers(manager)
@@ -1841,6 +1883,8 @@ def main_parallel():
             start_task_execution_async(task)
 
     print(f"[STARTUP] Parallel agent loop started (max {manager.max_tasks} concurrent tasks)")
+    if manager.priority_tasks:
+        print(f"[STARTUP] Priority tasks: {', '.join(manager.priority_tasks)}")
     print(f"[STARTUP] Worktrees location: {WORKTREES_ROOT.resolve()}")
 
     while True:
@@ -1875,7 +1919,8 @@ def main_parallel():
                 status = "running" if task.is_alive else "idle"
                 print(f"  [{task.slug}] {task.phase.value} ({status})")
 
-        if not manager.active_tasks and not pick_next_task(skip_slugs=set()):
+        priority = manager.priority_tasks if manager.priority_tasks else None
+        if not manager.active_tasks and not pick_next_task(skip_slugs=set(), priority_tasks=priority):
             print("Idle — no tasks")
 
         time.sleep(5)  # Poll every 5 seconds
