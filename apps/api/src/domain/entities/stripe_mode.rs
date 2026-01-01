@@ -66,7 +66,10 @@ impl std::str::FromStr for StripeMode {
         match s.to_lowercase().as_str() {
             "test" => Ok(StripeMode::Test),
             "live" => Ok(StripeMode::Live),
-            _ => Err(format!("Invalid stripe mode: {}. Must be 'test' or 'live'", s)),
+            _ => Err(format!(
+                "Invalid stripe mode: {}. Must be 'test' or 'live'",
+                s
+            )),
         }
     }
 }
@@ -77,13 +80,31 @@ mod tests {
 
     #[test]
     fn test_from_key_prefix() {
-        assert_eq!(StripeMode::from_key_prefix("sk_test_abc123"), StripeMode::Test);
-        assert_eq!(StripeMode::from_key_prefix("pk_test_abc123"), StripeMode::Test);
-        assert_eq!(StripeMode::from_key_prefix("sk_live_abc123"), StripeMode::Live);
-        assert_eq!(StripeMode::from_key_prefix("pk_live_abc123"), StripeMode::Live);
+        assert_eq!(
+            StripeMode::from_key_prefix("sk_test_abc123"),
+            StripeMode::Test
+        );
+        assert_eq!(
+            StripeMode::from_key_prefix("pk_test_abc123"),
+            StripeMode::Test
+        );
+        assert_eq!(
+            StripeMode::from_key_prefix("sk_live_abc123"),
+            StripeMode::Live
+        );
+        assert_eq!(
+            StripeMode::from_key_prefix("pk_live_abc123"),
+            StripeMode::Live
+        );
         // Restricted keys follow live/test prefixes
-        assert_eq!(StripeMode::from_key_prefix("rk_test_abc123"), StripeMode::Test);
-        assert_eq!(StripeMode::from_key_prefix("rk_live_abc123"), StripeMode::Live);
+        assert_eq!(
+            StripeMode::from_key_prefix("rk_test_abc123"),
+            StripeMode::Test
+        );
+        assert_eq!(
+            StripeMode::from_key_prefix("rk_live_abc123"),
+            StripeMode::Live
+        );
     }
 
     #[test]
@@ -91,12 +112,40 @@ mod tests {
         let test_mode = StripeMode::Test;
         let live_mode = StripeMode::Live;
 
-        assert!(test_mode.validate_key_prefix("sk_test_abc", "secret_key").is_ok());
-        assert!(test_mode.validate_key_prefix("sk_live_abc", "secret_key").is_err());
-        assert!(test_mode.validate_key_prefix("rk_test_abc", "secret_key").is_ok());
-        assert!(test_mode.validate_key_prefix("rk_live_abc", "secret_key").is_err());
-        assert!(live_mode.validate_key_prefix("sk_live_abc", "secret_key").is_ok());
-        assert!(live_mode.validate_key_prefix("sk_test_abc", "secret_key").is_err());
-        assert!(live_mode.validate_key_prefix("rk_live_abc", "secret_key").is_ok());
+        assert!(
+            test_mode
+                .validate_key_prefix("sk_test_abc", "secret_key")
+                .is_ok()
+        );
+        assert!(
+            test_mode
+                .validate_key_prefix("sk_live_abc", "secret_key")
+                .is_err()
+        );
+        assert!(
+            test_mode
+                .validate_key_prefix("rk_test_abc", "secret_key")
+                .is_ok()
+        );
+        assert!(
+            test_mode
+                .validate_key_prefix("rk_live_abc", "secret_key")
+                .is_err()
+        );
+        assert!(
+            live_mode
+                .validate_key_prefix("sk_live_abc", "secret_key")
+                .is_ok()
+        );
+        assert!(
+            live_mode
+                .validate_key_prefix("sk_test_abc", "secret_key")
+                .is_err()
+        );
+        assert!(
+            live_mode
+                .validate_key_prefix("rk_live_abc", "secret_key")
+                .is_ok()
+        );
     }
 }

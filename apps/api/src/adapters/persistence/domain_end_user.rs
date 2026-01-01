@@ -9,11 +9,13 @@ use crate::{
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainEndUserProfile {
+    let id: uuid::Uuid = row.get("id");
     let roles_json: serde_json::Value = row.get("roles");
-    let roles: Vec<String> = serde_json::from_value(roles_json).unwrap_or_default();
+    let roles: Vec<String> =
+        super::parse_json_with_fallback(&roles_json, "roles", "domain_end_user", &id.to_string());
 
     DomainEndUserProfile {
-        id: row.get("id"),
+        id,
         domain_id: row.get("domain_id"),
         email: row.get("email"),
         roles,
@@ -258,7 +260,15 @@ impl DomainEndUserRepo for PostgresPersistence {
     }
 
     async fn set_roles(&self, id: Uuid, roles: &[String]) -> AppResult<()> {
-        let roles_json = serde_json::to_value(roles).unwrap_or_default();
+        let roles_json = serde_json::to_value(roles).map_err(|err| {
+            tracing::error!(
+                error = %err,
+                roles_count = roles.len(),
+                entity_id = %id,
+                "Failed to serialize roles to JSON - this indicates a bug"
+            );
+            AppError::Internal("Failed to serialize roles".into())
+        })?;
         sqlx::query(
             "UPDATE domain_end_users SET roles = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
         )

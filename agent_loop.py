@@ -4,7 +4,65 @@
 # dependencies = []
 # ///
 """
-Agent loop that manages codex tasks through todo -> in-progress -> outbound -> done workflow.
+Agent loop that manages parallel task execution via git worktrees.
+
+ARCHITECTURE OVERVIEW
+=====================
+
+Task Lifecycle:
+  todo/ -> in-progress/ -> outbound/ -> done/
+
+Each task runs in its own git worktree at ../worktrees/task-{slug}/ for isolation.
+
+Phases per task:
+  1. PLANNING  - Iterative planning with alternating agents:
+       - Claude plan-v1 → Codex/Claude feedback-1
+       - Claude plan-v2 → Codex/Claude feedback-2
+       - Claude plan-v3 → Codex/Claude feedback-3 → plan.md (finalize)
+  2. EXECUTING - Codex/Claude executes the finalized plan
+  3. OUTBOUND  - Execution complete, queued for merge
+  4. MERGING   - Claude agent rebases, resolves conflicts → squash merge → cleanup
+
+Artifacts created in {task_dir}/:
+  - plan-v1.md, plan-v2.md, plan-v3.md, plan.md  (plans)
+  - feedback-1.md, feedback-2.md, feedback-3.md  (reviews)
+  - agent_logs/claude-plan-v*.log                (planning logs)
+  - agent_logs/{codex,claude}-review-*.log       (review logs)
+  - agent_logs/{codex,claude}-exec-*.log         (execution logs)
+  - agent_logs/claude-merge-*.log                (merge logs)
+
+Rate Limit Fallback:
+  - If Codex hits usage_limit_reached, task switches to Claude for remaining work
+  - codex_rate_limited flag persists in .task-state across restarts
+  - Affects both reviews (planning phase) and execution
+
+Parallel Execution:
+  - Up to N concurrent tasks (default 3, configurable via -j)
+  - Priority queue consumed as slots open (./agent_loop.py 5 6 runs those first)
+  - First-wins merge: tasks race, first to OUTBOUND merges first
+  - fcntl exclusive lock prevents concurrent merges
+
+Branch Handling on worktree creation:
+  - No branch exists        → create from main
+  - Branch at main          → reset to latest main
+  - Branch ahead, no exec   → reset to main (incomplete planning)
+  - Branch ahead, has exec  → continue work (preserve progress)
+
+State & Locking Files:
+  - .task-state             Task phase/iteration for crash recovery
+  - .merge.lock             fcntl exclusive lock during merge
+  - .merge-requested        Sentinel for merge freeze protocol
+  - .needs-manual-rebase    Flag when rebase needs human intervention
+
+Error Handling:
+  - Crashed subprocesses auto-restart
+  - Stale locks from dead processes are detected and cleaned
+  - Rebase conflicts trigger manual intervention mode
+
+Usage:
+  ./agent_loop.py                 # default 3 concurrent
+  ./agent_loop.py -j 5            # 5 concurrent tasks
+  ./agent_loop.py -j 3 22 21 5    # priority queue: run 22, 21, 5 first
 """
 
 import argparse
@@ -59,6 +117,7 @@ class ActiveTask:
     planning_iteration: int = 0
     log_handle: Optional[object] = field(default=None, repr=False)
     output_thread: Optional[threading.Thread] = field(default=None, repr=False)
+    codex_rate_limited: bool = False  # Fallback to Claude for all Codex operations
 
     @property
     def is_alive(self) -> bool:
@@ -147,7 +206,12 @@ def create_worktree(slug: str) -> Optional[Path]:
     """
     Create a git worktree for a task.
     Returns the worktree path or None on failure.
+
+    If branch already exists with commits, continues from that state.
+    If branch doesn't exist, creates it from main.
     """
+    import shutil
+
     slug = sanitize_slug(slug)
     branch = f"task/{slug}"
     worktree_path = (WORKTREES_ROOT / f"task-{slug}").resolve()
@@ -155,13 +219,58 @@ def create_worktree(slug: str) -> Optional[Path]:
     # Ensure parent directory exists
     WORKTREES_ROOT.mkdir(parents=True, exist_ok=True)
 
-    # Remove stale worktree if exists
-    if worktree_path.exists():
-        print(f"[WORKTREE] Removing stale worktree: {worktree_path}")
-        cleanup_worktree(slug)
+    # Always prune stale worktree metadata first
+    subprocess.run(["git", "worktree", "prune"], capture_output=True, check=False)
 
-    # Create branch from main if it doesn't exist
-    if not git_branch_exists(branch):
+    # Remove stale worktree directory if exists
+    if worktree_path.exists():
+        print(f"[WORKTREE] Removing stale worktree dir: {worktree_path}")
+        # Try git remove first
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)],
+            capture_output=True, check=False
+        )
+        # Fallback to rm if still exists
+        if worktree_path.exists():
+            shutil.rmtree(worktree_path, ignore_errors=True)
+        subprocess.run(["git", "worktree", "prune"], capture_output=True, check=False)
+
+    # Check if branch exists
+    branch_exists = git_branch_exists(branch)
+
+    if branch_exists:
+        # Check if branch has commits ahead of main
+        ahead = subprocess.run(
+            ["git", "rev-list", "--count", f"main..{branch}"],
+            capture_output=True, text=True, check=False
+        )
+        ahead_count = int(ahead.stdout.strip()) if ahead.returncode == 0 else 0
+
+        if ahead_count > 0:
+            # Check if planning was completed by looking for execution logs
+            exec_log_path = f"workspace/tasks/in-progress/{slug}/agent_logs/claude-execute.log"
+            has_exec_log = subprocess.run(
+                ["git", "cat-file", "-e", f"{branch}:{exec_log_path}"],
+                capture_output=True, check=False
+            ).returncode == 0
+
+            if has_exec_log:
+                print(f"[WORKTREE] Branch {branch} has execution in progress, continuing work")
+            else:
+                # Planning not completed - nuke and start fresh
+                print(f"[WORKTREE] Branch {branch} has incomplete planning ({ahead_count} commits), resetting to main")
+                subprocess.run(
+                    ["git", "branch", "-f", branch, "main"],
+                    capture_output=True, check=False
+                )
+        else:
+            print(f"[WORKTREE] Branch {branch} exists at main, resetting to latest main")
+            subprocess.run(
+                ["git", "branch", "-f", branch, "main"],
+                capture_output=True, check=False
+            )
+    else:
+        # Create branch from main
         result = subprocess.run(
             ["git", "branch", branch, "main"],
             capture_output=True, check=False
@@ -169,6 +278,7 @@ def create_worktree(slug: str) -> Optional[Path]:
         if result.returncode != 0:
             print(f"[WORKTREE] Failed to create branch {branch}")
             return None
+        print(f"[WORKTREE] Created new branch {branch} from main")
 
     # Create the worktree
     result = subprocess.run(
@@ -381,21 +491,23 @@ def kill_task_subprocess(task: ActiveTask, timeout: int = 30):
 def persist_task_state(task: ActiveTask):
     """Write task state to worktree for crash recovery."""
     state_file = task.worktree_path / ".task-state"
-    state_file.write_text(f"{task.phase.value}\n{task.planning_iteration}\n")
+    rate_limited = "1" if task.codex_rate_limited else "0"
+    state_file.write_text(f"{task.phase.value}\n{task.planning_iteration}\n{rate_limited}\n")
 
 
-def load_task_state(worktree_path: Path) -> tuple[TaskPhase, int]:
-    """Load task state from worktree."""
+def load_task_state(worktree_path: Path) -> tuple[TaskPhase, int, bool]:
+    """Load task state from worktree. Returns (phase, iteration, codex_rate_limited)."""
     state_file = worktree_path / ".task-state"
     if state_file.exists():
         try:
             lines = state_file.read_text().strip().split("\n")
             phase = TaskPhase(lines[0]) if lines else TaskPhase.PLANNING
             iteration = int(lines[1]) if len(lines) > 1 else 0
-            return phase, iteration
+            rate_limited = lines[2] == "1" if len(lines) > 2 else False
+            return phase, iteration, rate_limited
         except (ValueError, IndexError):
             pass
-    return TaskPhase.PLANNING, 0
+    return TaskPhase.PLANNING, 0, False
 
 
 # =============================================================================
@@ -651,10 +763,17 @@ Then stop."""
     )
 
 
-def start_codex_review_async(task: ActiveTask, iteration: int) -> subprocess.Popen:
-    """Start Codex review in the task's worktree (non-blocking)."""
+def start_review_async(task: ActiveTask, iteration: int) -> subprocess.Popen:
+    """Start plan review in the task's worktree (non-blocking).
+
+    Uses Codex by default, falls back to Claude if Codex hit rate limit.
+    """
     log_dir = task.worktree_task_dir() / "agent_logs"
-    log_file = log_dir / f"codex-review-{iteration}.log"
+
+    # Determine which agent to use
+    use_claude = task.codex_rate_limited
+    agent_name = "claude" if use_claude else "codex"
+    log_file = log_dir / f"{agent_name}-review-{iteration}.log"
 
     prompt = f"""Review the implementation plan for task: {task.slug}
 
@@ -670,24 +789,65 @@ Write feedback to ./workspace/tasks/in-progress/{task.slug}/feedback-{iteration}
 Be specific and actionable. Focus on catching issues before implementation.
 Then EXIT."""
 
-    return start_agent_subprocess(
-        task=task,
-        cmd=[
+    if use_claude:
+        cmd = [
+            "claude", "-p", prompt,
+            "--allowedTools", "Edit,Write,Bash,Glob,Grep,Read",
+        ]
+        label = f"Claude review-{iteration} ({task.slug})"
+    else:
+        cmd = [
             "codex", "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "-C", ".",
             prompt
-        ],
+        ]
+        label = f"Codex review-{iteration} ({task.slug})"
+
+    return start_agent_subprocess(
+        task=task,
+        cmd=cmd,
         log_file=log_file,
-        label=f"Codex review-{iteration} ({task.slug})"
+        label=label,
+        input_text=prompt if use_claude else None
     )
 
 
+def check_codex_rate_limit(task: ActiveTask) -> bool:
+    """Check if any recent Codex log shows a rate limit error."""
+    log_dir = task.worktree_task_dir() / "agent_logs"
+    if not log_dir.exists():
+        return False
+
+    # Check both exec and review logs
+    exec_logs = list(log_dir.glob("codex-exec-*.log"))
+    review_logs = list(log_dir.glob("codex-review-*.log"))
+    all_logs = sorted(exec_logs + review_logs, key=lambda p: p.stat().st_mtime, reverse=True)
+
+    if not all_logs:
+        return False
+
+    # Check the most recent Codex log
+    latest_log = all_logs[0]
+    try:
+        content = latest_log.read_text()
+        return "usage_limit_reached" in content or "You've hit your usage limit" in content
+    except Exception:
+        return False
+
+
 def start_task_execution_async(task: ActiveTask) -> subprocess.Popen:
-    """Start Codex execution in the task's worktree (non-blocking)."""
+    """Start execution in the task's worktree (non-blocking).
+
+    Uses Codex by default, falls back to Claude if Codex hit rate limit.
+    """
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_dir = task.worktree_task_dir() / "agent_logs"
-    log_file = log_dir / f"codex-exec-{timestamp}.log"
+
+    # Determine which agent to use
+    use_claude = task.codex_rate_limited
+    agent_name = "claude" if use_claude else "codex"
+    log_file = log_dir / f"{agent_name}-exec-{timestamp}.log"
 
     prompt = f"""You are working on task: {task.slug}
 
@@ -727,16 +887,111 @@ Stay focused on this task."""
     task.phase = TaskPhase.EXECUTING
     persist_task_state(task)
 
-    return start_agent_subprocess(
-        task=task,
-        cmd=[
+    if use_claude:
+        # Use Claude Code for execution
+        cmd = [
+            "claude", "-p", prompt,
+            "--allowedTools", "Edit,Write,Bash,Glob,Grep,Read",
+        ]
+        label = f"Claude exec ({task.slug})"
+    else:
+        # Use Codex for execution
+        cmd = [
             "codex", "exec",
             "--dangerously-bypass-approvals-and-sandbox",
             "-C", ".",
             prompt
-        ],
+        ]
+        label = f"Codex exec ({task.slug})"
+
+    return start_agent_subprocess(
+        task=task,
+        cmd=cmd,
         log_file=log_file,
-        label=f"Codex exec ({task.slug})"
+        label=label
+    )
+
+
+def start_merge_agent_async(task: ActiveTask) -> subprocess.Popen:
+    """Start merge agent in the task's worktree (non-blocking).
+
+    Uses Claude by default for merges since it needs careful conflict resolution.
+    Falls back based on codex_rate_limited flag.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = task.worktree_task_dir() / "agent_logs"
+
+    # Always use Claude for merges - needs careful conflict resolution
+    use_claude = True
+    agent_name = "claude"
+    log_file = log_dir / f"{agent_name}-merge-{timestamp}.log"
+
+    prompt = f"""You are the MERGE AGENT for task: {task.slug}
+
+CONTEXT:
+- Task branch: {task.branch}
+- Worktree: {task.worktree_path}
+- Task completed and is in: ./workspace/tasks/outbound/{task.slug}/
+
+YOUR MISSION - Rebase this branch onto main and resolve any conflicts:
+
+STEP 1: Fetch and rebase
+```bash
+git fetch origin main
+git rebase origin/main
+```
+
+STEP 2: If conflicts occur during rebase:
+- Read the conflicting files to understand both sides
+- Resolve conflicts intelligently:
+  - Keep BOTH changes when they don't overlap
+  - For overlapping changes, understand the intent and merge logically
+  - Remove conflict markers (<<<<<<, =======, >>>>>>>)
+- Stage resolved files: git add <file>
+- Continue rebase: git rebase --continue
+- Repeat until rebase completes
+
+STEP 3: After successful rebase, signal completion:
+```bash
+# Move task to done
+mv ./workspace/tasks/outbound/{task.slug} ./workspace/tasks/done/{task.slug}
+
+# Commit the move
+git add -A
+git commit -m "merge {task.slug}: rebase complete, ready for squash"
+```
+
+STEP 4: EXIT the session
+
+IF CONFLICTS CANNOT BE RESOLVED:
+```bash
+git rebase --abort
+touch .needs-manual-rebase
+```
+Then EXIT - a human will need to resolve this.
+
+IMPORTANT RULES:
+- Work ONLY in this worktree
+- Do NOT push to origin
+- Do NOT merge to main yourself
+- The orchestrator handles the final squash merge after you succeed
+"""
+
+    task.phase = TaskPhase.MERGING
+    persist_task_state(task)
+
+    # Use Claude Code for merge (needs careful conflict resolution)
+    cmd = [
+        "claude", "-p", prompt,
+        "--allowedTools", "Edit,Write,Bash,Glob,Grep,Read",
+    ]
+    label = f"Claude merge ({task.slug})"
+
+    return start_agent_subprocess(
+        task=task,
+        cmd=cmd,
+        log_file=log_file,
+        label=label
     )
 
 
@@ -775,7 +1030,7 @@ def recover_existing_worktrees(manager: ParallelTaskManager):
             subprocess.run(["git", "-C", str(path), "rebase", "--abort"], check=False)
 
         # Load persisted state
-        phase, iteration = load_task_state(path)
+        phase, iteration, use_claude = load_task_state(path)
 
         # Override phase based on directory structure
         in_progress = path / "workspace" / "tasks" / "in-progress" / slug
@@ -793,7 +1048,8 @@ def recover_existing_worktrees(manager: ParallelTaskManager):
             worktree_path=path,
             branch=f"task/{slug}",
             phase=phase,
-            planning_iteration=iteration
+            planning_iteration=iteration,
+            codex_rate_limited=use_claude
         )
 
         manager.add_task(task)
@@ -826,6 +1082,104 @@ def setup_signal_handlers(manager: ParallelTaskManager):
 # =============================================================================
 # Merge Task from Worktree
 # =============================================================================
+
+def finalize_squash_merge(task: ActiveTask, manager: ParallelTaskManager) -> bool:
+    """
+    Finalize squash merge after merge agent has rebased successfully.
+    Agent already moved task to done/ and committed.
+    We just need to push, squash merge to main, and cleanup.
+    Returns True on success.
+    """
+    import shutil
+
+    # Acquire merge lock (only one merge at a time)
+    lock_fd = acquire_merge_lock()
+    if lock_fd is None:
+        print(f"[MERGE] Cannot acquire lock, another merge in progress")
+        return False
+
+    try:
+        # Push worktree branch
+        subprocess.run(
+            ["git", "-C", str(task.worktree_path), "push", "-u", "origin", task.branch, "--force"],
+            capture_output=True, check=False
+        )
+
+        # In main repo, perform squash merge
+        current = git_current_branch()
+        if current != "main":
+            run(["git", "switch", "main"], check=False)
+
+        # Ensure main is clean before merging
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True, text=True, check=False
+        )
+        if status.stdout.strip():
+            # Main has uncommitted changes or conflicts - abort any pending merge and reset
+            print(f"[MERGE] Main repo is dirty, aborting pending operations")
+            subprocess.run(["git", "merge", "--abort"], capture_output=True, check=False)
+            subprocess.run(["git", "rebase", "--abort"], capture_output=True, check=False)
+            subprocess.run(["git", "reset", "--hard", "HEAD"], capture_output=True, check=False)
+
+        run(["git", "fetch", "origin"], check=False)
+        run(["git", "pull", "--ff-only"], check=False)
+
+        # Get commits for message
+        commits = run_capture([
+            "git", "log", "--oneline", f"main..{task.branch}"
+        ], check=False)
+
+        # Squash merge
+        result = subprocess.run(
+            ["git", "merge", "--squash", task.branch],
+            capture_output=True, text=True, check=False
+        )
+
+        if result.returncode != 0:
+            print(f"[MERGE] Squash merge failed for {task.slug}: {result.stderr}")
+            subprocess.run(["git", "merge", "--abort"], check=False)
+            return False
+
+        # Copy done dir from worktree to main
+        worktree_done = task.worktree_path / "workspace" / "tasks" / "done" / task.slug
+        done_dir = TASKS_DONE / task.slug
+
+        if worktree_done.exists():
+            if done_dir.exists():
+                shutil.rmtree(done_dir)
+            shutil.copytree(str(worktree_done), str(done_dir))
+            run(["git", "add", str(done_dir)], check=False)
+
+        # Commit
+        commit_msg = f"complete task {task.slug}\n\nCommits:\n{commits}" if commits else f"complete task {task.slug}"
+        run(["git", "commit", "-m", commit_msg], check=False)
+
+        # Delete remote and local task branches
+        subprocess.run(["git", "push", "origin", "--delete", task.branch], capture_output=True, check=False)
+        subprocess.run(["git", "branch", "-D", task.branch], capture_output=True, check=False)
+
+        # Cleanup worktree
+        cleanup_worktree(task.slug)
+
+        # Cleanup session files
+        session_file = session_file_for(task.slug)
+        if session_file.exists():
+            session_file.unlink()
+        planning_file = SESSIONS_DIR / f"{task.slug}.planning"
+        if planning_file.exists():
+            planning_file.unlink()
+
+        # Remove from merge queue and task manager
+        if task.slug in manager.merge_queue:
+            manager.merge_queue.remove(task.slug)
+        manager.remove_task(task.slug)
+
+        return True
+
+    finally:
+        release_merge_lock(lock_fd)
+
 
 def merge_task_from_worktree(task: ActiveTask, manager: ParallelTaskManager) -> bool:
     """
@@ -969,7 +1323,7 @@ def check_completed_tasks(manager: ParallelTaskManager):
 
 
 def process_merge_queue(manager: ParallelTaskManager):
-    """Process one task from the merge queue."""
+    """Process one task from the merge queue - start merge agent if needed."""
     slug = manager.next_to_merge()
     if slug is None:
         return
@@ -984,16 +1338,19 @@ def process_merge_queue(manager: ParallelTaskManager):
         print(f"[MERGE] {slug} needs manual intervention, skipping")
         return
 
-    # Wait for subprocess to finish
+    # If already in MERGING phase, let handle_merging_tasks() handle it
+    if task.phase == TaskPhase.MERGING:
+        return
+
+    # Wait for execution subprocess to finish before starting merge
     if task.is_alive:
         print(f"[MERGE] Waiting for {slug} subprocess to finish...")
         request_merge_freeze(task)
         return
 
-    if merge_task_from_worktree(task, manager):
-        print(f"[MERGE] {slug} merged successfully")
-    else:
-        print(f"[MERGE] {slug} merge failed, will retry")
+    # Start merge agent (will set phase to MERGING)
+    print(f"[MERGE] Starting merge agent for {slug}")
+    start_merge_agent_async(task)
 
 
 def advance_planning_tasks(manager: ParallelTaskManager):
@@ -1002,6 +1359,12 @@ def advance_planning_tasks(manager: ParallelTaskManager):
         # If subprocess is still running, skip
         if task.is_alive:
             continue
+
+        # Check for Codex rate limit before retrying
+        if not task.codex_rate_limited and check_codex_rate_limit(task):
+            print(f"[PLANNING] Task {task.slug} hit Codex rate limit, switching to Claude")
+            task.codex_rate_limited = True
+            persist_task_state(task)
 
         # Check planning progress based on files
         task_dir = task.worktree_task_dir()
@@ -1033,7 +1396,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
             feedback_1 = task_dir / "feedback-1.md"
             plan_v2 = task_dir / "plan-v2.md"
             if not feedback_1.exists():
-                start_codex_review_async(task, iteration=1)
+                start_review_async(task, iteration=1)
             elif not plan_v2.exists():
                 start_claude_planning_async(task, version=2)
             else:
@@ -1044,7 +1407,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
             # Codex reviews plan-v2 → feedback-2, then Claude creates plan-v3
             feedback_2 = task_dir / "feedback-2.md"
             if not feedback_2.exists():
-                start_codex_review_async(task, iteration=2)
+                start_review_async(task, iteration=2)
             elif not plan_v3.exists():
                 start_claude_planning_async(task, version=3)
             else:
@@ -1054,7 +1417,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
         elif iteration >= 3:
             # Codex final review → feedback-3, then copy plan-v3 to plan.md
             if not feedback_3.exists():
-                start_codex_review_async(task, iteration=3)
+                start_review_async(task, iteration=3)
             elif plan_v3.exists() and not plan_final.exists():
                 # Copy plan-v3 to plan.md
                 plan_final.write_text(plan_v3.read_text())
@@ -1106,13 +1469,53 @@ def handle_execution_tasks(manager: ParallelTaskManager):
                 persist_task_state(task)
                 manager.queue_for_merge(task.slug)
             elif exit_code != 0:
-                # Task crashed - restart
-                print(f"[EXEC] Task {task.slug} crashed (exit {exit_code}), restarting...")
+                # Task crashed - check if it's a Codex rate limit
+                if not task.codex_rate_limited and check_codex_rate_limit(task):
+                    print(f"[EXEC] Task {task.slug} hit Codex rate limit, switching to Claude")
+                    task.codex_rate_limited = True
+                    persist_task_state(task)
+                else:
+                    print(f"[EXEC] Task {task.slug} crashed (exit {exit_code}), restarting...")
                 start_task_execution_async(task)
             else:
                 # Exited 0 but not complete - restart
                 print(f"[EXEC] Task {task.slug} exited but not complete, restarting...")
                 start_task_execution_async(task)
+
+
+def handle_merging_tasks(manager: ParallelTaskManager):
+    """Handle merging phase tasks - check if merge agent completed."""
+    for task in list(manager.get_tasks_in_phase(TaskPhase.MERGING)):
+        is_running, exit_code = check_task_subprocess(task)
+
+        if not is_running and exit_code is not None:
+            # Merge agent finished - check result
+            done_dir = task.worktree_path / "workspace" / "tasks" / "done" / task.slug
+            needs_manual = task.worktree_path / ".needs-manual-rebase"
+
+            if done_dir.exists() and (done_dir / "ticket.md").exists():
+                # Merge agent succeeded - do final squash merge
+                print(f"[MERGE] Task {task.slug} rebased successfully, doing final squash merge")
+                if finalize_squash_merge(task, manager):
+                    print(f"[MERGE] Task {task.slug} merged to main successfully")
+                else:
+                    print(f"[MERGE] Task {task.slug} squash merge failed, will retry")
+                    # Restart merge agent
+                    start_merge_agent_async(task)
+            elif needs_manual.exists():
+                # Agent couldn't resolve conflicts
+                print(f"[MERGE] Task {task.slug} needs manual conflict resolution")
+                # Remove from merge queue, keep in MERGING phase
+                if task.slug in manager.merge_queue:
+                    manager.merge_queue.remove(task.slug)
+            elif exit_code != 0:
+                # Merge agent crashed - restart
+                print(f"[MERGE] Task {task.slug} merge agent crashed (exit {exit_code}), restarting...")
+                start_merge_agent_async(task)
+            else:
+                # Exited 0 but not complete - restart
+                print(f"[MERGE] Task {task.slug} merge agent exited incomplete, restarting...")
+                start_merge_agent_async(task)
 
 
 def session_file_for(slug: str) -> Path:
@@ -1910,6 +2313,9 @@ def main_parallel():
 
         # PHASE 5: Handle execution tasks (restart if crashed)
         handle_execution_tasks(manager)
+
+        # PHASE 6: Handle merging tasks (check merge agent status)
+        handle_merging_tasks(manager)
 
         # Commit any housekeeping files in main repo
         # Only when no tasks are actively merging

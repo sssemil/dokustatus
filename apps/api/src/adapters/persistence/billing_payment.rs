@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 use chrono::NaiveDateTime;
-use sqlx::Row;
+use sqlx::postgres::Postgres;
+use sqlx::{QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::{
@@ -11,8 +12,8 @@ use crate::{
         PaginatedPayments, PaymentListFilters, PaymentSummary,
     },
     domain::entities::{
-        payment_mode::PaymentMode, payment_provider::PaymentProvider, payment_status::PaymentStatus,
-        stripe_mode::StripeMode,
+        payment_mode::PaymentMode, payment_provider::PaymentProvider,
+        payment_status::PaymentStatus, stripe_mode::StripeMode,
     },
 };
 
@@ -96,6 +97,39 @@ const SELECT_COLS: &str = r#"
     bp.failure_message, bp.invoice_created_at, bp.payment_date, bp.refunded_at,
     bp.created_at, bp.updated_at
 "#;
+
+/// Pushes payment filter conditions to a QueryBuilder.
+/// Caller must ensure builder already has base WHERE conditions.
+/// Expects table aliases: `bp` for billing_payments, `deu` for domain_end_users.
+fn push_payment_filters(builder: &mut QueryBuilder<'_, Postgres>, filters: &PaymentListFilters) {
+    if let Some(status) = &filters.status {
+        builder.push(" AND bp.status = ").push_bind(*status);
+    }
+    if let Some(date_from) = &filters.date_from {
+        builder
+            .push(" AND (bp.payment_date >= ")
+            .push_bind(*date_from);
+        builder.push(" OR bp.created_at >= ").push_bind(*date_from);
+        builder.push(")");
+    }
+    if let Some(date_to) = &filters.date_to {
+        builder
+            .push(" AND (bp.payment_date <= ")
+            .push_bind(*date_to);
+        builder.push(" OR bp.created_at <= ").push_bind(*date_to);
+        builder.push(")");
+    }
+    if let Some(plan_code) = &filters.plan_code {
+        builder
+            .push(" AND bp.plan_code = ")
+            .push_bind(plan_code.clone());
+    }
+    if let Some(user_email) = &filters.user_email {
+        builder
+            .push(" AND deu.email ILIKE ")
+            .push_bind(format!("%{}%", user_email));
+    }
+}
 
 #[async_trait]
 impl BillingPaymentRepo for PostgresPersistence {
@@ -222,7 +256,8 @@ impl BillingPaymentRepo for PostgresPersistence {
         .await
         .map_err(AppError::from)?;
 
-        let payments: Vec<BillingPaymentWithUser> = rows.into_iter().map(row_to_payment_with_user).collect();
+        let payments: Vec<BillingPaymentWithUser> =
+            rows.into_iter().map(row_to_payment_with_user).collect();
         let total_pages = ((total as f64) / (per_page as f64)).ceil() as i32;
 
         Ok(PaginatedPayments {
@@ -244,109 +279,45 @@ impl BillingPaymentRepo for PostgresPersistence {
     ) -> AppResult<PaginatedPayments> {
         let offset = (page - 1) * per_page;
 
-        // Build dynamic WHERE clause
-        let mut conditions: Vec<String> = vec![
-            "bp.domain_id = $1".to_string(),
-            "bp.stripe_mode = $2".to_string(),
-        ];
-        let mut param_count = 2;
-
-        if filters.status.is_some() {
-            param_count += 1;
-            conditions.push(format!("bp.status = ${}", param_count));
-        }
-        if filters.date_from.is_some() {
-            param_count += 1;
-            conditions.push(format!("(bp.payment_date >= ${} OR bp.created_at >= ${})", param_count, param_count));
-        }
-        if filters.date_to.is_some() {
-            param_count += 1;
-            conditions.push(format!("(bp.payment_date <= ${} OR bp.created_at <= ${})", param_count, param_count));
-        }
-        if filters.plan_code.is_some() {
-            param_count += 1;
-            conditions.push(format!("bp.plan_code = ${}", param_count));
-        }
-        if filters.user_email.is_some() {
-            param_count += 1;
-            conditions.push(format!("deu.email ILIKE ${}", param_count));
-        }
-
-        let where_clause = conditions.join(" AND ");
-
-        // Build and execute count query
-        let count_query = format!(
-            r#"
-            SELECT COUNT(*)
-            FROM billing_payments bp
-            JOIN domain_end_users deu ON bp.end_user_id = deu.id
-            WHERE {}
-            "#,
-            where_clause
+        // Count query
+        let mut count_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+            "SELECT COUNT(*) FROM billing_payments bp \
+             JOIN domain_end_users deu ON bp.end_user_id = deu.id \
+             WHERE bp.domain_id = ",
         );
+        count_builder.push_bind(domain_id);
+        count_builder.push(" AND bp.stripe_mode = ").push_bind(mode);
+        push_payment_filters(&mut count_builder, filters);
 
-        let mut count_q = sqlx::query_scalar::<_, i64>(&count_query)
-            .bind(domain_id)
-            .bind(mode);
+        let total: i64 = count_builder
+            .build_query_scalar()
+            .fetch_one(&self.pool)
+            .await
+            .map_err(AppError::from)?;
 
-        if let Some(status) = &filters.status {
-            count_q = count_q.bind(status);
-        }
-        if let Some(date_from) = &filters.date_from {
-            count_q = count_q.bind(date_from);
-        }
-        if let Some(date_to) = &filters.date_to {
-            count_q = count_q.bind(date_to);
-        }
-        if let Some(plan_code) = &filters.plan_code {
-            count_q = count_q.bind(plan_code);
-        }
-        if let Some(user_email) = &filters.user_email {
-            count_q = count_q.bind(format!("%{}%", user_email));
-        }
+        // Data query
+        let mut data_builder: QueryBuilder<Postgres> = QueryBuilder::new(format!(
+            "SELECT {}, deu.email as user_email \
+             FROM billing_payments bp \
+             JOIN domain_end_users deu ON bp.end_user_id = deu.id \
+             WHERE bp.domain_id = ",
+            SELECT_COLS
+        ));
+        data_builder.push_bind(domain_id);
+        data_builder.push(" AND bp.stripe_mode = ").push_bind(mode);
+        push_payment_filters(&mut data_builder, filters);
+        data_builder.push(" ORDER BY bp.payment_date DESC NULLS LAST, bp.created_at DESC");
+        data_builder.push(" LIMIT ").push_bind(per_page);
+        data_builder.push(" OFFSET ").push_bind(offset);
 
-        let total: i64 = count_q.fetch_one(&self.pool).await.map_err(AppError::from)?;
+        let rows = data_builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(AppError::from)?;
 
-        // Build and execute paginated query
-        let data_query = format!(
-            r#"
-            SELECT {}, deu.email as user_email
-            FROM billing_payments bp
-            JOIN domain_end_users deu ON bp.end_user_id = deu.id
-            WHERE {}
-            ORDER BY bp.payment_date DESC NULLS LAST, bp.created_at DESC
-            LIMIT ${} OFFSET ${}
-            "#,
-            SELECT_COLS,
-            where_clause,
-            param_count + 1,
-            param_count + 2
-        );
-
-        let mut data_q = sqlx::query(&data_query)
-            .bind(domain_id)
-            .bind(mode);
-
-        if let Some(status) = &filters.status {
-            data_q = data_q.bind(status);
-        }
-        if let Some(date_from) = &filters.date_from {
-            data_q = data_q.bind(date_from);
-        }
-        if let Some(date_to) = &filters.date_to {
-            data_q = data_q.bind(date_to);
-        }
-        if let Some(plan_code) = &filters.plan_code {
-            data_q = data_q.bind(plan_code);
-        }
-        if let Some(user_email) = &filters.user_email {
-            data_q = data_q.bind(format!("%{}%", user_email));
-        }
-
-        data_q = data_q.bind(per_page).bind(offset);
-
-        let rows = data_q.fetch_all(&self.pool).await.map_err(AppError::from)?;
-        let payments: Vec<BillingPaymentWithUser> = rows.into_iter().map(row_to_payment_with_user).collect();
+        let payments: Vec<BillingPaymentWithUser> =
+            rows.into_iter().map(row_to_payment_with_user).collect();
         let total_pages = ((total as f64) / (per_page as f64)).ceil() as i32;
 
         Ok(PaginatedPayments {
@@ -406,13 +377,12 @@ impl BillingPaymentRepo for PostgresPersistence {
 
         if result.rows_affected() == 0 {
             // Check if invoice exists to distinguish between "not found" and "blocked by terminal state"
-            let exists: Option<i64> = sqlx::query_scalar(
-                "SELECT 1 FROM billing_payments WHERE stripe_invoice_id = $1",
-            )
-            .bind(stripe_invoice_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(AppError::from)?;
+            let exists: Option<i64> =
+                sqlx::query_scalar("SELECT 1 FROM billing_payments WHERE stripe_invoice_id = $1")
+                    .bind(stripe_invoice_id)
+                    .fetch_optional(&self.pool)
+                    .await
+                    .map_err(AppError::from)?;
 
             if exists.is_some() {
                 tracing::debug!(
@@ -438,49 +408,36 @@ impl BillingPaymentRepo for PostgresPersistence {
         date_from: Option<NaiveDateTime>,
         date_to: Option<NaiveDateTime>,
     ) -> AppResult<PaymentSummary> {
-        let mut conditions: Vec<String> = vec![
-            "domain_id = $1".to_string(),
-            "stripe_mode = $2".to_string(),
-        ];
-        let mut param_count = 2;
-
-        if date_from.is_some() {
-            param_count += 1;
-            conditions.push(format!("(payment_date >= ${} OR created_at >= ${})", param_count, param_count));
-        }
-        if date_to.is_some() {
-            param_count += 1;
-            conditions.push(format!("(payment_date <= ${} OR created_at <= ${})", param_count, param_count));
-        }
-
-        let where_clause = conditions.join(" AND ");
-
-        let query = format!(
-            r#"
-            SELECT
-                COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_paid_cents ELSE 0 END), 0) as total_revenue_cents,
-                COALESCE(SUM(amount_refunded_cents), 0) as total_refunded_cents,
-                COUNT(*) as payment_count,
-                COUNT(*) FILTER (WHERE status = 'paid') as successful_payments,
-                COUNT(*) FILTER (WHERE status IN ('failed', 'uncollectible', 'void')) as failed_payments
-            FROM billing_payments
-            WHERE {}
-            "#,
-            where_clause
+        let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(
+            "SELECT \
+                COALESCE(SUM(CASE WHEN status = 'paid' THEN amount_paid_cents ELSE 0 END), 0) as total_revenue_cents, \
+                COALESCE(SUM(amount_refunded_cents), 0) as total_refunded_cents, \
+                COUNT(*) as payment_count, \
+                COUNT(*) FILTER (WHERE status = 'paid') as successful_payments, \
+                COUNT(*) FILTER (WHERE status IN ('failed', 'uncollectible', 'void')) as failed_payments \
+             FROM billing_payments \
+             WHERE domain_id = ",
         );
 
-        let mut q = sqlx::query(&query)
-            .bind(domain_id)
-            .bind(mode);
+        builder.push_bind(domain_id);
+        builder.push(" AND stripe_mode = ").push_bind(mode);
 
         if let Some(df) = &date_from {
-            q = q.bind(df);
+            builder.push(" AND (payment_date >= ").push_bind(*df);
+            builder.push(" OR created_at >= ").push_bind(*df);
+            builder.push(")");
         }
         if let Some(dt) = &date_to {
-            q = q.bind(dt);
+            builder.push(" AND (payment_date <= ").push_bind(*dt);
+            builder.push(" OR created_at <= ").push_bind(*dt);
+            builder.push(")");
         }
 
-        let row = q.fetch_one(&self.pool).await.map_err(AppError::from)?;
+        let row = builder
+            .build()
+            .fetch_one(&self.pool)
+            .await
+            .map_err(AppError::from)?;
 
         Ok(PaymentSummary {
             total_revenue_cents: row.get("total_revenue_cents"),
@@ -497,69 +454,25 @@ impl BillingPaymentRepo for PostgresPersistence {
         mode: StripeMode,
         filters: &PaymentListFilters,
     ) -> AppResult<Vec<BillingPaymentWithUser>> {
-        // Build dynamic WHERE clause
-        let mut conditions: Vec<String> = vec![
-            "bp.domain_id = $1".to_string(),
-            "bp.stripe_mode = $2".to_string(),
-        ];
-        let mut param_count = 2;
+        let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(format!(
+            "SELECT {}, deu.email as user_email \
+             FROM billing_payments bp \
+             JOIN domain_end_users deu ON bp.end_user_id = deu.id \
+             WHERE bp.domain_id = ",
+            SELECT_COLS
+        ));
 
-        if filters.status.is_some() {
-            param_count += 1;
-            conditions.push(format!("bp.status = ${}", param_count));
-        }
-        if filters.date_from.is_some() {
-            param_count += 1;
-            conditions.push(format!("(bp.payment_date >= ${} OR bp.created_at >= ${})", param_count, param_count));
-        }
-        if filters.date_to.is_some() {
-            param_count += 1;
-            conditions.push(format!("(bp.payment_date <= ${} OR bp.created_at <= ${})", param_count, param_count));
-        }
-        if filters.plan_code.is_some() {
-            param_count += 1;
-            conditions.push(format!("bp.plan_code = ${}", param_count));
-        }
-        if filters.user_email.is_some() {
-            param_count += 1;
-            conditions.push(format!("deu.email ILIKE ${}", param_count));
-        }
+        builder.push_bind(domain_id);
+        builder.push(" AND bp.stripe_mode = ").push_bind(mode);
+        push_payment_filters(&mut builder, filters);
+        builder.push(" ORDER BY bp.payment_date DESC NULLS LAST, bp.created_at DESC");
 
-        let where_clause = conditions.join(" AND ");
+        let rows = builder
+            .build()
+            .fetch_all(&self.pool)
+            .await
+            .map_err(AppError::from)?;
 
-        let query = format!(
-            r#"
-            SELECT {}, deu.email as user_email
-            FROM billing_payments bp
-            JOIN domain_end_users deu ON bp.end_user_id = deu.id
-            WHERE {}
-            ORDER BY bp.payment_date DESC NULLS LAST, bp.created_at DESC
-            "#,
-            SELECT_COLS,
-            where_clause
-        );
-
-        let mut q = sqlx::query(&query)
-            .bind(domain_id)
-            .bind(mode);
-
-        if let Some(status) = &filters.status {
-            q = q.bind(status);
-        }
-        if let Some(date_from) = &filters.date_from {
-            q = q.bind(date_from);
-        }
-        if let Some(date_to) = &filters.date_to {
-            q = q.bind(date_to);
-        }
-        if let Some(plan_code) = &filters.plan_code {
-            q = q.bind(plan_code);
-        }
-        if let Some(user_email) = &filters.user_email {
-            q = q.bind(format!("%{}%", user_email));
-        }
-
-        let rows = q.fetch_all(&self.pool).await.map_err(AppError::from)?;
         Ok(rows.into_iter().map(row_to_payment_with_user).collect())
     }
 }

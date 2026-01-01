@@ -71,7 +71,7 @@ impl SubscriptionEventRepo for PostgresPersistence {
 
     async fn exists_by_stripe_event_id(&self, stripe_event_id: &str) -> AppResult<bool> {
         let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM subscription_events WHERE stripe_event_id = $1)"
+            "SELECT EXISTS(SELECT 1 FROM subscription_events WHERE stripe_event_id = $1)",
         )
         .bind(stripe_event_id)
         .fetch_one(&self.pool)

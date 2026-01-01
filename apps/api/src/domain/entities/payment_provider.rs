@@ -204,9 +204,15 @@ mod tests {
 
     #[test]
     fn test_provider_config_display() {
-        assert_eq!(ProviderConfig::stripe_test().display_name(), "Stripe (Test)");
+        assert_eq!(
+            ProviderConfig::stripe_test().display_name(),
+            "Stripe (Test)"
+        );
         assert_eq!(ProviderConfig::stripe_live().display_name(), "Stripe");
-        assert_eq!(ProviderConfig::dummy().display_name(), "Test Provider (Test)");
+        assert_eq!(
+            ProviderConfig::dummy().display_name(),
+            "Test Provider (Test)"
+        );
     }
 
     #[test]

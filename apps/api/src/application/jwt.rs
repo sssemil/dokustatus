@@ -54,8 +54,8 @@ pub fn verify(token: &str, secret: &secrecy::SecretString) -> AppResult<Claims> 
 pub struct DomainEndUserClaims {
     pub sub: String, // end_user_id
     pub domain_id: String,
-    pub domain: String,     // root domain (e.g., "example.com")
-    pub roles: Vec<String>, // user's roles (e.g., ["admin", "user"])
+    pub domain: String,                   // root domain (e.g., "example.com")
+    pub roles: Vec<String>,               // user's roles (e.g., ["admin", "user"])
     pub subscription: SubscriptionClaims, // subscription info (always present)
     pub exp: i64,
     pub iat: i64,

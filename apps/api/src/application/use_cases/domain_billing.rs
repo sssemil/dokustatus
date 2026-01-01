@@ -9,18 +9,51 @@ use crate::{
         EnabledPaymentProviderProfile, EnabledPaymentProvidersRepo,
     },
     app_error::{AppError, AppResult},
+    application::ports::payment_provider::{
+        PaymentProviderPort, PlanChangeType as PortPlanChangeType, PlanInfo, SubscriptionId,
+    },
+    application::use_cases::payment_provider_factory::PaymentProviderFactory,
     domain::entities::{
-        billing_state::BillingState,
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
-        payment_status::PaymentStatus,
-        stripe_mode::StripeMode,
+        billing_state::BillingState, payment_mode::PaymentMode, payment_provider::PaymentProvider,
+        payment_status::PaymentStatus, stripe_mode::StripeMode,
         user_subscription::SubscriptionStatus,
     },
     infra::crypto::ProcessCipher,
 };
 
 use super::domain::DomainRepo;
+
+/// Number of months in a year, used for MRR calculations
+const MONTHS_PER_YEAR: i64 = 12;
+
+/// Calculates the monthly equivalent amount in cents for a given price and billing interval.
+/// Uses floating-point arithmetic to avoid integer division precision loss.
+///
+/// # Arguments
+/// * `price_cents` - The price in cents for the billing interval
+/// * `interval` - The interval type ("yearly", "year", "monthly", "month", or other)
+/// * `interval_count` - Number of intervals (e.g., 2 for "every 2 months")
+///
+/// # Returns
+/// Monthly amount as f64 (caller should accumulate and round at the end)
+///
+/// # Rounding
+/// Uses standard `.round()` (round half away from zero). For financial calculations
+/// this is appropriate as it treats positive and negative values symmetrically.
+fn calculate_monthly_amount_cents(price_cents: i64, interval: &str, interval_count: i64) -> f64 {
+    debug_assert!(price_cents >= 0, "price_cents should not be negative");
+
+    // Protect against division by zero (should be prevented upstream, but be defensive)
+    let interval_count = std::cmp::max(interval_count, 1);
+
+    let divisor = match interval {
+        "yearly" | "year" => interval_count * MONTHS_PER_YEAR,
+        // Monthly or any unknown intervals are treated as monthly (legacy behavior preserved)
+        _ => interval_count,
+    };
+
+    price_cents as f64 / divisor as f64
+}
 
 // ============================================================================
 // Profile Types
@@ -221,8 +254,8 @@ pub struct CreateSubscriptionInput {
 #[derive(Debug, Clone)]
 pub struct StripeSubscriptionUpdate {
     pub status: SubscriptionStatus,
-    pub plan_id: Option<Uuid>,  // To update plan on upgrade/downgrade
-    pub stripe_subscription_id: Option<String>,  // To set/update the Stripe subscription ID
+    pub plan_id: Option<Uuid>, // To update plan on upgrade/downgrade
+    pub stripe_subscription_id: Option<String>, // To set/update the Stripe subscription ID
     pub current_period_start: Option<NaiveDateTime>,
     pub current_period_end: Option<NaiveDateTime>,
     pub cancel_at_period_end: bool,
@@ -357,10 +390,7 @@ pub trait BillingStripeConfigRepo: Send + Sync {
     ) -> AppResult<Option<BillingStripeConfigProfile>>;
 
     /// List all configs for a domain (both test and live)
-    async fn list_by_domain(
-        &self,
-        domain_id: Uuid,
-    ) -> AppResult<Vec<BillingStripeConfigProfile>>;
+    async fn list_by_domain(&self, domain_id: Uuid) -> AppResult<Vec<BillingStripeConfigProfile>>;
 
     /// Upsert config for a specific mode
     async fn upsert(
@@ -405,17 +435,9 @@ pub trait SubscriptionPlanRepo: Send + Sync {
         mode: StripeMode,
         input: &CreatePlanInput,
     ) -> AppResult<SubscriptionPlanProfile>;
-    async fn update(
-        &self,
-        id: Uuid,
-        input: &UpdatePlanInput,
-    ) -> AppResult<SubscriptionPlanProfile>;
-    async fn set_stripe_ids(
-        &self,
-        id: Uuid,
-        product_id: &str,
-        price_id: &str,
-    ) -> AppResult<()>;
+    async fn update(&self, id: Uuid, input: &UpdatePlanInput)
+    -> AppResult<SubscriptionPlanProfile>;
+    async fn set_stripe_ids(&self, id: Uuid, product_id: &str, price_id: &str) -> AppResult<()>;
     async fn set_display_order(&self, id: Uuid, order: i32) -> AppResult<()>;
     async fn archive(&self, id: Uuid) -> AppResult<()>;
     async fn delete(&self, id: Uuid) -> AppResult<()>;
@@ -456,10 +478,7 @@ pub trait UserSubscriptionRepo: Send + Sync {
         mode: StripeMode,
     ) -> AppResult<Vec<UserSubscriptionWithPlan>>;
     async fn list_by_plan(&self, plan_id: Uuid) -> AppResult<Vec<UserSubscriptionProfile>>;
-    async fn create(
-        &self,
-        input: &CreateSubscriptionInput,
-    ) -> AppResult<UserSubscriptionProfile>;
+    async fn create(&self, input: &CreateSubscriptionInput) -> AppResult<UserSubscriptionProfile>;
     async fn update_from_stripe(
         &self,
         id: Uuid,
@@ -477,7 +496,11 @@ pub trait UserSubscriptionRepo: Send + Sync {
     ) -> AppResult<UserSubscriptionProfile>;
     async fn revoke(&self, id: Uuid) -> AppResult<()>;
     async fn delete(&self, id: Uuid) -> AppResult<()>;
-    async fn count_active_by_domain_and_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<i64>;
+    async fn count_active_by_domain_and_mode(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+    ) -> AppResult<i64>;
     async fn count_by_status_and_mode(
         &self,
         domain_id: Uuid,
@@ -573,6 +596,7 @@ pub struct DomainBillingUseCases {
     event_repo: Arc<dyn SubscriptionEventRepo>,
     payment_repo: Arc<dyn BillingPaymentRepo>,
     cipher: ProcessCipher,
+    provider_factory: Arc<PaymentProviderFactory>,
     // NOTE: No fallback Stripe credentials - we cannot accept payments on behalf of other developers.
     // Each domain must configure their own Stripe account.
 }
@@ -587,6 +611,7 @@ impl DomainBillingUseCases {
         event_repo: Arc<dyn SubscriptionEventRepo>,
         payment_repo: Arc<dyn BillingPaymentRepo>,
         cipher: ProcessCipher,
+        provider_factory: Arc<PaymentProviderFactory>,
     ) -> Self {
         Self {
             domain_repo,
@@ -597,12 +622,20 @@ impl DomainBillingUseCases {
             event_repo,
             payment_repo,
             cipher,
+            provider_factory,
         }
     }
 
     /// Helper to get domain and verify ownership
-    async fn get_domain_verified(&self, owner_id: Uuid, domain_id: Uuid) -> AppResult<super::domain::DomainProfile> {
-        let domain = self.domain_repo.get_by_id(domain_id).await?
+    async fn get_domain_verified(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<super::domain::DomainProfile> {
+        let domain = self
+            .domain_repo
+            .get_by_id(domain_id)
+            .await?
             .ok_or(AppError::NotFound)?;
         if domain.owner_end_user_id != Some(owner_id) {
             return Err(AppError::Forbidden);
@@ -612,9 +645,75 @@ impl DomainBillingUseCases {
 
     /// Get the active Stripe mode for a domain
     pub async fn get_active_mode(&self, domain_id: Uuid) -> AppResult<StripeMode> {
-        let domain = self.domain_repo.get_by_id(domain_id).await?
+        let domain = self
+            .domain_repo
+            .get_by_id(domain_id)
+            .await?
             .ok_or(AppError::NotFound)?;
         Ok(domain.billing_stripe_mode)
+    }
+
+    /// Get the active payment provider for a domain.
+    ///
+    /// This method determines the correct provider based on:
+    /// 1. The domain's active mode (StripeMode → PaymentMode)
+    /// 2. Enabled providers for the domain (prefers Stripe if configured)
+    async fn get_active_provider(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Arc<dyn PaymentProviderPort>> {
+        // Get the domain's active mode
+        let stripe_mode = self.get_active_mode(domain_id).await?;
+        let payment_mode: PaymentMode = stripe_mode.into();
+
+        // Check enabled providers
+        let enabled = self
+            .enabled_providers_repo
+            .list_active_by_domain(domain_id)
+            .await?;
+
+        // Find a provider that matches the mode, preferring Stripe
+        let provider_type = enabled
+            .iter()
+            .filter(|p| p.mode == payment_mode)
+            .find(|p| p.provider == PaymentProvider::Stripe)
+            .or_else(|| enabled.iter().find(|p| p.mode == payment_mode))
+            .map(|p| p.provider)
+            .unwrap_or_else(|| {
+                // Default: Dummy for test mode, Stripe for live
+                if payment_mode == PaymentMode::Test {
+                    PaymentProvider::Dummy
+                } else {
+                    PaymentProvider::Stripe
+                }
+            });
+
+        tracing::debug!(
+            domain_id = %domain_id,
+            provider = ?provider_type,
+            mode = ?payment_mode,
+            "Selected payment provider for plan change"
+        );
+
+        self.provider_factory
+            .get(domain_id, provider_type, payment_mode)
+            .await
+    }
+
+    /// Convert a SubscriptionPlanProfile to PlanInfo for the provider port.
+    fn plan_to_port_info(plan: &SubscriptionPlanProfile) -> PlanInfo {
+        PlanInfo {
+            id: plan.id,
+            code: plan.code.clone(),
+            name: plan.name.clone(),
+            price_cents: plan.price_cents,
+            currency: plan.currency.clone(),
+            interval: plan.interval.clone(),
+            interval_count: plan.interval_count,
+            trial_days: plan.trial_days,
+            external_price_id: plan.stripe_price_id.clone(),
+            external_product_id: plan.stripe_product_id.clone(),
+        }
     }
 
     // ========================================================================
@@ -669,13 +768,15 @@ impl DomainBillingUseCases {
         let secret_key_encrypted = self.cipher.encrypt(secret_key)?;
         let webhook_secret_encrypted = self.cipher.encrypt(webhook_secret)?;
 
-        self.stripe_config_repo.upsert(
-            domain_id,
-            mode,
-            &secret_key_encrypted,
-            publishable_key,
-            &webhook_secret_encrypted,
-        ).await?;
+        self.stripe_config_repo
+            .upsert(
+                domain_id,
+                mode,
+                &secret_key_encrypted,
+                publishable_key,
+                &webhook_secret_encrypted,
+            )
+            .await?;
 
         Ok(ModeConfigStatus {
             publishable_key_last4: mask_key(publishable_key),
@@ -694,13 +795,20 @@ impl DomainBillingUseCases {
 
         // Cannot delete config for active mode if it has data
         if domain.billing_stripe_mode == mode {
-            let plan_count = self.plan_repo.count_by_domain_and_mode(domain_id, mode).await?;
-            let sub_count = self.subscription_repo.count_by_domain_and_mode(domain_id, mode).await?;
+            let plan_count = self
+                .plan_repo
+                .count_by_domain_and_mode(domain_id, mode)
+                .await?;
+            let sub_count = self
+                .subscription_repo
+                .count_by_domain_and_mode(domain_id, mode)
+                .await?;
 
             if plan_count > 0 || sub_count > 0 {
-                return Err(AppError::InvalidInput(
-                    format!("Cannot delete {} mode config while plans or subscriptions exist. Delete or migrate them first.", mode.as_str())
-                ));
+                return Err(AppError::InvalidInput(format!(
+                    "Cannot delete {} mode config while plans or subscriptions exist. Delete or migrate them first.",
+                    mode.as_str()
+                )));
             }
         }
 
@@ -717,14 +825,20 @@ impl DomainBillingUseCases {
         self.get_domain_verified(owner_id, domain_id).await?;
 
         // Verify the mode has a config before activating
-        let config = self.stripe_config_repo.get_by_domain_and_mode(domain_id, mode).await?;
+        let config = self
+            .stripe_config_repo
+            .get_by_domain_and_mode(domain_id, mode)
+            .await?;
         if config.is_none() {
-            return Err(AppError::InvalidInput(
-                format!("Cannot switch to {} mode without configuring Stripe keys first", mode.as_str())
-            ));
+            return Err(AppError::InvalidInput(format!(
+                "Cannot switch to {} mode without configuring Stripe keys first",
+                mode.as_str()
+            )));
         }
 
-        self.domain_repo.set_billing_stripe_mode(domain_id, mode).await?;
+        self.domain_repo
+            .set_billing_stripe_mode(domain_id, mode)
+            .await?;
         Ok(mode)
     }
 
@@ -732,23 +846,49 @@ impl DomainBillingUseCases {
     /// Returns error if Stripe is not configured - there is no fallback.
     pub async fn get_stripe_secret_key(&self, domain_id: Uuid) -> AppResult<String> {
         let mode = self.get_active_mode(domain_id).await?;
-        let config = self.stripe_config_repo.get_by_domain_and_mode(domain_id, mode).await?
-            .ok_or(AppError::InvalidInput("Billing not configured for this domain. Please configure Stripe in the dashboard.".into()))?;
+        let config = self
+            .stripe_config_repo
+            .get_by_domain_and_mode(domain_id, mode)
+            .await?
+            .ok_or(AppError::InvalidInput(
+                "Billing not configured for this domain. Please configure Stripe in the dashboard."
+                    .into(),
+            ))?;
         self.cipher.decrypt(&config.stripe_secret_key_encrypted)
     }
 
     /// Get decrypted Stripe secret key for a specific mode.
-    pub async fn get_stripe_secret_key_for_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<String> {
-        let config = self.stripe_config_repo.get_by_domain_and_mode(domain_id, mode).await?
-            .ok_or(AppError::InvalidInput(format!("Stripe {} mode not configured for this domain.", mode.as_str())))?;
+    pub async fn get_stripe_secret_key_for_mode(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+    ) -> AppResult<String> {
+        let config = self
+            .stripe_config_repo
+            .get_by_domain_and_mode(domain_id, mode)
+            .await?
+            .ok_or(AppError::InvalidInput(format!(
+                "Stripe {} mode not configured for this domain.",
+                mode.as_str()
+            )))?;
         self.cipher.decrypt(&config.stripe_secret_key_encrypted)
     }
 
     /// Get webhook secret for a specific mode.
     /// Used by webhook handlers to verify signatures.
-    pub async fn get_stripe_webhook_secret_for_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<String> {
-        let config = self.stripe_config_repo.get_by_domain_and_mode(domain_id, mode).await?
-            .ok_or(AppError::InvalidInput(format!("Stripe {} mode not configured for this domain.", mode.as_str())))?;
+    pub async fn get_stripe_webhook_secret_for_mode(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+    ) -> AppResult<String> {
+        let config = self
+            .stripe_config_repo
+            .get_by_domain_and_mode(domain_id, mode)
+            .await?
+            .ok_or(AppError::InvalidInput(format!(
+                "Stripe {} mode not configured for this domain.",
+                mode.as_str()
+            )))?;
         self.cipher.decrypt(&config.stripe_webhook_secret_encrypted)
     }
 
@@ -758,8 +898,16 @@ impl DomainBillingUseCases {
     }
 
     /// Check if Stripe is configured for a specific mode.
-    pub async fn is_stripe_configured_for_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<bool> {
-        Ok(self.stripe_config_repo.get_by_domain_and_mode(domain_id, mode).await?.is_some())
+    pub async fn is_stripe_configured_for_mode(
+        &self,
+        domain_id: Uuid,
+        mode: StripeMode,
+    ) -> AppResult<bool> {
+        Ok(self
+            .stripe_config_repo
+            .get_by_domain_and_mode(domain_id, mode)
+            .await?
+            .is_some())
     }
 
     // ========================================================================
@@ -781,7 +929,9 @@ impl DomainBillingUseCases {
         &self,
         domain_id: Uuid,
     ) -> AppResult<Vec<EnabledPaymentProviderProfile>> {
-        self.enabled_providers_repo.list_active_by_domain(domain_id).await
+        self.enabled_providers_repo
+            .list_active_by_domain(domain_id)
+            .await
     }
 
     /// Enable a payment provider for a domain
@@ -809,7 +959,10 @@ impl DomainBillingUseCases {
                 PaymentMode::Test => StripeMode::Test,
                 PaymentMode::Live => StripeMode::Live,
             };
-            if !self.is_stripe_configured_for_mode(domain_id, stripe_mode).await? {
+            if !self
+                .is_stripe_configured_for_mode(domain_id, stripe_mode)
+                .await?
+            {
                 return Err(AppError::InvalidInput(format!(
                     "Stripe {} mode must be configured before enabling",
                     mode.as_str()
@@ -823,10 +976,15 @@ impl DomainBillingUseCases {
         }
 
         // Get current max display_order
-        let existing = self.enabled_providers_repo.list_by_domain(domain_id).await?;
+        let existing = self
+            .enabled_providers_repo
+            .list_by_domain(domain_id)
+            .await?;
         let display_order = existing.iter().map(|p| p.display_order).max().unwrap_or(-1) + 1;
 
-        self.enabled_providers_repo.enable(domain_id, provider, mode, display_order).await
+        self.enabled_providers_repo
+            .enable(domain_id, provider, mode, display_order)
+            .await
     }
 
     /// Disable a payment provider for a domain
@@ -840,16 +998,23 @@ impl DomainBillingUseCases {
         self.get_domain_verified(owner_id, domain_id).await?;
 
         // Check if this is the only active provider
-        let active = self.enabled_providers_repo.list_active_by_domain(domain_id).await?;
-        let is_target = |p: &EnabledPaymentProviderProfile| p.provider == provider && p.mode == mode;
+        let active = self
+            .enabled_providers_repo
+            .list_active_by_domain(domain_id)
+            .await?;
+        let is_target =
+            |p: &EnabledPaymentProviderProfile| p.provider == provider && p.mode == mode;
 
         if active.len() == 1 && active.iter().any(is_target) {
             return Err(AppError::InvalidInput(
-                "Cannot disable the only active payment provider. Enable another provider first.".into()
+                "Cannot disable the only active payment provider. Enable another provider first."
+                    .into(),
             ));
         }
 
-        self.enabled_providers_repo.disable(domain_id, provider, mode).await
+        self.enabled_providers_repo
+            .disable(domain_id, provider, mode)
+            .await
     }
 
     /// Set active status for a provider (toggle on/off without removing)
@@ -865,17 +1030,23 @@ impl DomainBillingUseCases {
 
         // If deactivating, check if this would leave no active providers
         if !is_active {
-            let active = self.enabled_providers_repo.list_active_by_domain(domain_id).await?;
-            let is_target = |p: &EnabledPaymentProviderProfile| p.provider == provider && p.mode == mode;
+            let active = self
+                .enabled_providers_repo
+                .list_active_by_domain(domain_id)
+                .await?;
+            let is_target =
+                |p: &EnabledPaymentProviderProfile| p.provider == provider && p.mode == mode;
 
             if active.len() == 1 && active.iter().any(is_target) {
                 return Err(AppError::InvalidInput(
-                    "Cannot deactivate the only active payment provider".into()
+                    "Cannot deactivate the only active payment provider".into(),
                 ));
             }
         }
 
-        self.enabled_providers_repo.set_active(domain_id, provider, mode, is_active).await
+        self.enabled_providers_repo
+            .set_active(domain_id, provider, mode, is_active)
+            .await
     }
 
     /// Update display order for a provider
@@ -888,7 +1059,9 @@ impl DomainBillingUseCases {
         display_order: i32,
     ) -> AppResult<()> {
         self.get_domain_verified(owner_id, domain_id).await?;
-        self.enabled_providers_repo.set_display_order(domain_id, provider, mode, display_order).await
+        self.enabled_providers_repo
+            .set_display_order(domain_id, provider, mode, display_order)
+            .await
     }
 
     /// Check if a provider is enabled for a domain
@@ -898,7 +1071,9 @@ impl DomainBillingUseCases {
         provider: PaymentProvider,
         mode: PaymentMode,
     ) -> AppResult<bool> {
-        self.enabled_providers_repo.is_enabled(domain_id, provider, mode).await
+        self.enabled_providers_repo
+            .is_enabled(domain_id, provider, mode)
+            .await
     }
 
     // ========================================================================
@@ -915,17 +1090,23 @@ impl DomainBillingUseCases {
 
         // Validate input
         if input.code.is_empty() || input.code.len() > 50 {
-            return Err(AppError::InvalidInput("Plan code must be 1-50 characters".into()));
+            return Err(AppError::InvalidInput(
+                "Plan code must be 1-50 characters".into(),
+            ));
         }
         if input.name.is_empty() || input.name.len() > 100 {
-            return Err(AppError::InvalidInput("Plan name must be 1-100 characters".into()));
+            return Err(AppError::InvalidInput(
+                "Plan name must be 1-100 characters".into(),
+            ));
         }
         if input.price_cents < 0 {
             return Err(AppError::InvalidInput("Price cannot be negative".into()));
         }
 
         // Create plan in the domain's active mode
-        self.plan_repo.create(domain_id, domain.billing_stripe_mode, &input).await
+        self.plan_repo
+            .create(domain_id, domain.billing_stripe_mode, &input)
+            .await
     }
 
     pub async fn update_plan(
@@ -938,7 +1119,10 @@ impl DomainBillingUseCases {
         self.get_domain_verified(owner_id, domain_id).await?;
 
         // Verify plan belongs to domain
-        let plan = self.plan_repo.get_by_id(plan_id).await?
+        let plan = self
+            .plan_repo
+            .get_by_id(plan_id)
+            .await?
             .ok_or(AppError::NotFound)?;
         if plan.domain_id != domain_id {
             return Err(AppError::NotFound);
@@ -956,7 +1140,10 @@ impl DomainBillingUseCases {
         self.get_domain_verified(owner_id, domain_id).await?;
 
         // Verify plan belongs to domain
-        let plan = self.plan_repo.get_by_id(plan_id).await?
+        let plan = self
+            .plan_repo
+            .get_by_id(plan_id)
+            .await?
             .ok_or(AppError::NotFound)?;
         if plan.domain_id != domain_id {
             return Err(AppError::NotFound);
@@ -974,7 +1161,10 @@ impl DomainBillingUseCases {
         self.get_domain_verified(owner_id, domain_id).await?;
 
         // Verify plan belongs to domain
-        let plan = self.plan_repo.get_by_id(plan_id).await?
+        let plan = self
+            .plan_repo
+            .get_by_id(plan_id)
+            .await?
             .ok_or(AppError::NotFound)?;
         if plan.domain_id != domain_id {
             return Err(AppError::NotFound);
@@ -984,7 +1174,7 @@ impl DomainBillingUseCases {
         let subscriber_count = self.plan_repo.count_subscribers(plan_id).await?;
         if subscriber_count > 0 {
             return Err(AppError::InvalidInput(
-                "Cannot delete plan with active subscribers. Archive it instead.".into()
+                "Cannot delete plan with active subscribers. Archive it instead.".into(),
             ));
         }
 
@@ -999,7 +1189,9 @@ impl DomainBillingUseCases {
         include_archived: bool,
     ) -> AppResult<Vec<SubscriptionPlanProfile>> {
         let domain = self.get_domain_verified(owner_id, domain_id).await?;
-        self.plan_repo.list_by_domain_and_mode(domain_id, domain.billing_stripe_mode, include_archived).await
+        self.plan_repo
+            .list_by_domain_and_mode(domain_id, domain.billing_stripe_mode, include_archived)
+            .await
     }
 
     /// List plans for a specific mode (dashboard, for viewing other mode's plans)
@@ -1011,7 +1203,9 @@ impl DomainBillingUseCases {
         include_archived: bool,
     ) -> AppResult<Vec<SubscriptionPlanProfile>> {
         self.get_domain_verified(owner_id, domain_id).await?;
-        self.plan_repo.list_by_domain_and_mode(domain_id, mode, include_archived).await
+        self.plan_repo
+            .list_by_domain_and_mode(domain_id, mode, include_archived)
+            .await
     }
 
     pub async fn reorder_plans(
@@ -1024,7 +1218,10 @@ impl DomainBillingUseCases {
 
         // Verify each plan belongs to this domain before reordering
         for plan_id in &plan_ids {
-            let plan = self.plan_repo.get_by_id(*plan_id).await?
+            let plan = self
+                .plan_repo
+                .get_by_id(*plan_id)
+                .await?
                 .ok_or(AppError::NotFound)?;
             if plan.domain_id != domain_id {
                 return Err(AppError::Forbidden);
@@ -1032,7 +1229,9 @@ impl DomainBillingUseCases {
         }
 
         for (order, plan_id) in plan_ids.iter().enumerate() {
-            self.plan_repo.set_display_order(*plan_id, order as i32).await?;
+            self.plan_repo
+                .set_display_order(*plan_id, order as i32)
+                .await?;
         }
         Ok(())
     }
@@ -1042,9 +1241,14 @@ impl DomainBillingUseCases {
     // ========================================================================
 
     /// Get public plans for a domain's active mode (ingress billing page)
-    pub async fn get_public_plans(&self, domain_id: Uuid) -> AppResult<Vec<SubscriptionPlanProfile>> {
+    pub async fn get_public_plans(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Vec<SubscriptionPlanProfile>> {
         let mode = self.get_active_mode(domain_id).await?;
-        self.plan_repo.list_public_by_domain_and_mode(domain_id, mode).await
+        self.plan_repo
+            .list_public_by_domain_and_mode(domain_id, mode)
+            .await
     }
 
     /// Get a plan by code in the domain's active mode
@@ -1054,7 +1258,9 @@ impl DomainBillingUseCases {
         code: &str,
     ) -> AppResult<Option<SubscriptionPlanProfile>> {
         let mode = self.get_active_mode(domain_id).await?;
-        self.plan_repo.get_by_domain_and_code(domain_id, mode, code).await
+        self.plan_repo
+            .get_by_domain_and_code(domain_id, mode, code)
+            .await
     }
 
     /// Update a plan with Stripe product/price IDs (called during lazy Stripe setup)
@@ -1064,7 +1270,9 @@ impl DomainBillingUseCases {
         product_id: &str,
         price_id: &str,
     ) -> AppResult<()> {
-        self.plan_repo.set_stripe_ids(plan_id, product_id, price_id).await
+        self.plan_repo
+            .set_stripe_ids(plan_id, product_id, price_id)
+            .await
     }
 
     /// Find plan by Stripe price ID in a specific mode (used by webhook handlers)
@@ -1074,7 +1282,9 @@ impl DomainBillingUseCases {
         mode: StripeMode,
         stripe_price_id: &str,
     ) -> AppResult<Option<SubscriptionPlanProfile>> {
-        self.plan_repo.get_by_stripe_price_id(domain_id, mode, stripe_price_id).await
+        self.plan_repo
+            .get_by_stripe_price_id(domain_id, mode, stripe_price_id)
+            .await
     }
 
     // ========================================================================
@@ -1088,7 +1298,9 @@ impl DomainBillingUseCases {
         user_id: Uuid,
     ) -> AppResult<Option<UserSubscriptionProfile>> {
         let mode = self.get_active_mode(domain_id).await?;
-        self.subscription_repo.get_by_user_and_mode(domain_id, mode, user_id).await
+        self.subscription_repo
+            .get_by_user_and_mode(domain_id, mode, user_id)
+            .await
     }
 
     /// Get user's subscription with plan info in the domain's active mode
@@ -1098,9 +1310,15 @@ impl DomainBillingUseCases {
         user_id: Uuid,
     ) -> AppResult<Option<(UserSubscriptionProfile, SubscriptionPlanProfile)>> {
         let mode = self.get_active_mode(domain_id).await?;
-        let sub = self.subscription_repo.get_by_user_and_mode(domain_id, mode, user_id).await?;
+        let sub = self
+            .subscription_repo
+            .get_by_user_and_mode(domain_id, mode, user_id)
+            .await?;
         if let Some(sub) = sub {
-            let plan = self.plan_repo.get_by_id(sub.plan_id).await?
+            let plan = self
+                .plan_repo
+                .get_by_id(sub.plan_id)
+                .await?
                 .ok_or(AppError::Internal("Plan not found".into()))?;
             Ok(Some((sub, plan)))
         } else {
@@ -1115,7 +1333,9 @@ impl DomainBillingUseCases {
         domain_id: Uuid,
     ) -> AppResult<Vec<UserSubscriptionWithPlan>> {
         let domain = self.get_domain_verified(owner_id, domain_id).await?;
-        self.subscription_repo.list_by_domain_and_mode(domain_id, domain.billing_stripe_mode).await
+        self.subscription_repo
+            .list_by_domain_and_mode(domain_id, domain.billing_stripe_mode)
+            .await
     }
 
     /// List subscribers for a specific mode (dashboard)
@@ -1126,7 +1346,9 @@ impl DomainBillingUseCases {
         mode: StripeMode,
     ) -> AppResult<Vec<UserSubscriptionWithPlan>> {
         self.get_domain_verified(owner_id, domain_id).await?;
-        self.subscription_repo.list_by_domain_and_mode(domain_id, mode).await
+        self.subscription_repo
+            .list_by_domain_and_mode(domain_id, mode)
+            .await
     }
 
     pub async fn grant_subscription(
@@ -1140,37 +1362,46 @@ impl DomainBillingUseCases {
         let domain = self.get_domain_verified(owner_id, domain_id).await?;
 
         // Verify plan belongs to domain and is in active mode
-        let plan = self.plan_repo.get_by_id(plan_id).await?
+        let plan = self
+            .plan_repo
+            .get_by_id(plan_id)
+            .await?
             .ok_or(AppError::NotFound)?;
         if plan.domain_id != domain_id {
             return Err(AppError::NotFound);
         }
         if plan.stripe_mode != domain.billing_stripe_mode {
-            return Err(AppError::InvalidInput(
-                format!("Cannot grant subscription to a plan in {} mode when active mode is {}",
-                    plan.stripe_mode.as_str(), domain.billing_stripe_mode.as_str())
-            ));
+            return Err(AppError::InvalidInput(format!(
+                "Cannot grant subscription to a plan in {} mode when active mode is {}",
+                plan.stripe_mode.as_str(),
+                domain.billing_stripe_mode.as_str()
+            )));
         }
 
-        let sub = self.subscription_repo.grant_manually(
-            domain_id,
-            domain.billing_stripe_mode,
-            user_id,
-            plan_id,
-            owner_id,
-            stripe_customer_id,
-        ).await?;
+        let sub = self
+            .subscription_repo
+            .grant_manually(
+                domain_id,
+                domain.billing_stripe_mode,
+                user_id,
+                plan_id,
+                owner_id,
+                stripe_customer_id,
+            )
+            .await?;
 
         // Log event
-        self.event_repo.create(&CreateSubscriptionEventInput {
-            subscription_id: sub.id,
-            event_type: "granted".to_string(),
-            previous_status: None,
-            new_status: Some(SubscriptionStatus::Active),
-            stripe_event_id: None,
-            metadata: serde_json::json!({"granted_by": owner_id.to_string()}),
-            created_by: Some(owner_id),
-        }).await?;
+        self.event_repo
+            .create(&CreateSubscriptionEventInput {
+                subscription_id: sub.id,
+                event_type: "granted".to_string(),
+                previous_status: None,
+                new_status: Some(SubscriptionStatus::Active),
+                stripe_event_id: None,
+                metadata: serde_json::json!({"granted_by": owner_id.to_string()}),
+                created_by: Some(owner_id),
+            })
+            .await?;
 
         Ok(sub)
     }
@@ -1183,19 +1414,24 @@ impl DomainBillingUseCases {
     ) -> AppResult<()> {
         let domain = self.get_domain_verified(owner_id, domain_id).await?;
 
-        let sub = self.subscription_repo.get_by_user_and_mode(domain_id, domain.billing_stripe_mode, user_id).await?
+        let sub = self
+            .subscription_repo
+            .get_by_user_and_mode(domain_id, domain.billing_stripe_mode, user_id)
+            .await?
             .ok_or(AppError::NotFound)?;
 
         // Log event before revoking
-        self.event_repo.create(&CreateSubscriptionEventInput {
-            subscription_id: sub.id,
-            event_type: "revoked".to_string(),
-            previous_status: Some(sub.status),
-            new_status: Some(SubscriptionStatus::Canceled),
-            stripe_event_id: None,
-            metadata: serde_json::json!({"revoked_by": owner_id.to_string()}),
-            created_by: Some(owner_id),
-        }).await?;
+        self.event_repo
+            .create(&CreateSubscriptionEventInput {
+                subscription_id: sub.id,
+                event_type: "revoked".to_string(),
+                previous_status: Some(sub.status),
+                new_status: Some(SubscriptionStatus::Canceled),
+                stripe_event_id: None,
+                metadata: serde_json::json!({"revoked_by": owner_id.to_string()}),
+                created_by: Some(owner_id),
+            })
+            .await?;
 
         self.subscription_repo.revoke(sub.id).await
     }
@@ -1204,92 +1440,78 @@ impl DomainBillingUseCases {
     // Plan Change (Upgrade/Downgrade)
     // ========================================================================
 
-    /// Preview what an upgrade/downgrade would cost
+    /// Preview a plan change (proration calculation)
     pub async fn preview_plan_change(
         &self,
         domain_id: Uuid,
         user_id: Uuid,
         new_plan_code: &str,
     ) -> AppResult<PlanChangePreview> {
-        use crate::infra::stripe_client::StripeClient;
-
         let mode = self.get_active_mode(domain_id).await?;
 
         // Get user's current subscription
-        let sub = self.subscription_repo.get_by_user_and_mode(domain_id, mode, user_id).await?
-            .ok_or(AppError::InvalidInput("No active subscription found".into()))?;
+        let sub = self
+            .subscription_repo
+            .get_by_user_and_mode(domain_id, mode, user_id)
+            .await?
+            .ok_or(AppError::InvalidInput(
+                "No active subscription found".into(),
+            ))?;
 
         // Validate subscription state
         self.validate_subscription_for_plan_change(&sub)?;
 
         // Get current plan
-        let current_plan = self.plan_repo.get_by_id(sub.plan_id).await?
+        let current_plan = self
+            .plan_repo
+            .get_by_id(sub.plan_id)
+            .await?
             .ok_or(AppError::Internal("Current plan not found".into()))?;
 
         // Get new plan
-        let new_plan = self.plan_repo.get_by_domain_and_code(domain_id, mode, new_plan_code).await?
-            .ok_or(AppError::InvalidInput(format!("Plan '{}' not found", new_plan_code)))?;
+        let new_plan = self
+            .plan_repo
+            .get_by_domain_and_code(domain_id, mode, new_plan_code)
+            .await?
+            .ok_or(AppError::InvalidInput(format!(
+                "Plan '{}' not found",
+                new_plan_code
+            )))?;
 
         // Validate new plan
         self.validate_new_plan(&current_plan, &new_plan)?;
 
-        // Determine change type based on price
-        let change_type = if new_plan.price_cents > current_plan.price_cents {
-            PlanChangeType::Upgrade
-        } else {
-            PlanChangeType::Downgrade
-        };
+        // Get subscription ID
+        let stripe_subscription_id =
+            sub.stripe_subscription_id
+                .as_ref()
+                .ok_or(AppError::InvalidInput(
+                    "Cannot preview change for manually granted subscription".into(),
+                ))?;
 
-        let period_end = sub.current_period_end
-            .map(|dt| dt.and_utc().timestamp())
-            .unwrap_or(0);
+        // Get provider and call preview
+        let provider = self.get_active_provider(domain_id).await?;
+        let subscription_id = SubscriptionId::new(stripe_subscription_id);
+        let plan_info = Self::plan_to_port_info(&new_plan);
 
-        // For upgrades, get the exact proration amount from Stripe
-        let prorated_amount_cents = if change_type == PlanChangeType::Upgrade {
-            // Need Stripe subscription details
-            let stripe_subscription_id = sub.stripe_subscription_id.as_ref()
-                .ok_or(AppError::InvalidInput("Cannot preview change for manually granted subscription".into()))?;
+        let preview = provider
+            .preview_plan_change(&subscription_id, &plan_info)
+            .await?;
 
-            let stripe_secret = self.get_stripe_secret_key_for_mode(domain_id, mode).await?;
-            let stripe = StripeClient::new(stripe_secret);
-
-            // Get the subscription to find the subscription item ID
-            let stripe_sub = stripe.get_subscription(stripe_subscription_id).await?;
-            let subscription_item_id = stripe_sub.subscription_item_id()
-                .ok_or(AppError::Internal("Subscription has no items".into()))?;
-
-            let new_price_id = new_plan.stripe_price_id.as_ref()
-                .ok_or(AppError::InvalidInput("New plan not configured in Stripe yet".into()))?;
-
-            // Preview using Stripe's upcoming invoice API
-            let preview = stripe.preview_subscription_change(
-                &sub.stripe_customer_id,
-                stripe_subscription_id,
-                &subscription_item_id,
-                new_price_id,
-            ).await?;
-
-            preview.amount_due
-        } else {
-            // For downgrades, no charge (change happens at period end)
-            0
-        };
-
-        // Effective date: now for upgrades, period_end for downgrades
-        let effective_at = if change_type == PlanChangeType::Upgrade {
-            chrono::Utc::now().timestamp()
-        } else {
-            period_end
+        // Convert port type to domain type
+        let change_type = match preview.change_type {
+            PortPlanChangeType::Upgrade => PlanChangeType::Upgrade,
+            PortPlanChangeType::Downgrade => PlanChangeType::Downgrade,
         };
 
         Ok(PlanChangePreview {
-            prorated_amount_cents,
-            currency: new_plan.currency.clone(),
-            period_end,
-            new_plan_name: new_plan.name.clone(),
-            new_plan_price_cents: new_plan.price_cents as i64,
+            prorated_amount_cents: preview.prorated_amount_cents,
+            currency: preview.currency,
+            period_end: preview.period_end.timestamp(),
+            new_plan_name: preview.new_plan_name,
+            new_plan_price_cents: preview.new_plan_price_cents,
             change_type,
-            effective_at,
+            effective_at: preview.effective_at.timestamp(),
         })
     }
 
@@ -1299,191 +1521,127 @@ impl DomainBillingUseCases {
         domain_id: Uuid,
         user_id: Uuid,
         new_plan_code: &str,
-        idempotency_key: &str,
     ) -> AppResult<PlanChangeResult> {
-        use crate::infra::stripe_client::StripeClient;
-
         let mode = self.get_active_mode(domain_id).await?;
 
         // Get user's current subscription
-        let sub = self.subscription_repo.get_by_user_and_mode(domain_id, mode, user_id).await?
-            .ok_or(AppError::InvalidInput("No active subscription found".into()))?;
+        let sub = self
+            .subscription_repo
+            .get_by_user_and_mode(domain_id, mode, user_id)
+            .await?
+            .ok_or(AppError::InvalidInput(
+                "No active subscription found".into(),
+            ))?;
 
         // Validate subscription state
         self.validate_subscription_for_plan_change(&sub)?;
 
         // Get current plan
-        let current_plan = self.plan_repo.get_by_id(sub.plan_id).await?
+        let current_plan = self
+            .plan_repo
+            .get_by_id(sub.plan_id)
+            .await?
             .ok_or(AppError::Internal("Current plan not found".into()))?;
 
         // Get new plan
-        let new_plan = self.plan_repo.get_by_domain_and_code(domain_id, mode, new_plan_code).await?
-            .ok_or(AppError::InvalidInput(format!("Plan '{}' not found", new_plan_code)))?;
+        let new_plan = self
+            .plan_repo
+            .get_by_domain_and_code(domain_id, mode, new_plan_code)
+            .await?
+            .ok_or(AppError::InvalidInput(format!(
+                "Plan '{}' not found",
+                new_plan_code
+            )))?;
 
         // Validate new plan
         self.validate_new_plan(&current_plan, &new_plan)?;
 
-        // Need Stripe subscription details
-        let stripe_subscription_id = sub.stripe_subscription_id.as_ref()
-            .ok_or(AppError::InvalidInput("Cannot change plan for manually granted subscription".into()))?;
+        // Get subscription ID
+        let stripe_subscription_id =
+            sub.stripe_subscription_id
+                .as_ref()
+                .ok_or(AppError::InvalidInput(
+                    "Cannot change plan for manually granted subscription".into(),
+                ))?;
 
-        let stripe_secret = self.get_stripe_secret_key_for_mode(domain_id, mode).await?;
-        let stripe = StripeClient::new(stripe_secret);
+        // Get provider
+        let provider = self.get_active_provider(domain_id).await?;
+        let subscription_id = SubscriptionId::new(stripe_subscription_id);
+        let plan_info = Self::plan_to_port_info(&new_plan);
 
-        // Get the subscription to find the subscription item ID
-        let stripe_sub = stripe.get_subscription(stripe_subscription_id).await?;
-        let subscription_item_id = stripe_sub.subscription_item_id()
-            .ok_or(AppError::Internal("Subscription has no items".into()))?;
+        // Execute plan change via provider
+        let result = provider
+            .change_plan(&subscription_id, None, &plan_info)
+            .await?;
 
-        // If there's an existing schedule, cancel it first
-        if let Some(schedule_id) = &stripe_sub.schedule {
-            stripe.cancel_schedule(schedule_id).await?;
-        }
-
-        let new_price_id = new_plan.stripe_price_id.as_ref()
-            .ok_or(AppError::InvalidInput("New plan not configured in Stripe yet".into()))?;
-
-        let current_price_id = current_plan.stripe_price_id.as_ref()
-            .ok_or(AppError::Internal("Current plan not configured in Stripe".into()))?;
-
-        // Determine change type based on price
-        let change_type = if new_plan.price_cents > current_plan.price_cents {
-            PlanChangeType::Upgrade
-        } else {
-            PlanChangeType::Downgrade
+        // Convert change type
+        let change_type = match result.change_type {
+            PortPlanChangeType::Upgrade => PlanChangeType::Upgrade,
+            PortPlanChangeType::Downgrade => PlanChangeType::Downgrade,
         };
 
-        let period_end = sub.current_period_end
-            .map(|dt| dt.and_utc().timestamp())
-            .unwrap_or(0);
+        // Log the plan change event
+        self.event_repo
+            .create(&CreateSubscriptionEventInput {
+                subscription_id: sub.id,
+                event_type: if result.schedule_id.is_some() {
+                    "plan_change_scheduled".to_string()
+                } else {
+                    "plan_change".to_string()
+                },
+                previous_status: Some(sub.status),
+                new_status: Some(sub.status),
+                stripe_event_id: None,
+                metadata: serde_json::json!({
+                    "change_type": change_type.as_str(),
+                    "from_plan": current_plan.code,
+                    "to_plan": new_plan.code,
+                    "amount_charged_cents": result.amount_charged_cents,
+                    "payment_intent_status": result.payment_intent_status,
+                    "schedule_id": result.schedule_id,
+                }),
+                created_by: Some(user_id),
+            })
+            .await?;
 
-        match change_type {
-            PlanChangeType::Upgrade => {
-                // For upgrades, verify customer has a payment method
-                let customer = stripe.get_customer(&sub.stripe_customer_id).await?;
-                if !customer.has_payment_method() {
-                    return Err(AppError::InvalidInput(
-                        "No payment method on file. Please add a payment method first.".into()
-                    ));
-                }
-
-                // Check if on trial
-                let end_trial = sub.status == SubscriptionStatus::Trialing;
-
-                // Upgrade immediately with proration
-                let updated_sub = stripe.upgrade_subscription(
-                    stripe_subscription_id,
-                    &subscription_item_id,
-                    new_price_id,
-                    stripe_sub.quantity(),
-                    end_trial,
-                    idempotency_key,
-                ).await?;
-
-                // Extract payment details from the updated subscription
-                let payment_intent_status = updated_sub.payment_intent_status();
-                let client_secret = updated_sub.client_secret();
-                let hosted_invoice_url = updated_sub.hosted_invoice_url();
-                let invoice_id = updated_sub.invoice_id();
-                let (amount_charged_cents, currency) = updated_sub.amount_charged()
-                    .map(|(a, c)| (Some(a), Some(c)))
-                    .unwrap_or((None, None));
-
-                // Log the plan change event
-                self.event_repo.create(&CreateSubscriptionEventInput {
-                    subscription_id: sub.id,
-                    event_type: "plan_change".to_string(),
-                    previous_status: Some(sub.status),
-                    new_status: Some(sub.status), // Status may not change immediately
-                    stripe_event_id: None,
-                    metadata: serde_json::json!({
-                        "change_type": "upgrade",
-                        "from_plan": current_plan.code,
-                        "to_plan": new_plan.code,
-                        "amount_charged_cents": amount_charged_cents,
-                        "payment_intent_status": payment_intent_status,
-                    }),
-                    created_by: Some(user_id),
-                }).await?;
-
-                // Only update local plan if payment succeeded immediately.
-                // For requires_action/requires_payment_method, the webhook will update after payment completes.
-                // This prevents the DB from being out of sync if payment ultimately fails.
-                if payment_intent_status.as_deref() == Some("succeeded") {
-                    self.subscription_repo.update_plan(sub.id, new_plan.id).await?;
-                }
-
-                Ok(PlanChangeResult {
-                    success: payment_intent_status.as_deref() == Some("succeeded"),
-                    change_type,
-                    invoice_id,
-                    amount_charged_cents,
-                    currency,
-                    client_secret,
-                    hosted_invoice_url,
-                    payment_intent_status,
-                    new_plan: new_plan,
-                    effective_at: chrono::Utc::now().timestamp(),
-                    schedule_id: None,
-                })
-            }
-            PlanChangeType::Downgrade => {
-                // Schedule downgrade for period end using Subscription Schedules
-                let schedule = stripe.schedule_downgrade(
-                    stripe_subscription_id,
-                    current_price_id,
-                    new_price_id,
-                    period_end,
-                    idempotency_key,
-                ).await?;
-
-                // Log the plan change event
-                self.event_repo.create(&CreateSubscriptionEventInput {
-                    subscription_id: sub.id,
-                    event_type: "plan_change_scheduled".to_string(),
-                    previous_status: Some(sub.status),
-                    new_status: Some(sub.status),
-                    stripe_event_id: None,
-                    metadata: serde_json::json!({
-                        "change_type": "downgrade",
-                        "from_plan": current_plan.code,
-                        "to_plan": new_plan.code,
-                        "effective_at": period_end,
-                        "schedule_id": schedule.id,
-                    }),
-                    created_by: Some(user_id),
-                }).await?;
-
-                Ok(PlanChangeResult {
-                    success: true,
-                    change_type,
-                    invoice_id: None,
-                    amount_charged_cents: None,
-                    currency: None,
-                    client_secret: None,
-                    hosted_invoice_url: None,
-                    payment_intent_status: None,
-                    new_plan: new_plan,
-                    effective_at: period_end,
-                    schedule_id: Some(schedule.id),
-                })
-            }
+        // Update local plan if payment succeeded immediately
+        if result.payment_intent_status.as_deref() == Some("succeeded") {
+            self.subscription_repo
+                .update_plan(sub.id, new_plan.id)
+                .await?;
         }
+
+        Ok(PlanChangeResult {
+            success: result.success,
+            change_type,
+            invoice_id: result.invoice_id,
+            amount_charged_cents: result.amount_charged_cents,
+            currency: result.currency,
+            client_secret: result.client_secret,
+            hosted_invoice_url: result.hosted_invoice_url,
+            payment_intent_status: result.payment_intent_status,
+            new_plan,
+            effective_at: result.effective_at.timestamp(),
+            schedule_id: result.schedule_id,
+        })
     }
 
     /// Validate that a subscription is in a state that allows plan changes
-    fn validate_subscription_for_plan_change(&self, sub: &UserSubscriptionProfile) -> AppResult<()> {
+    fn validate_subscription_for_plan_change(
+        &self,
+        sub: &UserSubscriptionProfile,
+    ) -> AppResult<()> {
         // Check if manually granted
         if sub.manually_granted {
             return Err(AppError::InvalidInput(
-                "Cannot change plan for manually granted subscriptions".into()
+                "Cannot change plan for manually granted subscriptions".into(),
             ));
         }
 
         // Check if has Stripe subscription ID
         if sub.stripe_subscription_id.is_none() {
             return Err(AppError::InvalidInput(
-                "Cannot change plan: subscription not linked to Stripe".into()
+                "Cannot change plan: subscription not linked to Stripe".into(),
             ));
         }
 
@@ -1536,41 +1694,37 @@ impl DomainBillingUseCases {
         // Must be different plan
         if current_plan.id == new_plan.id {
             return Err(AppError::InvalidInput(
-                "Already subscribed to this plan".into()
+                "Already subscribed to this plan".into(),
             ));
         }
 
         // New plan must be public
         if !new_plan.is_public {
             return Err(AppError::InvalidInput(
-                "This plan is not available for subscription".into()
+                "This plan is not available for subscription".into(),
             ));
         }
 
         // New plan must not be archived
         if new_plan.is_archived {
             return Err(AppError::InvalidInput(
-                "This plan is no longer available".into()
+                "This plan is no longer available".into(),
             ));
         }
 
         // Must have same interval (can't switch between monthly and yearly)
         if current_plan.interval != new_plan.interval {
-            return Err(AppError::InvalidInput(
-                format!(
-                    "Cannot switch between {} and {} billing. Please cancel and resubscribe.",
-                    current_plan.interval, new_plan.interval
-                )
-            ));
+            return Err(AppError::InvalidInput(format!(
+                "Cannot switch between {} and {} billing. Please cancel and resubscribe.",
+                current_plan.interval, new_plan.interval
+            )));
         }
 
         // Must have same interval count
         if current_plan.interval_count != new_plan.interval_count {
-            return Err(AppError::InvalidInput(
-                format!(
-                    "Cannot switch between different billing frequencies. Please cancel and resubscribe."
-                )
-            ));
+            return Err(AppError::InvalidInput(format!(
+                "Cannot switch between different billing frequencies. Please cancel and resubscribe."
+            )));
         }
 
         Ok(())
@@ -1588,44 +1742,64 @@ impl DomainBillingUseCases {
         let domain = self.get_domain_verified(owner_id, domain_id).await?;
         let mode = domain.billing_stripe_mode;
 
-        let active = self.subscription_repo.count_by_status_and_mode(domain_id, mode, SubscriptionStatus::Active).await?;
-        let trialing = self.subscription_repo.count_by_status_and_mode(domain_id, mode, SubscriptionStatus::Trialing).await?;
-        let past_due = self.subscription_repo.count_by_status_and_mode(domain_id, mode, SubscriptionStatus::PastDue).await?;
+        let active = self
+            .subscription_repo
+            .count_by_status_and_mode(domain_id, mode, SubscriptionStatus::Active)
+            .await?;
+        let trialing = self
+            .subscription_repo
+            .count_by_status_and_mode(domain_id, mode, SubscriptionStatus::Trialing)
+            .await?;
+        let past_due = self
+            .subscription_repo
+            .count_by_status_and_mode(domain_id, mode, SubscriptionStatus::PastDue)
+            .await?;
 
         // Calculate MRR from active subscriptions
-        let subscribers = self.subscription_repo.list_by_domain_and_mode(domain_id, mode).await?;
-        let mut mrr_cents: i64 = 0;
-        let mut plan_stats: std::collections::HashMap<Uuid, (String, i64, i64)> = std::collections::HashMap::new();
+        let subscribers = self
+            .subscription_repo
+            .list_by_domain_and_mode(domain_id, mode)
+            .await?;
+
+        // Accumulator tuple: (plan_name, subscriber_count, revenue_cents_f64)
+        type PlanAccumulator = (String, i64, f64);
+
+        // Use f64 for accumulation to preserve precision; round at the end
+        let mut mrr_cents_f64: f64 = 0.0;
+        let mut plan_stats: std::collections::HashMap<Uuid, PlanAccumulator> =
+            std::collections::HashMap::new();
 
         for sub in &subscribers {
             if sub.subscription.status.is_active() {
-                // Calculate MRR: normalize all intervals to monthly
-                // interval_count must be at least 1 to avoid division by zero
-                let interval_count = std::cmp::max(sub.plan.interval_count as i64, 1);
+                let interval_count = sub.plan.interval_count as i64;
                 let price = sub.plan.price_cents as i64;
 
-                let monthly_amount = match sub.plan.interval.as_str() {
-                    // yearly = every N years; divide by (N * 12) to get monthly
-                    "yearly" | "year" => price / (interval_count * 12),
-                    // monthly = every N months; divide by N to get monthly
-                    "monthly" | "month" => price / interval_count,
-                    // For any other interval, assume it's months and divide by interval_count
-                    _ => price / interval_count,
-                };
-                mrr_cents += monthly_amount;
+                let monthly_amount = calculate_monthly_amount_cents(
+                    price,
+                    sub.plan.interval.as_str(),
+                    interval_count,
+                );
+                mrr_cents_f64 += monthly_amount;
 
-                let entry = plan_stats.entry(sub.plan.id).or_insert((sub.plan.name.clone(), 0, 0));
+                let entry =
+                    plan_stats
+                        .entry(sub.plan.id)
+                        .or_insert((sub.plan.name.clone(), 0, 0.0));
                 entry.1 += 1;
                 entry.2 += monthly_amount;
             }
         }
 
-        let plan_distribution = plan_stats.into_iter()
-            .map(|(id, (name, count, revenue))| PlanDistribution {
+        // Convert to i64 with proper rounding
+        let mrr_cents = mrr_cents_f64.round() as i64;
+
+        let plan_distribution = plan_stats
+            .into_iter()
+            .map(|(id, (name, count, revenue_f64))| PlanDistribution {
                 plan_id: id,
                 plan_name: name,
                 subscriber_count: count,
-                revenue_cents: revenue,
+                revenue_cents: revenue_f64.round() as i64,
             })
             .collect();
 
@@ -1648,7 +1822,10 @@ impl DomainBillingUseCases {
         user_id: Uuid,
     ) -> AppResult<SubscriptionClaims> {
         let mode = self.get_active_mode(domain_id).await?;
-        let sub = self.subscription_repo.get_by_user_and_mode(domain_id, mode, user_id).await?;
+        let sub = self
+            .subscription_repo
+            .get_by_user_and_mode(domain_id, mode, user_id)
+            .await?;
 
         if let Some(sub) = sub {
             let plan = self.plan_repo.get_by_id(sub.plan_id).await?;
@@ -1672,7 +1849,9 @@ impl DomainBillingUseCases {
     // ========================================================================
 
     pub async fn is_event_processed(&self, stripe_event_id: &str) -> AppResult<bool> {
-        self.event_repo.exists_by_stripe_event_id(stripe_event_id).await
+        self.event_repo
+            .exists_by_stripe_event_id(stripe_event_id)
+            .await
     }
 
     /// Create or update a subscription (used by webhooks)
@@ -1681,16 +1860,16 @@ impl DomainBillingUseCases {
         input: &CreateSubscriptionInput,
     ) -> AppResult<UserSubscriptionProfile> {
         // Check if subscription already exists for this user in this mode
-        if let Some(existing) = self.subscription_repo.get_by_user_and_mode(
-            input.domain_id,
-            input.stripe_mode,
-            input.end_user_id
-        ).await? {
+        if let Some(existing) = self
+            .subscription_repo
+            .get_by_user_and_mode(input.domain_id, input.stripe_mode, input.end_user_id)
+            .await?
+        {
             // Update existing subscription with new plan and Stripe IDs
             let update = StripeSubscriptionUpdate {
                 status: input.status,
-                plan_id: Some(input.plan_id),  // Update plan (handles upgrade/downgrade)
-                stripe_subscription_id: input.stripe_subscription_id.clone(),  // Update Stripe subscription ID
+                plan_id: Some(input.plan_id), // Update plan (handles upgrade/downgrade)
+                stripe_subscription_id: input.stripe_subscription_id.clone(), // Update Stripe subscription ID
                 current_period_start: input.current_period_start,
                 current_period_end: input.current_period_end,
                 cancel_at_period_end: false,
@@ -1698,7 +1877,9 @@ impl DomainBillingUseCases {
                 trial_start: input.trial_start,
                 trial_end: input.trial_end,
             };
-            self.subscription_repo.update_from_stripe(existing.id, &update).await
+            self.subscription_repo
+                .update_from_stripe(existing.id, &update)
+                .await
         } else {
             self.subscription_repo.create(input).await
         }
@@ -1709,9 +1890,14 @@ impl DomainBillingUseCases {
         stripe_subscription_id: &str,
         update: &StripeSubscriptionUpdate,
     ) -> AppResult<UserSubscriptionProfile> {
-        let sub = self.subscription_repo.get_by_stripe_subscription_id(stripe_subscription_id).await?
+        let sub = self
+            .subscription_repo
+            .get_by_stripe_subscription_id(stripe_subscription_id)
+            .await?
             .ok_or(AppError::NotFound)?;
-        self.subscription_repo.update_from_stripe(sub.id, update).await
+        self.subscription_repo
+            .update_from_stripe(sub.id, update)
+            .await
     }
 
     pub async fn log_webhook_event(
@@ -1723,15 +1909,17 @@ impl DomainBillingUseCases {
         stripe_event_id: &str,
         metadata: serde_json::Value,
     ) -> AppResult<()> {
-        self.event_repo.create(&CreateSubscriptionEventInput {
-            subscription_id,
-            event_type: event_type.to_string(),
-            previous_status,
-            new_status,
-            stripe_event_id: Some(stripe_event_id.to_string()),
-            metadata,
-            created_by: None,
-        }).await
+        self.event_repo
+            .create(&CreateSubscriptionEventInput {
+                subscription_id,
+                event_type: event_type.to_string(),
+                previous_status,
+                new_status,
+                stripe_event_id: Some(stripe_event_id.to_string()),
+                metadata,
+                created_by: None,
+            })
+            .await
     }
 
     // ========================================================================
@@ -1749,7 +1937,8 @@ impl DomainBillingUseCases {
         let customer_id = invoice["customer"].as_str().unwrap_or("");
 
         // Try to find the subscription and user from the customer ID
-        let subscription = self.subscription_repo
+        let subscription = self
+            .subscription_repo
             .get_by_stripe_customer_id(domain_id, mode, customer_id)
             .await?;
 
@@ -1768,9 +1957,8 @@ impl DomainBillingUseCases {
                 return Err(AppError::NotFound);
             };
 
-        let status = PaymentStatus::from_stripe_invoice_status(
-            invoice["status"].as_str().unwrap_or(""),
-        );
+        let status =
+            PaymentStatus::from_stripe_invoice_status(invoice["status"].as_str().unwrap_or(""));
 
         let payment_date = if status == PaymentStatus::Paid {
             invoice["status_transitions"]["paid_at"]
@@ -1786,16 +1974,11 @@ impl DomainBillingUseCases {
             end_user_id,
             subscription_id,
             stripe_invoice_id: stripe_invoice_id.to_string(),
-            stripe_payment_intent_id: invoice["payment_intent"]
-                .as_str()
-                .map(|s| s.to_string()),
+            stripe_payment_intent_id: invoice["payment_intent"].as_str().map(|s| s.to_string()),
             stripe_customer_id: customer_id.to_string(),
             amount_cents: invoice["amount_due"].as_i64().unwrap_or(0) as i32,
             amount_paid_cents: invoice["amount_paid"].as_i64().unwrap_or(0) as i32,
-            currency: invoice["currency"]
-                .as_str()
-                .unwrap_or("usd")
-                .to_uppercase(),
+            currency: invoice["currency"].as_str().unwrap_or("usd").to_uppercase(),
             status,
             plan_id,
             plan_code,
@@ -1863,7 +2046,12 @@ impl DomainBillingUseCases {
         failure_message: Option<String>,
     ) -> AppResult<()> {
         self.payment_repo
-            .update_status(stripe_invoice_id, status, amount_refunded_cents, failure_message)
+            .update_status(
+                stripe_invoice_id,
+                status,
+                amount_refunded_cents,
+                failure_message,
+            )
             .await
     }
 
@@ -1892,7 +2080,13 @@ impl DomainBillingUseCases {
     ) -> AppResult<PaginatedPayments> {
         let domain = self.get_domain_verified(owner_id, domain_id).await?;
         self.payment_repo
-            .list_by_domain(domain_id, domain.billing_stripe_mode, filters, page, per_page)
+            .list_by_domain(
+                domain_id,
+                domain.billing_stripe_mode,
+                filters,
+                page,
+                per_page,
+            )
             .await
     }
 
@@ -1918,7 +2112,8 @@ impl DomainBillingUseCases {
         filters: &PaymentListFilters,
     ) -> AppResult<String> {
         let domain = self.get_domain_verified(owner_id, domain_id).await?;
-        let payments = self.payment_repo
+        let payments = self
+            .payment_repo
             .list_all_for_export(domain_id, domain.billing_stripe_mode, filters)
             .await?;
 
@@ -1927,7 +2122,9 @@ impl DomainBillingUseCases {
         csv.push_str("Date,User Email,Plan,Amount,Status,Invoice Number,Billing Reason\n");
 
         for p in payments {
-            let date = p.payment.payment_date
+            let date = p
+                .payment
+                .payment_date
                 .or(p.payment.created_at)
                 .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
                 .unwrap_or_default();
@@ -1961,10 +2158,8 @@ impl DomainBillingUseCases {
 /// starting with =, +, -, @, tab, or carriage return. We prefix such values
 /// with a single quote to prevent formula injection attacks.
 fn escape_csv_field(field: &str) -> String {
-    let needs_quoting = field.contains(',')
-        || field.contains('"')
-        || field.contains('\n')
-        || field.contains('\r');
+    let needs_quoting =
+        field.contains(',') || field.contains('"') || field.contains('\n') || field.contains('\r');
 
     // Check for formula injection characters at start
     let is_formula = field
@@ -1996,7 +2191,7 @@ fn mask_key(key: &str) -> String {
     if key.len() <= 4 {
         "*".repeat(key.len())
     } else {
-        format!("...{}", &key[key.len()-4..])
+        format!("...{}", &key[key.len() - 4..])
     }
 }
 
@@ -2039,5 +2234,127 @@ impl SubscriptionClaims {
             status: "none".to_string(),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod mrr_calculation_tests {
+    use super::*;
+
+    #[test]
+    fn test_calculate_monthly_amount_yearly_plan() {
+        // $119/year = 11900 cents / 12 months = 991.666... cents
+        let result = calculate_monthly_amount_cents(11900, "yearly", 1);
+        assert!((result - 991.6666666666666).abs() < 0.0001);
+        assert_eq!(result.round() as i64, 992); // Rounds to 992, not truncates to 991
+    }
+
+    #[test]
+    fn test_calculate_monthly_amount_year_alias() {
+        // "year" should behave same as "yearly"
+        let result = calculate_monthly_amount_cents(11900, "year", 1);
+        assert_eq!(result.round() as i64, 992);
+    }
+
+    #[test]
+    fn test_calculate_monthly_amount_monthly_plan() {
+        // $9.99/month = 999 cents, interval_count=1
+        let result = calculate_monthly_amount_cents(999, "monthly", 1);
+        assert_eq!(result, 999.0);
+    }
+
+    #[test]
+    fn test_calculate_monthly_amount_month_alias() {
+        // "month" should behave same as "monthly"
+        let result = calculate_monthly_amount_cents(999, "month", 1);
+        assert_eq!(result, 999.0);
+    }
+
+    #[test]
+    fn test_calculate_monthly_amount_biannual() {
+        // $200 every 2 years = 20000 cents / 24 months = 833.333... cents
+        let result = calculate_monthly_amount_cents(20000, "yearly", 2);
+        assert!((result - 833.3333333333334).abs() < 0.0001);
+        assert_eq!(result.round() as i64, 833);
+    }
+
+    #[test]
+    fn test_calculate_monthly_amount_quarterly() {
+        // $30 every 3 months = 3000 cents / 3 = 1000 cents
+        let result = calculate_monthly_amount_cents(3000, "monthly", 3);
+        assert_eq!(result, 1000.0);
+    }
+
+    #[test]
+    fn test_calculate_monthly_amount_zero_price() {
+        // Free plan
+        let result = calculate_monthly_amount_cents(0, "yearly", 1);
+        assert_eq!(result, 0.0);
+    }
+
+    #[test]
+    fn test_calculate_monthly_amount_zero_interval_count() {
+        // Edge case: interval_count=0 should be treated as 1 (defensive)
+        let result = calculate_monthly_amount_cents(1200, "monthly", 0);
+        assert_eq!(result, 1200.0);
+    }
+
+    #[test]
+    fn test_calculate_monthly_amount_very_small_yearly() {
+        // $1.99/year = 199 cents / 12 = 16.583... cents
+        let result = calculate_monthly_amount_cents(199, "yearly", 1);
+        assert_eq!(result.round() as i64, 17); // Rounds up, not truncates to 16
+    }
+
+    #[test]
+    fn test_calculate_monthly_amount_unknown_interval() {
+        // Unknown intervals default to monthly behavior (legacy)
+        let result = calculate_monthly_amount_cents(1500, "weekly", 1);
+        assert_eq!(result, 1500.0); // Treated as monthly
+    }
+
+    #[test]
+    fn test_mrr_accumulation_precision() {
+        // 10 subscribers at $119/year each
+        // Each: 11900/12 = 991.666...
+        // Sum: 9916.666...
+        // Rounded: 9917 cents
+        let mut total = 0.0;
+        for _ in 0..10 {
+            total += calculate_monthly_amount_cents(11900, "yearly", 1);
+        }
+        assert_eq!(total.round() as i64, 9917);
+
+        // Old integer math would give: 10 * (11900 / 12) = 10 * 991 = 9910
+        // We gain 7 cents of accuracy
+    }
+
+    #[test]
+    fn test_mrr_accumulation_mixed_intervals() {
+        // 5 yearly at $119 + 3 monthly at $9.99
+        let mut total = 0.0;
+        for _ in 0..5 {
+            total += calculate_monthly_amount_cents(11900, "yearly", 1);
+        }
+        for _ in 0..3 {
+            total += calculate_monthly_amount_cents(999, "monthly", 1);
+        }
+        // 5 * 991.666... + 3 * 999 = 4958.333... + 2997 = 7955.333...
+        assert_eq!(total.round() as i64, 7955);
+    }
+
+    #[test]
+    fn test_mrr_large_subscriber_count() {
+        // 1000 subscribers at $119/year
+        // Each: 991.666...
+        // Total: 991666.666...
+        // Rounded: 991667 cents = $9916.67 MRR
+        let mut total = 0.0;
+        for _ in 0..1000 {
+            total += calculate_monthly_amount_cents(11900, "yearly", 1);
+        }
+        assert_eq!(total.round() as i64, 991667);
+
+        // Old integer math: 1000 * 991 = 991000 (loses $6.67)
     }
 }

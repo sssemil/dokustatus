@@ -17,6 +17,9 @@ pub enum AppError {
     #[error("Invalid input: {0}")]
     InvalidInput(String),
 
+    #[error("OAuth retry window expired")]
+    OAuthRetryExpired,
+
     #[error("Validation error: {0}")]
     ValidationError(String),
 
@@ -55,6 +58,7 @@ pub enum ErrorCode {
     InvalidApiKey,
     RateLimited,
     InvalidInput,
+    OAuthRetryExpired,
     ValidationError,
     AccountSuspended,
     TooManyDocuments,
@@ -75,6 +79,7 @@ impl ErrorCode {
             ErrorCode::InvalidApiKey => "INVALID_API_KEY",
             ErrorCode::RateLimited => "RATE_LIMITED",
             ErrorCode::InvalidInput => "INVALID_INPUT",
+            ErrorCode::OAuthRetryExpired => "OAUTH_RETRY_EXPIRED",
             ErrorCode::ValidationError => "VALIDATION_ERROR",
             ErrorCode::AccountSuspended => "ACCOUNT_SUSPENDED",
             ErrorCode::TooManyDocuments => "TOO_MANY_DOCUMENTS",

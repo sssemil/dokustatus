@@ -7,10 +7,7 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    domain::entities::{
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
-    },
+    domain::entities::{payment_mode::PaymentMode, payment_provider::PaymentProvider},
 };
 
 // ============================================================================
@@ -238,7 +235,7 @@ impl EnabledPaymentProvidersRepo for PostgresPersistence {
             UPDATE domain_enabled_payment_providers
             SET is_active = $4, updated_at = CURRENT_TIMESTAMP
             WHERE domain_id = $1 AND provider = $2 AND mode = $3
-            "#
+            "#,
         )
         .bind(domain_id)
         .bind(provider)
@@ -263,7 +260,7 @@ impl EnabledPaymentProvidersRepo for PostgresPersistence {
             UPDATE domain_enabled_payment_providers
             SET display_order = $4, updated_at = CURRENT_TIMESTAMP
             WHERE domain_id = $1 AND provider = $2 AND mode = $3
-            "#
+            "#,
         )
         .bind(domain_id)
         .bind(provider)

@@ -8,6 +8,7 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::{Deserialize, Serialize};
 use time;
+use tracing::error;
 use uuid::Uuid;
 
 use crate::{
@@ -17,16 +18,16 @@ use crate::{
         jwt,
         use_cases::{
             domain::extract_root_from_reauth_hostname,
-            domain_auth::DomainEndUserProfile,
+            domain_auth::{DomainEndUserProfile, MarkStateResult},
             domain_billing::SubscriptionClaims,
         },
         validators::is_valid_email,
     },
     domain::entities::{
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
+        payment_mode::PaymentMode, payment_provider::PaymentProvider,
         payment_scenario::PaymentScenario,
     },
+    infra::http_client,
 };
 
 /// Appends a cookie to the headers, handling parse errors gracefully
@@ -251,13 +252,25 @@ pub fn router() -> Router<AppState> {
         .route("/{domain}/billing/portal", post(create_portal))
         .route("/{domain}/billing/cancel", post(cancel_subscription))
         .route("/{domain}/billing/payments", get(get_user_payments))
-        .route("/{domain}/billing/plan-change/preview", get(preview_plan_change))
+        .route(
+            "/{domain}/billing/plan-change/preview",
+            get(preview_plan_change),
+        )
         .route("/{domain}/billing/plan-change", post(change_plan))
         // Provider routes
         .route("/{domain}/billing/providers", get(get_available_providers))
-        .route("/{domain}/billing/checkout/dummy", post(create_dummy_checkout))
-        .route("/{domain}/billing/dummy/confirm", post(confirm_dummy_checkout))
-        .route("/{domain}/billing/dummy/scenarios", get(get_dummy_scenarios))
+        .route(
+            "/{domain}/billing/checkout/dummy",
+            post(create_dummy_checkout),
+        )
+        .route(
+            "/{domain}/billing/dummy/confirm",
+            post(confirm_dummy_checkout),
+        )
+        .route(
+            "/{domain}/billing/dummy/scenarios",
+            get(get_dummy_scenarios),
+        )
         // Mode-specific webhook endpoints
         .route("/{domain}/billing/webhook/test", post(handle_webhook_test))
         .route("/{domain}/billing/webhook/live", post(handle_webhook_live))
@@ -892,41 +905,103 @@ async fn google_exchange(
     Path(_hostname): Path<String>,
     Json(payload): Json<GoogleExchangePayload>,
 ) -> AppResult<impl IntoResponse> {
-    // Consume state - the domain comes FROM the state, not the URL
+    const RETRY_WINDOW_SECS: i64 = 90;
+
+    // Mark state as in-use - the domain comes FROM the state, not the URL
     // This is because Google OAuth uses a single callback URL (reauth.reauth.dev)
     // but the OAuth flow could have been initiated from any domain
-    let state_data = app_state
+    let state_data = match app_state
         .domain_auth_use_cases
-        .consume_google_oauth_state(&payload.state)
+        .mark_google_oauth_state_in_use(&payload.state, RETRY_WINDOW_SECS)
         .await?
-        .ok_or_else(|| AppError::InvalidInput("Invalid or expired OAuth state".into()))?;
+    {
+        MarkStateResult::Success(data) => data,
+        MarkStateResult::NotFound => {
+            return Err(AppError::InvalidInput(
+                "Invalid or expired OAuth state".into(),
+            ));
+        }
+        MarkStateResult::RetryWindowExpired => {
+            let _ = app_state
+                .domain_auth_use_cases
+                .abort_google_oauth_state(&payload.state)
+                .await;
+            return Err(AppError::OAuthRetryExpired);
+        }
+    };
 
     // Use the domain from the state (this is the domain that initiated the OAuth flow)
     let root_domain = &state_data.domain;
 
     // Get domain
-    let domain = app_state
+    let domain = match app_state
         .domain_auth_use_cases
         .get_domain_by_name(root_domain)
-        .await?
-        .ok_or(AppError::NotFound)?;
+        .await
+    {
+        Ok(Some(domain)) => domain,
+        Ok(None) => {
+            let _ = app_state
+                .domain_auth_use_cases
+                .abort_google_oauth_state(&payload.state)
+                .await;
+            return Err(AppError::NotFound);
+        }
+        Err(e) => {
+            if should_abort_state(&e) {
+                let _ = app_state
+                    .domain_auth_use_cases
+                    .abort_google_oauth_state(&payload.state)
+                    .await;
+            }
+            return Err(e);
+        }
+    };
 
     // Verify Google OAuth is still enabled
-    if !app_state
+    match app_state
         .domain_auth_use_cases
         .is_google_oauth_enabled(domain.id)
-        .await?
+        .await
     {
-        return Err(AppError::InvalidInput(
-            "Google OAuth is not enabled for this domain".into(),
-        ));
+        Ok(true) => {}
+        Ok(false) => {
+            let _ = app_state
+                .domain_auth_use_cases
+                .abort_google_oauth_state(&payload.state)
+                .await;
+            return Err(AppError::InvalidInput(
+                "Google OAuth is not enabled for this domain".into(),
+            ));
+        }
+        Err(e) => {
+            if should_abort_state(&e) {
+                let _ = app_state
+                    .domain_auth_use_cases
+                    .abort_google_oauth_state(&payload.state)
+                    .await;
+            }
+            return Err(e);
+        }
     }
 
     // Get OAuth credentials
-    let (client_id, client_secret, is_fallback) = app_state
+    let (client_id, client_secret, is_fallback) = match app_state
         .domain_auth_use_cases
         .get_google_oauth_config(domain.id)
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            if should_abort_state(&e) {
+                let _ = app_state
+                    .domain_auth_use_cases
+                    .abort_google_oauth_state(&payload.state)
+                    .await;
+            }
+            return Err(e);
+        }
+    };
 
     // Exchange code with Google
     // Must use same redirect_uri as google_start (fallback vs custom)
@@ -937,21 +1012,41 @@ async fn google_exchange(
         format!("https://reauth.{}/callback/google", root_domain)
     };
 
-    let token_response = exchange_google_code(
+    let token_response = match exchange_google_code_typed(
         &payload.code,
         &client_id,
         &client_secret,
         &redirect_uri,
         &state_data.code_verifier,
     )
-    .await?;
+    .await
+    {
+        Ok(response) => response,
+        Err(e) => {
+            handle_oauth_exchange_error(&app_state, &payload.state, &e).await;
+            return Err(e.into());
+        }
+    };
 
     // Parse and validate id_token (with signature verification)
     let (google_id, email, email_verified) =
-        parse_google_id_token(&token_response.id_token, &client_id).await?;
+        match parse_google_id_token(&token_response.id_token, &client_id).await {
+            Ok(result) => result,
+            Err(e) => {
+                let _ = app_state
+                    .domain_auth_use_cases
+                    .abort_google_oauth_state(&payload.state)
+                    .await;
+                return Err(e);
+            }
+        };
 
     // Verify email is verified by Google
     if !email_verified {
+        let _ = app_state
+            .domain_auth_use_cases
+            .abort_google_oauth_state(&payload.state)
+            .await;
         return Err(AppError::InvalidInput(
             "Google account email is not verified".into(),
         ));
@@ -959,12 +1054,20 @@ async fn google_exchange(
 
     // Find or create end user
     use crate::application::use_cases::domain_auth::GoogleLoginResult;
-    let result = app_state
+    let result = match app_state
         .domain_auth_use_cases
         .find_or_create_end_user_by_google(domain.id, &google_id, &email)
-        .await?;
+        .await
+    {
+        Ok(result) => result,
+        Err(e) => {
+            let exchange_err = classify_user_creation_error(&e);
+            handle_oauth_exchange_error(&app_state, &payload.state, &exchange_err).await;
+            return Err(e);
+        }
+    };
 
-    match result {
+    let response = match result {
         GoogleLoginResult::LoggedIn(user) => {
             // Generate a completion token - this will be used to set cookies on the correct domain
             let completion_token = app_state
@@ -1008,7 +1111,23 @@ async fn google_exchange(
                 Json(GoogleExchangeResponse::NeedsLinkConfirmation { link_token, email }),
             ))
         }
+    };
+
+    if response.is_ok() {
+        if let Err(e) = app_state
+            .domain_auth_use_cases
+            .complete_google_oauth_state(&payload.state)
+            .await
+        {
+            tracing::warn!(
+                state = %payload.state,
+                error = %e,
+                "Failed to delete OAuth state after successful login (best-effort)"
+            );
+        }
     }
+
+    response
 }
 
 /// POST /api/public/domain/{domain}/auth/google/confirm-link
@@ -1224,7 +1343,9 @@ async fn get_user_subscription(
             plan_code: Some(plan.code),
             plan_name: Some(plan.name),
             status: subscription.status.as_str().to_string(),
-            current_period_end: subscription.current_period_end.map(|dt| dt.and_utc().timestamp()),
+            current_period_end: subscription
+                .current_period_end
+                .map(|dt| dt.and_utc().timestamp()),
             trial_end: subscription.trial_end.map(|dt| dt.and_utc().timestamp()),
             cancel_at_period_end: Some(subscription.cancel_at_period_end),
         })),
@@ -1438,9 +1559,12 @@ async fn cancel_subscription(
         .ok_or(AppError::NotFound)?;
 
     // Get Stripe subscription ID
-    let stripe_subscription_id = subscription
-        .stripe_subscription_id
-        .ok_or(AppError::InvalidInput("No active Stripe subscription".into()))?;
+    let stripe_subscription_id =
+        subscription
+            .stripe_subscription_id
+            .ok_or(AppError::InvalidInput(
+                "No active Stripe subscription".into(),
+            ))?;
 
     // Get Stripe client
     let secret_key = app_state
@@ -1635,7 +1759,6 @@ async fn preview_plan_change(
 async fn change_plan(
     State(app_state): State<AppState>,
     Path(hostname): Path<String>,
-    headers: HeaderMap,
     cookies: CookieJar,
     Json(payload): Json<PlanChangeRequest>,
 ) -> AppResult<impl IntoResponse> {
@@ -1644,17 +1767,10 @@ async fn change_plan(
     // Get user from token
     let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
 
-    // Get or generate idempotency key
-    let idempotency_key = headers
-        .get("Idempotency-Key")
-        .and_then(|v| v.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-
     // Execute plan change
     let result = app_state
         .billing_use_cases
-        .change_plan(domain_id, user_id, &payload.plan_code, &idempotency_key)
+        .change_plan(domain_id, user_id, &payload.plan_code)
         .await?;
 
     Ok(Json(PlanChangeResponse {
@@ -1681,6 +1797,59 @@ async fn change_plan(
 }
 
 use crate::domain::entities::stripe_mode::StripeMode;
+
+/// Determines if a webhook processing error should trigger a Stripe retry.
+///
+/// Returns `true` if the error is retryable (transient), meaning we should
+/// return 5xx to Stripe so they retry the webhook.
+///
+/// Returns `false` if the error is non-retryable (expected condition like
+/// customer not found), meaning we should return 2xx and log.
+fn is_retryable_error(error: &AppError) -> bool {
+    match error {
+        // Transient errors - retry may succeed
+        AppError::Database(_) => true,
+        AppError::Internal(_) => true,
+        AppError::RateLimited => true,
+
+        // Expected conditions - won't change with retry
+        AppError::NotFound => false,
+        AppError::InvalidInput(_) => false,
+        AppError::ValidationError(_) => false,
+        AppError::Forbidden => false,
+        AppError::InvalidCredentials => false,
+        AppError::InvalidApiKey => false,
+        AppError::AccountSuspended => false,
+        AppError::SessionMismatch => false,
+        AppError::TooManyDocuments => false,
+        AppError::PaymentDeclined(_) => false,
+        AppError::ProviderNotConfigured => false,
+        AppError::ProviderNotSupported => false,
+
+        // Unknown/new variants - safer to retry
+        #[allow(unreachable_patterns)]
+        _ => true,
+    }
+}
+
+/// Returns 500 Internal Server Error for Stripe to retry the webhook.
+/// Logs the error with full context for debugging and future metrics extraction.
+fn webhook_retryable_error(
+    error: &AppError,
+    event_type: &str,
+    event_id: &str,
+    context: &str,
+) -> StatusCode {
+    tracing::error!(
+        error = %error,
+        event_type,
+        event_id,
+        context,
+        retryable = true,
+        "Webhook processing failed, returning 500 for Stripe retry"
+    );
+    StatusCode::INTERNAL_SERVER_ERROR
+}
 
 /// POST /api/public/domain/{domain}/billing/webhook/test
 /// Handles Stripe webhook events for test mode
@@ -1763,86 +1932,180 @@ async fn handle_webhook_for_mode(
             let subscription_id = session["subscription"].as_str();
             let client_reference_id = session["client_reference_id"].as_str();
 
-            if let (Some(sub_id), Some(user_id_str)) = (subscription_id, client_reference_id) {
-                if let Ok(user_id) = Uuid::parse_str(user_id_str) {
-                    // Get the Stripe subscription to find the price ID
-                    let secret_key = app_state
-                        .billing_use_cases
-                        .get_stripe_secret_key(domain.id)
-                        .await?;
-                    let stripe = StripeClient::new(secret_key);
-
-                    if let Ok(stripe_sub) = stripe.get_subscription(sub_id).await {
-                        // Use the webhook mode for plan lookup
-
-                        // Find plan by Stripe price ID - search ALL plans (not just public)
-                        // because plan visibility can change after purchase
-                        let plan = app_state
-                            .billing_use_cases
-                            .get_plan_by_stripe_price_id(domain.id, stripe_mode, &stripe_sub.price_id())
-                            .await?;
-
-                        if let Some(plan) = plan {
-                            use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
-
-                            // Map Stripe status to our SubscriptionStatus - don't assume Active
-                            let status = match stripe_sub.status.as_str() {
-                                "active" => SubscriptionStatus::Active,
-                                "past_due" => SubscriptionStatus::PastDue,
-                                "canceled" => SubscriptionStatus::Canceled,
-                                "trialing" => SubscriptionStatus::Trialing,
-                                "incomplete" => SubscriptionStatus::Incomplete,
-                                "incomplete_expired" => SubscriptionStatus::IncompleteExpired,
-                                "unpaid" => SubscriptionStatus::Unpaid,
-                                "paused" => SubscriptionStatus::Paused,
-                                // Default to Incomplete - never grant access by default
-                                _ => SubscriptionStatus::Incomplete,
-                            };
-
-                            let input = CreateSubscriptionInput {
-                                domain_id: domain.id,
-                                stripe_mode,
-                                end_user_id: user_id,
-                                plan_id: plan.id,
-                                stripe_customer_id: customer_id.to_string(),
-                                stripe_subscription_id: Some(sub_id.to_string()),
-                                status,
-                                current_period_start: Some(chrono::NaiveDateTime::from_timestamp_opt(
-                                    stripe_sub.current_period_start,
-                                    0,
-                                ).unwrap_or_default()),
-                                current_period_end: Some(chrono::NaiveDateTime::from_timestamp_opt(
-                                    stripe_sub.current_period_end,
-                                    0,
-                                ).unwrap_or_default()),
-                                trial_start: stripe_sub.trial_start.and_then(|ts|
-                                    chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
-                                ),
-                                trial_end: stripe_sub.trial_end.and_then(|ts|
-                                    chrono::NaiveDateTime::from_timestamp_opt(ts, 0)
-                                ),
-                            };
-
-                            let created_sub = app_state
-                                .billing_use_cases
-                                .create_or_update_subscription(&input)
-                                .await?;
-
-                            // Log event with actual status
-                            app_state
-                                .billing_use_cases
-                                .log_webhook_event(
-                                    created_sub.id,
-                                    event_type,
-                                    None,
-                                    Some(status),
-                                    event_id,
-                                    serde_json::json!({"customer_id": customer_id, "stripe_status": &stripe_sub.status}),
-                                )
-                                .await?;
-                        }
-                    }
+            // Both subscription_id and client_reference_id are required for processing
+            let (sub_id, user_id_str) = match (subscription_id, client_reference_id) {
+                (Some(s), Some(u)) => (s, u),
+                _ => {
+                    // One-time payment or missing data - nothing to process
+                    tracing::debug!(
+                        event_id,
+                        "checkout.session.completed without subscription or client_reference_id"
+                    );
+                    return Ok(StatusCode::OK);
                 }
+            };
+
+            let user_id = match Uuid::parse_str(user_id_str) {
+                Ok(id) => id,
+                Err(_) => {
+                    tracing::debug!(
+                        event_id,
+                        user_id_str,
+                        retryable = false,
+                        "Invalid user_id format in client_reference_id"
+                    );
+                    return Ok(StatusCode::OK);
+                }
+            };
+
+            // Get the Stripe subscription to find the price ID
+            let secret_key = app_state
+                .billing_use_cases
+                .get_stripe_secret_key(domain.id)
+                .await?;
+            let stripe = StripeClient::new(secret_key);
+
+            let stripe_sub = match stripe.get_subscription(sub_id).await {
+                Ok(s) => s,
+                Err(e) if is_retryable_error(&e) => {
+                    return Ok(webhook_retryable_error(
+                        &e,
+                        event_type,
+                        event_id,
+                        "fetch subscription",
+                    ));
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        error = %e,
+                        sub_id,
+                        event_id,
+                        retryable = false,
+                        "Non-retryable error fetching subscription, skipping"
+                    );
+                    return Ok(StatusCode::OK);
+                }
+            };
+
+            // Find plan by Stripe price ID - search ALL plans (not just public)
+            // because plan visibility can change after purchase
+            let plan = match app_state
+                .billing_use_cases
+                .get_plan_by_stripe_price_id(domain.id, stripe_mode, &stripe_sub.price_id())
+                .await
+            {
+                Ok(Some(p)) => p,
+                Ok(None) => {
+                    // Configuration error - plan exists in Stripe but not in our system
+                    tracing::error!(
+                        price_id = stripe_sub.price_id(),
+                        domain_id = %domain.id,
+                        event_id,
+                        "CONFIGURATION ERROR: No plan found for Stripe price_id. User subscription may be missing!"
+                    );
+                    return Ok(StatusCode::OK);
+                }
+                Err(e) if is_retryable_error(&e) => {
+                    return Ok(webhook_retryable_error(
+                        &e,
+                        event_type,
+                        event_id,
+                        "lookup plan",
+                    ));
+                }
+                Err(e) => {
+                    tracing::debug!(
+                        error = %e,
+                        event_id,
+                        retryable = false,
+                        "Non-retryable error looking up plan"
+                    );
+                    return Ok(StatusCode::OK);
+                }
+            };
+
+            use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
+
+            // Map Stripe status to our SubscriptionStatus - don't assume Active
+            let status = match stripe_sub.status.as_str() {
+                "active" => SubscriptionStatus::Active,
+                "past_due" => SubscriptionStatus::PastDue,
+                "canceled" => SubscriptionStatus::Canceled,
+                "trialing" => SubscriptionStatus::Trialing,
+                "incomplete" => SubscriptionStatus::Incomplete,
+                "incomplete_expired" => SubscriptionStatus::IncompleteExpired,
+                "unpaid" => SubscriptionStatus::Unpaid,
+                "paused" => SubscriptionStatus::Paused,
+                // Default to Incomplete - never grant access by default
+                _ => SubscriptionStatus::Incomplete,
+            };
+
+            let input = CreateSubscriptionInput {
+                domain_id: domain.id,
+                stripe_mode,
+                end_user_id: user_id,
+                plan_id: plan.id,
+                stripe_customer_id: customer_id.to_string(),
+                stripe_subscription_id: Some(sub_id.to_string()),
+                status,
+                current_period_start: Some(
+                    chrono::NaiveDateTime::from_timestamp_opt(stripe_sub.current_period_start, 0)
+                        .unwrap_or_default(),
+                ),
+                current_period_end: Some(
+                    chrono::NaiveDateTime::from_timestamp_opt(stripe_sub.current_period_end, 0)
+                        .unwrap_or_default(),
+                ),
+                trial_start: stripe_sub
+                    .trial_start
+                    .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+                trial_end: stripe_sub
+                    .trial_end
+                    .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+            };
+
+            // Create subscription - MUST succeed for user access
+            let created_sub = match app_state
+                .billing_use_cases
+                .create_or_update_subscription(&input)
+                .await
+            {
+                Ok(s) => s,
+                Err(e) if is_retryable_error(&e) => {
+                    return Ok(webhook_retryable_error(
+                        &e,
+                        event_type,
+                        event_id,
+                        "create subscription",
+                    ));
+                }
+                Err(e) => {
+                    // Non-retryable but critical - user won't have access!
+                    tracing::error!(
+                        error = %e,
+                        user_id = %user_id,
+                        event_id,
+                        retryable = false,
+                        "CRITICAL: Non-retryable subscription creation failure - user may lack access!"
+                    );
+                    return Ok(StatusCode::OK);
+                }
+            };
+
+            // Event logging is non-critical, don't fail on logging errors
+            if let Err(e) = app_state
+                .billing_use_cases
+                .log_webhook_event(
+                    created_sub.id,
+                    event_type,
+                    None,
+                    Some(status),
+                    event_id,
+                    serde_json::json!({"customer_id": customer_id, "stripe_status": &stripe_sub.status}),
+                )
+                .await
+            {
+                tracing::warn!(error = %e, event_id, "Failed to log webhook event (non-critical)");
             }
         }
         "customer.subscription.updated" | "customer.subscription.deleted" => {
@@ -1887,15 +2150,17 @@ async fn handle_webhook_for_mode(
 
             let update = StripeSubscriptionUpdate {
                 status: new_status,
-                plan_id,  // Update plan if it changed (upgrade/downgrade via Stripe portal)
-                stripe_subscription_id: None,  // Already set, don't overwrite
+                plan_id, // Update plan if it changed (upgrade/downgrade via Stripe portal)
+                stripe_subscription_id: None, // Already set, don't overwrite
                 current_period_start: subscription["current_period_start"]
                     .as_i64()
                     .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
                 current_period_end: subscription["current_period_end"]
                     .as_i64()
                     .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
-                cancel_at_period_end: subscription["cancel_at_period_end"].as_bool().unwrap_or(false),
+                cancel_at_period_end: subscription["cancel_at_period_end"]
+                    .as_bool()
+                    .unwrap_or(false),
                 canceled_at: subscription["canceled_at"]
                     .as_i64()
                     .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
@@ -1907,27 +2172,55 @@ async fn handle_webhook_for_mode(
                     .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
             };
 
-            if let Ok(updated_sub) = app_state
+            match app_state
                 .billing_use_cases
                 .update_subscription_from_stripe(stripe_sub_id, &update)
                 .await
             {
-                app_state
-                    .billing_use_cases
-                    .log_webhook_event(
-                        updated_sub.id,
+                Ok(updated_sub) => {
+                    // Log event - non-critical
+                    if let Err(e) = app_state
+                        .billing_use_cases
+                        .log_webhook_event(
+                            updated_sub.id,
+                            event_type,
+                            None,
+                            Some(new_status),
+                            event_id,
+                            serde_json::json!({"stripe_status": status_str}),
+                        )
+                        .await
+                    {
+                        tracing::warn!(error = %e, event_id, "Failed to log subscription update event");
+                    }
+                }
+                Err(e) if is_retryable_error(&e) => {
+                    return Ok(webhook_retryable_error(
+                        &e,
                         event_type,
-                        None,
-                        Some(new_status),
                         event_id,
-                        serde_json::json!({"stripe_status": status_str}),
-                    )
-                    .await?;
+                        "update subscription",
+                    ));
+                }
+                Err(e) => {
+                    // NotFound = subscription not in our system, expected for external customers
+                    tracing::debug!(
+                        error = %e,
+                        stripe_sub_id,
+                        event_id,
+                        retryable = false,
+                        "Subscription not found in our system, skipping"
+                    );
+                }
             }
         }
         // Invoice events for payment history tracking
         // Note: invoice.payment_succeeded is the newer event name (some Stripe configs use it)
-        "invoice.created" | "invoice.paid" | "invoice.payment_succeeded" | "invoice.updated" | "invoice.finalized" => {
+        "invoice.created"
+        | "invoice.paid"
+        | "invoice.payment_succeeded"
+        | "invoice.updated"
+        | "invoice.finalized" => {
             let invoice = &event["data"]["object"];
 
             // Try to sync the invoice to our payments table
@@ -1937,11 +2230,26 @@ async fn handle_webhook_for_mode(
                 .await
             {
                 Ok(_payment) => {
-                    tracing::info!("Synced payment from {} event: {}", event_type, event_id);
+                    tracing::info!(event_type, event_id, "Synced payment from webhook");
+                }
+                Err(e) if is_retryable_error(&e) => {
+                    // DB error - retry to prevent data loss
+                    return Ok(webhook_retryable_error(
+                        &e,
+                        event_type,
+                        event_id,
+                        "sync invoice",
+                    ));
                 }
                 Err(e) => {
-                    // Log but don't fail - the invoice might be for a customer we don't know
-                    tracing::warn!("Could not sync invoice from {} event: {} - {}", event_type, event_id, e);
+                    // NotFound = customer not in our system, expected
+                    tracing::debug!(
+                        error = %e,
+                        event_type,
+                        event_id,
+                        retryable = false,
+                        "Could not sync invoice (non-retryable), skipping"
+                    );
                 }
             }
         }
@@ -1972,7 +2280,23 @@ async fn handle_webhook_for_mode(
                 )
                 .await
             {
-                tracing::warn!("Could not update payment status for failed invoice {}: {}", invoice_id, e);
+                if is_retryable_error(&e) {
+                    return Ok(webhook_retryable_error(
+                        &e,
+                        event_type,
+                        event_id,
+                        "update payment status",
+                    ));
+                } else {
+                    // Non-retryable: record might not exist (customer not in our system)
+                    tracing::debug!(
+                        error = %e,
+                        invoice_id,
+                        event_id,
+                        retryable = false,
+                        "Could not update payment status - record may not exist"
+                    );
+                }
             }
         }
         "invoice.voided" => {
@@ -1989,7 +2313,22 @@ async fn handle_webhook_for_mode(
                 )
                 .await
             {
-                tracing::warn!("Could not update payment status for voided invoice {}: {}", invoice_id, e);
+                if is_retryable_error(&e) {
+                    return Ok(webhook_retryable_error(
+                        &e,
+                        event_type,
+                        event_id,
+                        "update payment status",
+                    ));
+                } else {
+                    tracing::debug!(
+                        error = %e,
+                        invoice_id,
+                        event_id,
+                        retryable = false,
+                        "Could not update payment status - record may not exist"
+                    );
+                }
             }
         }
         "invoice.marked_uncollectible" => {
@@ -2006,7 +2345,22 @@ async fn handle_webhook_for_mode(
                 )
                 .await
             {
-                tracing::warn!("Could not update payment status for uncollectible invoice {}: {}", invoice_id, e);
+                if is_retryable_error(&e) {
+                    return Ok(webhook_retryable_error(
+                        &e,
+                        event_type,
+                        event_id,
+                        "update payment status",
+                    ));
+                } else {
+                    tracing::debug!(
+                        error = %e,
+                        invoice_id,
+                        event_id,
+                        retryable = false,
+                        "Could not update payment status - record may not exist"
+                    );
+                }
             }
         }
         "charge.refunded" => {
@@ -2026,15 +2380,25 @@ async fn handle_webhook_for_mode(
 
                 if let Err(e) = app_state
                     .billing_use_cases
-                    .update_payment_status(
-                        invoice_id,
-                        status,
-                        Some(amount_refunded),
-                        None,
-                    )
+                    .update_payment_status(invoice_id, status, Some(amount_refunded), None)
                     .await
                 {
-                    tracing::warn!("Could not update payment status for refund on invoice {}: {}", invoice_id, e);
+                    if is_retryable_error(&e) {
+                        return Ok(webhook_retryable_error(
+                            &e,
+                            event_type,
+                            event_id,
+                            "update payment status",
+                        ));
+                    } else {
+                        tracing::debug!(
+                            error = %e,
+                            invoice_id,
+                            event_id,
+                            retryable = false,
+                            "Could not update payment status - record may not exist"
+                        );
+                    }
                 }
             }
         }
@@ -2043,7 +2407,10 @@ async fn handle_webhook_for_mode(
             let charge = &event["data"]["object"];
             if let Some(invoice_id) = charge["invoice"].as_str() {
                 // Fetch and sync the invoice data
-                tracing::debug!("Charge succeeded for invoice {}, invoice event should handle sync", invoice_id);
+                tracing::debug!(
+                    "Charge succeeded for invoice {}, invoice event should handle sync",
+                    invoice_id
+                );
             }
         }
         "charge.failed" => {
@@ -2061,7 +2428,22 @@ async fn handle_webhook_for_mode(
                     )
                     .await
                 {
-                    tracing::warn!("Could not update payment status for failed charge on invoice {}: {}", invoice_id, e);
+                    if is_retryable_error(&e) {
+                        return Ok(webhook_retryable_error(
+                            &e,
+                            event_type,
+                            event_id,
+                            "update payment status",
+                        ));
+                    } else {
+                        tracing::debug!(
+                            error = %e,
+                            invoice_id,
+                            event_id,
+                            retryable = false,
+                            "Could not update payment status - record may not exist"
+                        );
+                    }
                 }
             }
         }
@@ -2072,14 +2454,20 @@ async fn handle_webhook_for_mode(
             let amount = dispute["amount"].as_i64().unwrap_or(0);
             tracing::warn!(
                 "Dispute opened for charge {} (amount: {} cents) on domain {}",
-                charge_id, amount, domain.domain
+                charge_id,
+                amount,
+                domain.domain
             );
         }
         "charge.dispute.closed" => {
             let dispute = &event["data"]["object"];
             let status = dispute["status"].as_str().unwrap_or("unknown");
             let charge_id = dispute["charge"].as_str().unwrap_or("unknown");
-            tracing::info!("Dispute closed for charge {} with status: {}", charge_id, status);
+            tracing::info!(
+                "Dispute closed for charge {} with status: {}",
+                charge_id,
+                status
+            );
         }
         "checkout.session.async_payment_failed" => {
             // Async payment (bank transfer, etc.) failed
@@ -2098,7 +2486,11 @@ async fn handle_webhook_for_mode(
             let subscription = &event["data"]["object"];
             let sub_id = subscription["id"].as_str().unwrap_or("unknown");
             let trial_end = subscription["trial_end"].as_i64();
-            tracing::info!("Trial will end for subscription {}: {:?}", sub_id, trial_end);
+            tracing::info!(
+                "Trial will end for subscription {}: {:?}",
+                sub_id,
+                trial_end
+            );
         }
         _ => {
             tracing::debug!("Unhandled webhook event type: {}", event_type);
@@ -2188,6 +2580,126 @@ async fn unlink_google(
 // Google OAuth Helper Functions
 // ============================================================================
 
+/// Typed OAuth exchange error with source information
+#[derive(Debug)]
+enum OAuthExchangeError {
+    /// Network error during Google API call
+    Network { message: String },
+    /// Google API returned an error response
+    GoogleApi {
+        status: u16,
+        error_code: Option<String>,
+        message: String,
+    },
+    /// Token parsing or validation failed
+    TokenValidation { message: String },
+    /// User data validation failed (e.g., email not verified)
+    UserValidation { message: String },
+    /// Database error during user creation
+    Database { message: String },
+    /// Redis error during state management
+    Redis { message: String },
+}
+
+impl OAuthExchangeError {
+    /// Classify error as retryable or terminal based on error type and codes
+    fn is_retryable(&self) -> bool {
+        match self {
+            OAuthExchangeError::Network { .. } => true,
+            OAuthExchangeError::GoogleApi { status, .. } => *status >= 500,
+            OAuthExchangeError::TokenValidation { .. } => false,
+            OAuthExchangeError::UserValidation { .. } => false,
+            OAuthExchangeError::Database { .. } => true,
+            OAuthExchangeError::Redis { .. } => true,
+        }
+    }
+}
+
+impl From<OAuthExchangeError> for AppError {
+    fn from(value: OAuthExchangeError) -> Self {
+        match value {
+            OAuthExchangeError::Network { message } => {
+                AppError::Internal(format!("Network error during OAuth: {message}"))
+            }
+            OAuthExchangeError::GoogleApi {
+                status,
+                error_code,
+                message,
+            } => {
+                if let Some(code) = error_code {
+                    if code == "invalid_grant" {
+                        return AppError::InvalidInput(
+                            "Authorization code expired or already used".into(),
+                        );
+                    }
+                }
+                if status >= 500 {
+                    AppError::Internal(format!("Google API error ({status}): {message}"))
+                } else {
+                    AppError::InvalidInput("Failed to authenticate with Google".into())
+                }
+            }
+            OAuthExchangeError::TokenValidation { message } => {
+                AppError::Internal(format!("Token validation failed: {message}"))
+            }
+            OAuthExchangeError::UserValidation { message } => AppError::InvalidInput(message),
+            OAuthExchangeError::Database { message } => {
+                AppError::Internal(format!("Database error: {message}"))
+            }
+            OAuthExchangeError::Redis { message } => {
+                AppError::Internal(format!("Redis error: {message}"))
+            }
+        }
+    }
+}
+
+fn should_abort_state(error: &AppError) -> bool {
+    !matches!(
+        error,
+        AppError::Database(_) | AppError::Internal(_) | AppError::RateLimited
+    )
+}
+
+fn classify_user_creation_error(error: &AppError) -> OAuthExchangeError {
+    match error {
+        AppError::InvalidInput(message) | AppError::ValidationError(message) => {
+            OAuthExchangeError::UserValidation {
+                message: message.clone(),
+            }
+        }
+        AppError::Database(message) | AppError::Internal(message) => OAuthExchangeError::Database {
+            message: message.clone(),
+        },
+        other => OAuthExchangeError::UserValidation {
+            message: other.to_string(),
+        },
+    }
+}
+
+async fn handle_oauth_exchange_error(
+    app_state: &AppState,
+    state: &str,
+    error: &OAuthExchangeError,
+) {
+    if error.is_retryable() {
+        tracing::warn!(
+            state = %state,
+            error = ?error,
+            "OAuth exchange failed (retryable), state preserved for retry"
+        );
+    } else {
+        tracing::warn!(
+            state = %state,
+            error = ?error,
+            "OAuth exchange failed (terminal), aborting state"
+        );
+        let _ = app_state
+            .domain_auth_use_cases
+            .abort_google_oauth_state(state)
+            .await;
+    }
+}
+
 #[derive(Deserialize)]
 struct GoogleTokenResponse {
     #[allow(dead_code)]
@@ -2200,14 +2712,22 @@ struct GoogleTokenResponse {
 }
 
 /// Exchange authorization code with Google for tokens
-async fn exchange_google_code(
+async fn exchange_google_code_typed(
     code: &str,
     client_id: &str,
     client_secret: &str,
     redirect_uri: &str,
     code_verifier: &str,
-) -> AppResult<GoogleTokenResponse> {
-    let client = reqwest::Client::new();
+) -> Result<GoogleTokenResponse, OAuthExchangeError> {
+    let client = http_client::try_build_client().map_err(|e| {
+        error!(
+            error = %e,
+            "Failed to build HTTP client for Google OAuth token exchange"
+        );
+        OAuthExchangeError::Network {
+            message: format!("Failed to build HTTP client: {e}"),
+        }
+    })?;
 
     let response = client
         .post("https://oauth2.googleapis.com/token")
@@ -2221,20 +2741,35 @@ async fn exchange_google_code(
         ])
         .send()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to exchange code with Google: {}", e)))?;
+        .map_err(|e| OAuthExchangeError::Network {
+            message: e.to_string(),
+        })?;
+
+    let status = response.status().as_u16();
 
     if !response.status().is_success() {
-        let error_text = response.text().await.unwrap_or_default();
-        tracing::error!("Google token exchange failed: {}", error_text);
-        return Err(AppError::InvalidInput(
-            "Failed to authenticate with Google".into(),
-        ));
+        let error_body = response.text().await.unwrap_or_default();
+        let error_code = serde_json::from_str::<serde_json::Value>(&error_body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("error")
+                    .and_then(|error| error.as_str())
+                    .map(str::to_string)
+            });
+        return Err(OAuthExchangeError::GoogleApi {
+            status,
+            error_code,
+            message: error_body,
+        });
     }
 
     response
         .json::<GoogleTokenResponse>()
         .await
-        .map_err(|e| AppError::Internal(format!("Failed to parse Google token response: {}", e)))
+        .map_err(|e| OAuthExchangeError::TokenValidation {
+            message: format!("Failed to parse token response: {e}"),
+        })
 }
 
 /// Google OIDC claims from id_token
@@ -2277,7 +2812,13 @@ struct GoogleJwk {
 
 /// Fetch Google's public keys for JWT verification
 async fn fetch_google_jwks() -> AppResult<GoogleJwks> {
-    let client = reqwest::Client::new();
+    let client = http_client::try_build_client().map_err(|e| {
+        error!(
+            error = %e,
+            "Failed to build HTTP client for Google JWKS fetch"
+        );
+        AppError::Internal("Failed to build HTTP client".into())
+    })?;
     let response = client
         .get("https://www.googleapis.com/oauth2/v3/certs")
         .send()
@@ -2342,6 +2883,43 @@ async fn parse_google_id_token(
     }
 
     Ok((claims.sub, claims.email, claims.email_verified))
+}
+
+#[cfg(test)]
+mod oauth_exchange_tests {
+    use super::OAuthExchangeError;
+
+    #[test]
+    fn test_error_classification() {
+        let err = OAuthExchangeError::Network {
+            message: "timeout".into(),
+        };
+        assert!(err.is_retryable());
+
+        let err = OAuthExchangeError::GoogleApi {
+            status: 503,
+            error_code: None,
+            message: "Service unavailable".into(),
+        };
+        assert!(err.is_retryable());
+
+        let err = OAuthExchangeError::GoogleApi {
+            status: 400,
+            error_code: Some("invalid_grant".into()),
+            message: "Code already used".into(),
+        };
+        assert!(!err.is_retryable());
+
+        let err = OAuthExchangeError::TokenValidation {
+            message: "bad token".into(),
+        };
+        assert!(!err.is_retryable());
+
+        let err = OAuthExchangeError::Database {
+            message: "connection reset".into(),
+        };
+        assert!(err.is_retryable());
+    }
 }
 
 // ============================================================================
@@ -2505,19 +3083,19 @@ async fn create_dummy_checkout(
 
             // Create subscription and payment records
             use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
-            use crate::domain::entities::user_subscription::SubscriptionStatus;
             use crate::domain::entities::stripe_mode::StripeMode;
+            use crate::domain::entities::user_subscription::SubscriptionStatus;
 
             let now = chrono::Utc::now().naive_utc();
-            let period_end = now + chrono::Duration::days(
-                match plan.interval.as_str() {
+            let period_end = now
+                + chrono::Duration::days(match plan.interval.as_str() {
                     "yearly" => 365 * plan.interval_count as i64,
                     _ => 30 * plan.interval_count as i64, // monthly default
-                }
-            );
+                });
 
-            let subscription = app_state.billing_use_cases.create_or_update_subscription(
-                &CreateSubscriptionInput {
+            let subscription = app_state
+                .billing_use_cases
+                .create_or_update_subscription(&CreateSubscriptionInput {
                     domain_id,
                     stripe_mode: StripeMode::Test,
                     end_user_id: user_id,
@@ -2529,16 +3107,14 @@ async fn create_dummy_checkout(
                     current_period_end: Some(period_end),
                     trial_start: None,
                     trial_end: None,
-                }
-            ).await?;
+                })
+                .await?;
 
             // Create payment record
-            app_state.billing_use_cases.create_dummy_payment(
-                domain_id,
-                user_id,
-                subscription.id,
-                &plan,
-            ).await?;
+            app_state
+                .billing_use_cases
+                .create_dummy_payment(domain_id, user_id, subscription.id, &plan)
+                .await?;
 
             DummyCheckoutResponse {
                 success: true,
@@ -2547,17 +3123,21 @@ async fn create_dummy_checkout(
                 error_message: None,
                 subscription_id: Some(subscription_id_str),
             }
-        },
+        }
         PaymentScenario::ThreeDSecure => {
             // Encode plan_code in the token so confirm endpoint can use it
             DummyCheckoutResponse {
                 success: false,
                 requires_confirmation: true,
-                confirmation_token: Some(format!("3ds_token_{}_{}", payload.plan_code, Uuid::new_v4())),
+                confirmation_token: Some(format!(
+                    "3ds_token_{}_{}",
+                    payload.plan_code,
+                    Uuid::new_v4()
+                )),
                 error_message: None,
                 subscription_id: None,
             }
-        },
+        }
         PaymentScenario::Decline => DummyCheckoutResponse {
             success: false,
             requires_confirmation: false,
@@ -2626,7 +3206,9 @@ async fn confirm_dummy_checkout(
     // Extract plan_code from token: 3ds_token_{plan_code}_{uuid}
     let token_parts: Vec<&str> = payload.confirmation_token.splitn(4, '_').collect();
     if token_parts.len() < 4 {
-        return Err(AppError::InvalidInput("Invalid confirmation token format".into()));
+        return Err(AppError::InvalidInput(
+            "Invalid confirmation token format".into(),
+        ));
     }
     let plan_code = token_parts[2]; // 3ds, token, {plan_code}, {uuid}
 
@@ -2639,20 +3221,20 @@ async fn confirm_dummy_checkout(
 
     // Create subscription and payment records
     use crate::application::use_cases::domain_billing::CreateSubscriptionInput;
-    use crate::domain::entities::user_subscription::SubscriptionStatus;
     use crate::domain::entities::stripe_mode::StripeMode;
+    use crate::domain::entities::user_subscription::SubscriptionStatus;
 
     let subscription_id_str = format!("dummy_sub_{}", Uuid::new_v4());
     let now = chrono::Utc::now().naive_utc();
-    let period_end = now + chrono::Duration::days(
-        match plan.interval.as_str() {
+    let period_end = now
+        + chrono::Duration::days(match plan.interval.as_str() {
             "yearly" => 365 * plan.interval_count as i64,
             _ => 30 * plan.interval_count as i64,
-        }
-    );
+        });
 
-    let subscription = app_state.billing_use_cases.create_or_update_subscription(
-        &CreateSubscriptionInput {
+    let subscription = app_state
+        .billing_use_cases
+        .create_or_update_subscription(&CreateSubscriptionInput {
             domain_id,
             stripe_mode: StripeMode::Test,
             end_user_id: user_id,
@@ -2664,16 +3246,14 @@ async fn confirm_dummy_checkout(
             current_period_end: Some(period_end),
             trial_start: None,
             trial_end: None,
-        }
-    ).await?;
+        })
+        .await?;
 
     // Create payment record
-    app_state.billing_use_cases.create_dummy_payment(
-        domain_id,
-        user_id,
-        subscription.id,
-        &plan,
-    ).await?;
+    app_state
+        .billing_use_cases
+        .create_dummy_payment(domain_id, user_id, subscription.id, &plan)
+        .await?;
 
     let response = DummyCheckoutResponse {
         success: true,
@@ -2691,4 +3271,69 @@ async fn confirm_dummy_checkout(
     );
 
     Ok(Json(response))
+}
+
+#[cfg(test)]
+mod webhook_error_tests {
+    use super::*;
+
+    #[test]
+    fn test_database_errors_are_retryable() {
+        assert!(is_retryable_error(&AppError::Database(
+            "connection lost".into()
+        )));
+    }
+
+    #[test]
+    fn test_internal_errors_are_retryable() {
+        assert!(is_retryable_error(&AppError::Internal("unexpected".into())));
+    }
+
+    #[test]
+    fn test_rate_limited_is_retryable() {
+        assert!(is_retryable_error(&AppError::RateLimited));
+    }
+
+    #[test]
+    fn test_not_found_is_not_retryable() {
+        assert!(!is_retryable_error(&AppError::NotFound));
+    }
+
+    #[test]
+    fn test_invalid_input_is_not_retryable() {
+        assert!(!is_retryable_error(&AppError::InvalidInput(
+            "bad data".into()
+        )));
+    }
+
+    #[test]
+    fn test_all_variants_explicitly_handled() {
+        // Ensure all known variants have explicit handling
+        let test_cases = vec![
+            (AppError::Database("test".into()), true),
+            (AppError::Internal("test".into()), true),
+            (AppError::RateLimited, true),
+            (AppError::NotFound, false),
+            (AppError::InvalidInput("test".into()), false),
+            (AppError::ValidationError("test".into()), false),
+            (AppError::Forbidden, false),
+            (AppError::InvalidCredentials, false),
+            (AppError::InvalidApiKey, false),
+            (AppError::AccountSuspended, false),
+            (AppError::SessionMismatch, false),
+            (AppError::TooManyDocuments, false),
+            (AppError::PaymentDeclined("test".into()), false),
+            (AppError::ProviderNotConfigured, false),
+            (AppError::ProviderNotSupported, false),
+        ];
+
+        for (error, expected) in test_cases {
+            assert_eq!(
+                is_retryable_error(&error),
+                expected,
+                "Unexpected result for {:?}",
+                error
+            );
+        }
+    }
 }

@@ -5,9 +5,7 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    application::use_cases::domain_billing::{
-        BillingStripeConfigProfile, BillingStripeConfigRepo,
-    },
+    application::use_cases::domain_billing::{BillingStripeConfigProfile, BillingStripeConfigRepo},
     domain::entities::stripe_mode::StripeMode,
 };
 
@@ -47,10 +45,7 @@ impl BillingStripeConfigRepo for PostgresPersistence {
         Ok(row.map(row_to_profile))
     }
 
-    async fn list_by_domain(
-        &self,
-        domain_id: Uuid,
-    ) -> AppResult<Vec<BillingStripeConfigProfile>> {
+    async fn list_by_domain(&self, domain_id: Uuid) -> AppResult<Vec<BillingStripeConfigProfile>> {
         let rows = sqlx::query(
             r#"
             SELECT id, domain_id, stripe_mode, stripe_secret_key_encrypted, stripe_publishable_key,
@@ -103,18 +98,20 @@ impl BillingStripeConfigRepo for PostgresPersistence {
     }
 
     async fn delete(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<()> {
-        sqlx::query("DELETE FROM domain_billing_stripe_config WHERE domain_id = $1 AND stripe_mode = $2")
-            .bind(domain_id)
-            .bind(mode)
-            .execute(&self.pool)
-            .await
-            .map_err(AppError::from)?;
+        sqlx::query(
+            "DELETE FROM domain_billing_stripe_config WHERE domain_id = $1 AND stripe_mode = $2",
+        )
+        .bind(domain_id)
+        .bind(mode)
+        .execute(&self.pool)
+        .await
+        .map_err(AppError::from)?;
         Ok(())
     }
 
     async fn has_any_config(&self, domain_id: Uuid) -> AppResult<bool> {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM domain_billing_stripe_config WHERE domain_id = $1"
+            "SELECT COUNT(*) FROM domain_billing_stripe_config WHERE domain_id = $1",
         )
         .bind(domain_id)
         .fetch_one(&self.pool)

@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use reqwest::Client;
 use serde::Serialize;
 
+use crate::infra::http_client;
 use crate::{
     app_error::{AppError, AppResult},
     application::use_cases::domain_auth::DomainEmailSender as DomainEmailSenderTrait,
@@ -17,7 +18,7 @@ pub struct DomainEmailSender {
 impl DomainEmailSender {
     pub fn new() -> Self {
         Self {
-            client: Client::new(),
+            client: http_client::build_client(),
         }
     }
 }

@@ -14,6 +14,7 @@ use crate::{
         SubscriptionPlanRepo, UserSubscriptionRepo,
     },
     application::use_cases::domain_roles::DomainRolesUseCases,
+    application::use_cases::payment_provider_factory::PaymentProviderFactory,
     infra::{
         config::AppConfig, crypto::ProcessCipher, domain_email::DomainEmailSender,
         domain_magic_links::DomainMagicLinkStore, oauth_state::OAuthStateStore,
@@ -103,6 +104,13 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     let billing_payment_repo = postgres_arc.clone() as Arc<dyn BillingPaymentRepo>;
 
     let billing_cipher = ProcessCipher::from_env()?;
+
+    // Create payment provider factory
+    let provider_factory = Arc::new(PaymentProviderFactory::new(
+        billing_cipher.clone(),
+        billing_stripe_config_repo.clone(),
+    ));
+
     // NOTE: No fallback Stripe credentials - each domain must configure their own Stripe account.
     let billing_use_cases = DomainBillingUseCases::new(
         domain_repo_arc,
@@ -113,6 +121,7 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         subscription_event_repo,
         billing_payment_repo,
         billing_cipher,
+        provider_factory,
     );
 
     Ok(AppState {

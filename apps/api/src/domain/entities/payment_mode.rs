@@ -63,6 +63,15 @@ impl Default for PaymentMode {
     }
 }
 
+impl From<crate::domain::entities::stripe_mode::StripeMode> for PaymentMode {
+    fn from(mode: crate::domain::entities::stripe_mode::StripeMode) -> Self {
+        match mode {
+            crate::domain::entities::stripe_mode::StripeMode::Test => PaymentMode::Test,
+            crate::domain::entities::stripe_mode::StripeMode::Live => PaymentMode::Live,
+        }
+    }
+}
+
 impl std::fmt::Display for PaymentMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
@@ -122,37 +131,48 @@ mod tests {
         let test_mode = PaymentMode::Test;
         let live_mode = PaymentMode::Live;
 
-        assert!(test_mode
-            .validate_stripe_key_prefix("sk_test_abc", "secret_key")
-            .is_ok());
-        assert!(test_mode
-            .validate_stripe_key_prefix("sk_live_abc", "secret_key")
-            .is_err());
-        assert!(test_mode
-            .validate_stripe_key_prefix("rk_test_abc", "secret_key")
-            .is_ok());
-        assert!(test_mode
-            .validate_stripe_key_prefix("rk_live_abc", "secret_key")
-            .is_err());
-        assert!(live_mode
-            .validate_stripe_key_prefix("sk_live_abc", "secret_key")
-            .is_ok());
-        assert!(live_mode
-            .validate_stripe_key_prefix("sk_test_abc", "secret_key")
-            .is_err());
-        assert!(live_mode
-            .validate_stripe_key_prefix("rk_live_abc", "secret_key")
-            .is_ok());
+        assert!(
+            test_mode
+                .validate_stripe_key_prefix("sk_test_abc", "secret_key")
+                .is_ok()
+        );
+        assert!(
+            test_mode
+                .validate_stripe_key_prefix("sk_live_abc", "secret_key")
+                .is_err()
+        );
+        assert!(
+            test_mode
+                .validate_stripe_key_prefix("rk_test_abc", "secret_key")
+                .is_ok()
+        );
+        assert!(
+            test_mode
+                .validate_stripe_key_prefix("rk_live_abc", "secret_key")
+                .is_err()
+        );
+        assert!(
+            live_mode
+                .validate_stripe_key_prefix("sk_live_abc", "secret_key")
+                .is_ok()
+        );
+        assert!(
+            live_mode
+                .validate_stripe_key_prefix("sk_test_abc", "secret_key")
+                .is_err()
+        );
+        assert!(
+            live_mode
+                .validate_stripe_key_prefix("rk_live_abc", "secret_key")
+                .is_ok()
+        );
     }
 
     #[test]
     fn test_from_str() {
         assert_eq!("test".parse::<PaymentMode>().unwrap(), PaymentMode::Test);
         assert_eq!("live".parse::<PaymentMode>().unwrap(), PaymentMode::Live);
-        assert_eq!(
-            "sandbox".parse::<PaymentMode>().unwrap(),
-            PaymentMode::Test
-        );
+        assert_eq!("sandbox".parse::<PaymentMode>().unwrap(), PaymentMode::Test);
         assert_eq!(
             "production".parse::<PaymentMode>().unwrap(),
             PaymentMode::Live
