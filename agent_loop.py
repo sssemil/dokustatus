@@ -147,7 +147,12 @@ def create_worktree(slug: str) -> Optional[Path]:
     """
     Create a git worktree for a task.
     Returns the worktree path or None on failure.
+
+    If branch already exists with commits, continues from that state.
+    If branch doesn't exist, creates it from main.
     """
+    import shutil
+
     slug = sanitize_slug(slug)
     branch = f"task/{slug}"
     worktree_path = (WORKTREES_ROOT / f"task-{slug}").resolve()
@@ -155,13 +160,42 @@ def create_worktree(slug: str) -> Optional[Path]:
     # Ensure parent directory exists
     WORKTREES_ROOT.mkdir(parents=True, exist_ok=True)
 
-    # Remove stale worktree if exists
-    if worktree_path.exists():
-        print(f"[WORKTREE] Removing stale worktree: {worktree_path}")
-        cleanup_worktree(slug)
+    # Always prune stale worktree metadata first
+    subprocess.run(["git", "worktree", "prune"], capture_output=True, check=False)
 
-    # Create branch from main if it doesn't exist
-    if not git_branch_exists(branch):
+    # Remove stale worktree directory if exists
+    if worktree_path.exists():
+        print(f"[WORKTREE] Removing stale worktree dir: {worktree_path}")
+        # Try git remove first
+        subprocess.run(
+            ["git", "worktree", "remove", "--force", str(worktree_path)],
+            capture_output=True, check=False
+        )
+        # Fallback to rm if still exists
+        if worktree_path.exists():
+            shutil.rmtree(worktree_path, ignore_errors=True)
+        subprocess.run(["git", "worktree", "prune"], capture_output=True, check=False)
+
+    # Check if branch exists
+    branch_exists = git_branch_exists(branch)
+
+    if branch_exists:
+        # Check if branch has commits ahead of main
+        ahead = subprocess.run(
+            ["git", "rev-list", "--count", f"main..{branch}"],
+            capture_output=True, text=True, check=False
+        )
+        ahead_count = int(ahead.stdout.strip()) if ahead.returncode == 0 else 0
+        if ahead_count > 0:
+            print(f"[WORKTREE] Branch {branch} exists with {ahead_count} commits ahead of main, continuing work")
+        else:
+            print(f"[WORKTREE] Branch {branch} exists at main, resetting to latest main")
+            subprocess.run(
+                ["git", "branch", "-f", branch, "main"],
+                capture_output=True, check=False
+            )
+    else:
+        # Create branch from main
         result = subprocess.run(
             ["git", "branch", branch, "main"],
             capture_output=True, check=False
@@ -169,6 +203,7 @@ def create_worktree(slug: str) -> Optional[Path]:
         if result.returncode != 0:
             print(f"[WORKTREE] Failed to create branch {branch}")
             return None
+        print(f"[WORKTREE] Created new branch {branch} from main")
 
     # Create the worktree
     result = subprocess.run(
