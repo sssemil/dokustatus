@@ -186,8 +186,24 @@ def create_worktree(slug: str) -> Optional[Path]:
             capture_output=True, text=True, check=False
         )
         ahead_count = int(ahead.stdout.strip()) if ahead.returncode == 0 else 0
+
         if ahead_count > 0:
-            print(f"[WORKTREE] Branch {branch} exists with {ahead_count} commits ahead of main, continuing work")
+            # Check if planning was completed by looking for execution logs
+            exec_log_path = f"workspace/tasks/in-progress/{slug}/agent_logs/claude-execute.log"
+            has_exec_log = subprocess.run(
+                ["git", "cat-file", "-e", f"{branch}:{exec_log_path}"],
+                capture_output=True, check=False
+            ).returncode == 0
+
+            if has_exec_log:
+                print(f"[WORKTREE] Branch {branch} has execution in progress, continuing work")
+            else:
+                # Planning not completed - nuke and start fresh
+                print(f"[WORKTREE] Branch {branch} has incomplete planning ({ahead_count} commits), resetting to main")
+                subprocess.run(
+                    ["git", "branch", "-f", branch, "main"],
+                    capture_output=True, check=False
+                )
         else:
             print(f"[WORKTREE] Branch {branch} exists at main, resetting to latest main")
             subprocess.run(
