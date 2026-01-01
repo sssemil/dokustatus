@@ -4,7 +4,59 @@
 # dependencies = []
 # ///
 """
-Agent loop that manages codex tasks through todo -> in-progress -> outbound -> done workflow.
+Agent loop that manages parallel task execution via git worktrees.
+
+ARCHITECTURE OVERVIEW
+=====================
+
+Task Lifecycle:
+  todo/ -> in-progress/ -> outbound/ -> done/
+
+Each task runs in its own git worktree at ../worktrees/task-{slug}/ for isolation.
+
+Phases per task:
+  1. PLANNING  - Iterative planning with alternating agents:
+       - Claude plan-v1 → Codex feedback-1
+       - Claude plan-v2 → Codex feedback-2
+       - Claude plan-v3 → Codex feedback-3 → plan.md (finalize)
+  2. EXECUTING - Codex executes the finalized plan
+  3. OUTBOUND  - Execution complete, queued for merge
+  4. MERGING   - Rebase onto main (3 attempts) → squash merge → cleanup
+
+Artifacts created in {task_dir}/:
+  - plan-v1.md, plan-v2.md, plan-v3.md, plan.md  (plans)
+  - feedback-1.md, feedback-2.md, feedback-3.md  (reviews)
+  - agent_logs/claude-plan-v*.log                (planning logs)
+  - agent_logs/codex-review-*.log                (review logs)
+  - agent_logs/codex-exec-*.log                  (execution logs)
+
+Parallel Execution:
+  - Up to N concurrent tasks (default 3, configurable via -j)
+  - Priority queue consumed as slots open (./agent_loop.py 5 6 runs those first)
+  - First-wins merge: tasks race, first to OUTBOUND merges first
+  - fcntl exclusive lock prevents concurrent merges
+
+Branch Handling on worktree creation:
+  - No branch exists        → create from main
+  - Branch at main          → reset to latest main
+  - Branch ahead, no exec   → reset to main (incomplete planning)
+  - Branch ahead, has exec  → continue work (preserve progress)
+
+State & Locking Files:
+  - .task-state             Task phase/iteration for crash recovery
+  - .merge.lock             fcntl exclusive lock during merge
+  - .merge-requested        Sentinel for merge freeze protocol
+  - .needs-manual-rebase    Flag when rebase needs human intervention
+
+Error Handling:
+  - Crashed subprocesses auto-restart
+  - Stale locks from dead processes are detected and cleaned
+  - Rebase conflicts trigger manual intervention mode
+
+Usage:
+  ./agent_loop.py                 # default 3 concurrent
+  ./agent_loop.py -j 5            # 5 concurrent tasks
+  ./agent_loop.py -j 3 22 21 5    # priority queue: run 22, 21, 5 first
 """
 
 import argparse
