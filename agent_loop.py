@@ -93,6 +93,14 @@ WORKTREES_ROOT = Path("..") / "worktrees"
 DEFAULT_MAX_CONCURRENT_TASKS = 3
 MERGE_LOCK_FILE = WORKSPACE / ".merge.lock"
 
+# =============================================================================
+# tmux Single-Session Multi-Pane Configuration
+# =============================================================================
+AGENT_SESSION = "agent-loop"  # Single tmux session for all tasks
+OVERSEER_CHECK_INTERVAL = 120  # Check every 2 minutes for stuck tasks
+STUCK_TIMEOUT_MINUTES = 30  # Consider task stuck after 30 min no progress
+MAX_RECOVERY_ATTEMPTS = 3  # Max times to try recovering a stuck task
+
 
 # =============================================================================
 # Data Structures for Parallel Task Management
@@ -106,6 +114,16 @@ class TaskPhase(Enum):
     MERGING = "merging"
 
 
+class TaskState(Enum):
+    """State within a phase for tmux-based execution."""
+    IDLE = "idle"  # Not running, waiting for next command
+    RUNNING = "running"  # Command executing in pane
+    AWAITING_CHECK = "awaiting_check"  # Command done, needs result check
+    RECOVERING = "recovering"  # Overseer is fixing stuck task
+    COMPLETE = "complete"  # Task finished successfully
+    FAILED = "failed"  # Task failed, needs manual intervention
+
+
 @dataclass
 class ActiveTask:
     """Represents a task being worked on in a worktree."""
@@ -113,6 +131,13 @@ class ActiveTask:
     worktree_path: Path
     branch: str
     phase: TaskPhase
+    # tmux pane tracking (replaces subprocess tracking)
+    pane_id: str = ""  # e.g., "%3" - unique pane identifier
+    state: TaskState = field(default=TaskState.IDLE)
+    current_step: str = ""  # Current operation, e.g., "plan_v1", "review_2", "execute"
+    last_command_time: Optional[datetime] = None
+    recovery_attempts: int = 0
+    # Legacy subprocess fields (still used during transition)
     process: Optional[subprocess.Popen] = None
     planning_iteration: int = 0
     log_handle: Optional[object] = field(default=None, repr=False)
@@ -121,7 +146,9 @@ class ActiveTask:
 
     @property
     def is_alive(self) -> bool:
-        """Check if the subprocess is still running."""
+        """Check if the subprocess is still running (legacy) or pane is alive."""
+        if self.pane_id:
+            return is_pane_alive(self.pane_id)
         if self.process is None:
             return False
         return self.process.poll() is None
@@ -180,6 +207,172 @@ class ParallelTaskManager:
 # workspace/tasks/todo/<slug>/ticket.md - the task description
 # workspace/tasks/in-progress/<slug>/ticket.md - task being worked on
 # workspace/tasks/in-progress/<slug>/plan.md - detailed plan written by agent
+
+
+# =============================================================================
+# tmux Pane Management Functions
+# =============================================================================
+
+def check_tmux_installed() -> bool:
+    """Check if tmux is installed."""
+    result = subprocess.run(["which", "tmux"], capture_output=True, check=False)
+    if result.returncode != 0:
+        print("[ERROR] tmux is not installed. Please install tmux first.")
+        sys.exit(1)
+    return True
+
+
+def ensure_agent_session():
+    """Create the agent-loop session if it doesn't exist."""
+    result = subprocess.run(
+        ["tmux", "has-session", "-t", AGENT_SESSION],
+        capture_output=True, check=False
+    )
+    if result.returncode != 0:
+        # Create new session with a placeholder window
+        subprocess.run([
+            "tmux", "new-session", "-d", "-s", AGENT_SESSION, "-n", "main"
+        ], check=False)
+        print(f"[TMUX] Created session: {AGENT_SESSION}")
+        print(f"[TMUX] Attach with: tmux attach -t {AGENT_SESSION}")
+
+
+def create_task_pane(slug: str, worktree_path: Path) -> str:
+    """
+    Create a new pane for a task in the agent-loop session.
+    Returns the pane ID (e.g., '%3') or empty string on failure.
+    """
+    # Split current window to create new pane
+    result = subprocess.run([
+        "tmux", "split-window", "-t", AGENT_SESSION,
+        "-c", str(worktree_path),
+        "-P", "-F", "#{pane_id}"  # Print pane ID
+    ], capture_output=True, text=True, check=False)
+
+    if result.returncode != 0:
+        print(f"[TMUX] Failed to create pane for {slug}: {result.stderr}")
+        return ""
+
+    pane_id = result.stdout.strip()
+
+    # Rebalance layout to tiled (show all panes equally)
+    subprocess.run(
+        ["tmux", "select-layout", "-t", AGENT_SESSION, "tiled"],
+        capture_output=True, check=False
+    )
+
+    # Set pane title for identification
+    subprocess.run([
+        "tmux", "select-pane", "-t", f"{AGENT_SESSION}:{pane_id}",
+        "-T", slug
+    ], capture_output=True, check=False)
+
+    print(f"[TMUX] Created pane {pane_id} for {slug}")
+    return pane_id
+
+
+def send_to_pane(pane_id: str, command: str) -> bool:
+    """
+    Send a command to a specific pane.
+    Returns True on success.
+    """
+    target = f"{AGENT_SESSION}:{pane_id}"
+    result = subprocess.run([
+        "tmux", "send-keys", "-t", target, command, "Enter"
+    ], capture_output=True, check=False)
+    return result.returncode == 0
+
+
+def send_long_command_to_pane(pane_id: str, command: str) -> bool:
+    """
+    Send a long command using load-buffer + paste-buffer to avoid truncation.
+    Returns True on success.
+    """
+    import tempfile
+    target = f"{AGENT_SESSION}:{pane_id}"
+
+    # Write command to temp file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.sh', delete=False) as f:
+        f.write(command)
+        temp_path = f.name
+
+    try:
+        # Load into tmux buffer
+        result = subprocess.run([
+            "tmux", "load-buffer", temp_path
+        ], capture_output=True, check=False)
+
+        if result.returncode != 0:
+            return False
+
+        # Paste buffer into pane
+        result = subprocess.run([
+            "tmux", "paste-buffer", "-t", target
+        ], capture_output=True, check=False)
+
+        if result.returncode != 0:
+            return False
+
+        # Send Enter to execute
+        subprocess.run([
+            "tmux", "send-keys", "-t", target, "Enter"
+        ], capture_output=True, check=False)
+
+        return True
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
+
+
+def capture_pane_output(pane_id: str, lines: int = 100) -> str:
+    """Capture recent output from a pane."""
+    target = f"{AGENT_SESSION}:{pane_id}"
+    result = subprocess.run([
+        "tmux", "capture-pane", "-t", target, "-p", "-S", f"-{lines}"
+    ], capture_output=True, text=True, check=False)
+    return result.stdout if result.returncode == 0 else ""
+
+
+def is_pane_alive(pane_id: str) -> bool:
+    """Check if a pane still exists."""
+    if not pane_id:
+        return False
+    result = subprocess.run([
+        "tmux", "list-panes", "-t", AGENT_SESSION, "-F", "#{pane_id}"
+    ], capture_output=True, text=True, check=False)
+    return pane_id in result.stdout.split('\n')
+
+
+def kill_pane(pane_id: str):
+    """Kill a pane."""
+    if pane_id:
+        subprocess.run([
+            "tmux", "kill-pane", "-t", f"{AGENT_SESSION}:{pane_id}"
+        ], capture_output=True, check=False)
+
+
+def list_session_panes() -> list[dict]:
+    """List all panes in the agent session with their info."""
+    result = subprocess.run([
+        "tmux", "list-panes", "-t", AGENT_SESSION,
+        "-F", "#{pane_id}|#{pane_current_path}|#{pane_title}"
+    ], capture_output=True, text=True, check=False)
+
+    panes = []
+    if result.returncode == 0:
+        for line in result.stdout.strip().split('\n'):
+            if '|' in line:
+                parts = line.split('|')
+                panes.append({
+                    'pane_id': parts[0],
+                    'path': parts[1] if len(parts) > 1 else '',
+                    'title': parts[2] if len(parts) > 2 else ''
+                })
+    return panes
+
+
+def escape_for_shell(text: str) -> str:
+    """Escape text for safe shell interpolation."""
+    return text.replace("'", "'\\''")
 
 
 def setup_directories():
@@ -511,6 +704,257 @@ def load_task_state(worktree_path: Path) -> tuple[TaskPhase, int, bool]:
 
 
 # =============================================================================
+# tmux-Based Command Functions
+# =============================================================================
+
+def send_planning_command_tmux(task: ActiveTask, version: int):
+    """Send Claude planning command to task's tmux pane."""
+    step = f"plan_v{version}"
+    plan_file = f"plan-v{version}.md"
+    log_dir = task.worktree_task_dir() / "agent_logs"
+    log_file = log_dir / f"claude-plan-v{version}.log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    if version == 1:
+        prompt = f"""Create a detailed implementation plan for task: {task.slug}
+
+Read the ticket at ./workspace/tasks/in-progress/{task.slug}/ticket.md
+
+Explore the codebase to understand:
+- Current implementation patterns
+- Files that will need modification
+- Testing patterns used
+
+Write a detailed plan to ./workspace/tasks/in-progress/{task.slug}/{plan_file} with:
+- Summary of what needs to be done
+- Step-by-step implementation approach
+- Specific files to modify (with paths)
+- Testing approach
+- Edge cases to handle
+
+Then stop."""
+    else:
+        prompt = f"""Revise the implementation plan for task: {task.slug}. This is revision {version}/3.
+
+Read:
+- ./workspace/tasks/in-progress/{task.slug}/ticket.md (the task)
+- ./workspace/tasks/in-progress/{task.slug}/plan-v{version - 1}.md (previous plan)
+- ./workspace/tasks/in-progress/{task.slug}/feedback-{version - 1}.md (feedback to address)
+
+Create an improved plan at ./workspace/tasks/in-progress/{task.slug}/{plan_file}
+Address the feedback while keeping what works well.
+
+Then stop."""
+
+    escaped = escape_for_shell(prompt)
+    # Build command with completion marker and exit code capture
+    cmd = f"claude -p '{escaped}' --allowedTools Read,Write,Glob,Grep,Edit,Bash 2>&1 | tee {log_file}; echo '__DONE_{step}_EXIT_'$?"
+
+    task.current_step = step
+    task.state = TaskState.RUNNING
+    task.last_command_time = datetime.now()
+    persist_task_state(task)
+
+    # Use load-buffer for long prompts
+    send_long_command_to_pane(task.pane_id, cmd)
+    print(f"[TMUX] Sent {step} command to pane {task.pane_id} for {task.slug}")
+
+
+def send_review_command_tmux(task: ActiveTask, iteration: int):
+    """Send review command to task's tmux pane."""
+    step = f"review_{iteration}"
+    log_dir = task.worktree_task_dir() / "agent_logs"
+
+    # Determine which agent to use
+    use_claude = task.codex_rate_limited
+    agent_name = "claude" if use_claude else "codex"
+    log_file = log_dir / f"{agent_name}-review-{iteration}.log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt = f"""Review the implementation plan for task: {task.slug}
+
+Read ./workspace/tasks/in-progress/{task.slug}/ticket.md (the task)
+Read ./workspace/tasks/in-progress/{task.slug}/plan-v{iteration}.md (the plan)
+
+Write feedback to ./workspace/tasks/in-progress/{task.slug}/feedback-{iteration}.md with:
+- What's good about the plan
+- What's missing or unclear
+- Suggested improvements
+- Any risks or concerns
+
+Be specific and actionable. Focus on catching issues before implementation.
+Then EXIT."""
+
+    escaped = escape_for_shell(prompt)
+
+    if use_claude:
+        cmd = f"claude -p '{escaped}' --allowedTools Edit,Write,Bash,Glob,Grep,Read 2>&1 | tee {log_file}; echo '__DONE_{step}_EXIT_'$?"
+    else:
+        cmd = f"codex exec --dangerously-bypass-approvals-and-sandbox -C . '{escaped}' 2>&1 | tee {log_file}; echo '__DONE_{step}_EXIT_'$?"
+
+    task.current_step = step
+    task.state = TaskState.RUNNING
+    task.last_command_time = datetime.now()
+    persist_task_state(task)
+
+    send_long_command_to_pane(task.pane_id, cmd)
+    print(f"[TMUX] Sent {step} command to pane {task.pane_id} for {task.slug}")
+
+
+def send_execution_command_tmux(task: ActiveTask):
+    """Send execution command to task's tmux pane."""
+    step = "execute"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = task.worktree_task_dir() / "agent_logs"
+
+    # Determine which agent to use
+    use_claude = task.codex_rate_limited
+    agent_name = "claude" if use_claude else "codex"
+    log_file = log_dir / f"{agent_name}-exec-{timestamp}.log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt = f"""You are working on task: {task.slug}
+
+Task directory: ./workspace/tasks/in-progress/{task.slug}/
+- ticket.md: The task description
+- plan.md: The implementation plan (already reviewed and finalized)
+
+This branch is dedicated to this task: task/{task.slug}
+You are running in an isolated worktree at {task.worktree_path}
+
+The plan.md has been reviewed 3 times and is ready for implementation.
+Follow the plan closely.
+
+IMPORTANT: Check for .merge-requested file periodically. If it exists, commit your
+work immediately and stop - the orchestrator needs to merge.
+
+You are responsible for:
+- Implementing according to plan.md
+- Making bounded edits to the codebase
+- Appending timestamped History entries to ticket.md
+- Committing your own changes
+
+Completion protocol:
+
+When the task is fully complete:
+1) Append a final History entry to ticket.md describing completion
+2) Move the entire task directory to:
+   ./workspace/tasks/outbound/{task.slug}/
+3) EXIT the session
+
+Do NOT merge to main yourself.
+The script will handle squash-merge once the directory
+appears in outbound.
+
+Stay focused on this task."""
+
+    escaped = escape_for_shell(prompt)
+
+    if use_claude:
+        cmd = f"claude -p '{escaped}' --allowedTools Edit,Write,Bash,Glob,Grep,Read 2>&1 | tee {log_file}; echo '__DONE_{step}_EXIT_'$?"
+    else:
+        cmd = f"codex exec --dangerously-bypass-approvals-and-sandbox -C . '{escaped}' 2>&1 | tee {log_file}; echo '__DONE_{step}_EXIT_'$?"
+
+    task.phase = TaskPhase.EXECUTING
+    task.current_step = step
+    task.state = TaskState.RUNNING
+    task.last_command_time = datetime.now()
+    persist_task_state(task)
+
+    send_long_command_to_pane(task.pane_id, cmd)
+    print(f"[TMUX] Sent {step} command to pane {task.pane_id} for {task.slug}")
+
+
+def send_merge_command_tmux(task: ActiveTask):
+    """Send merge agent command to task's tmux pane."""
+    step = "merge"
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = task.worktree_task_dir("outbound") / "agent_logs"
+    log_file = log_dir / f"claude-merge-{timestamp}.log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    prompt = f"""You are the MERGE AGENT for task: {task.slug}
+
+CONTEXT:
+- Task branch: {task.branch}
+- Worktree: {task.worktree_path}
+- Task completed and is in: ./workspace/tasks/outbound/{task.slug}/
+
+YOUR MISSION - Rebase this branch onto main and resolve any conflicts:
+
+STEP 1: Fetch and rebase
+git fetch origin main
+git rebase origin/main
+
+STEP 2: If conflicts occur during rebase:
+- Read the conflicting files to understand both sides
+- Resolve conflicts intelligently:
+  - Keep BOTH changes when they don't overlap
+  - For overlapping changes, understand the intent and merge logically
+  - Remove conflict markers (<<<<<<, =======, >>>>>>>)
+- Stage resolved files: git add <file>
+- Continue rebase: git rebase --continue
+- Repeat until rebase completes
+
+STEP 3: After successful rebase, signal completion:
+# Move task to done
+mv ./workspace/tasks/outbound/{task.slug} ./workspace/tasks/done/{task.slug}
+
+# Commit the move
+git add -A
+git commit -m "merge {task.slug}: rebase complete, ready for squash"
+
+STEP 4: EXIT the session
+
+IF CONFLICTS CANNOT BE RESOLVED:
+git rebase --abort
+touch .needs-manual-rebase
+Then EXIT - a human will need to resolve this.
+
+IMPORTANT RULES:
+- Work ONLY in this worktree
+- Do NOT push to origin
+- Do NOT merge to main yourself
+- The orchestrator handles the final squash merge after you succeed
+"""
+
+    escaped = escape_for_shell(prompt)
+    cmd = f"claude -p '{escaped}' --allowedTools Edit,Write,Bash,Glob,Grep,Read 2>&1 | tee {log_file}; echo '__DONE_{step}_EXIT_'$?"
+
+    task.phase = TaskPhase.MERGING
+    task.current_step = step
+    task.state = TaskState.RUNNING
+    task.last_command_time = datetime.now()
+    persist_task_state(task)
+
+    send_long_command_to_pane(task.pane_id, cmd)
+    print(f"[TMUX] Sent {step} command to pane {task.pane_id} for {task.slug}")
+
+
+def check_step_completion_tmux(task: ActiveTask) -> tuple[bool, Optional[int]]:
+    """
+    Check if the current step completed by looking for completion marker in pane output.
+    Returns (completed, exit_code) where exit_code is None if not completed.
+    """
+    if not task.pane_id or not task.current_step:
+        return (False, None)
+
+    output = capture_pane_output(task.pane_id, lines=50)
+    marker = f"__DONE_{task.current_step}_EXIT_"
+
+    for line in output.split('\n'):
+        if marker in line:
+            # Extract exit code from marker
+            try:
+                exit_code = int(line.split(marker)[1].strip())
+                return (True, exit_code)
+            except (ValueError, IndexError):
+                return (True, 0)
+
+    return (False, None)
+
+
+# =============================================================================
 # Merge Freeze Protocol
 # =============================================================================
 
@@ -652,17 +1096,25 @@ def setup_task_in_worktree(slug: str, manager: ParallelTaskManager) -> Optional[
             check=False
         )
 
+    # Create tmux pane for this task
+    pane_id = create_task_pane(slug, worktree_path)
+    if not pane_id:
+        print(f"[SETUP] Failed to create tmux pane for {slug}")
+        return None
+
     # Create ActiveTask
     task = ActiveTask(
         slug=slug,
         worktree_path=worktree_path,
         branch=branch,
-        phase=TaskPhase.PLANNING
+        phase=TaskPhase.PLANNING,
+        pane_id=pane_id,
+        state=TaskState.IDLE
     )
 
     manager.add_task(task)
     persist_task_state(task)
-    print(f"[SETUP] Task {slug} ready in worktree {worktree_path}")
+    print(f"[SETUP] Task {slug} ready in worktree {worktree_path}, pane {pane_id}")
 
     return task
 
@@ -1068,11 +1520,17 @@ def setup_signal_handlers(manager: ParallelTaskManager):
         print(f"\n[SHUTDOWN] Received signal {signum}, cleaning up...")
 
         for task in manager.active_tasks.values():
-            if task.is_alive:
+            # Kill pane if using tmux
+            if task.pane_id:
+                print(f"[SHUTDOWN] Killing pane {task.pane_id} for {task.slug}...")
+                kill_pane(task.pane_id)
+            # Kill subprocess if using legacy mode
+            elif task.is_alive:
                 print(f"[SHUTDOWN] Terminating {task.slug}...")
                 kill_task_subprocess(task, timeout=30)
 
         print("[SHUTDOWN] Cleanup complete, exiting.")
+        print(f"[SHUTDOWN] tmux session '{AGENT_SESSION}' preserved (attach with: tmux attach -t {AGENT_SESSION})")
         sys.exit(0)
 
     signal.signal(signal.SIGINT, signal_handler)
@@ -1342,22 +1800,35 @@ def process_merge_queue(manager: ParallelTaskManager):
     if task.phase == TaskPhase.MERGING:
         return
 
-    # Wait for execution subprocess to finish before starting merge
-    if task.is_alive:
-        print(f"[MERGE] Waiting for {slug} subprocess to finish...")
+    # Wait for execution to finish before starting merge
+    if task.state == TaskState.RUNNING:
+        print(f"[MERGE] Waiting for {slug} to finish execution...")
         request_merge_freeze(task)
         return
 
-    # Start merge agent (will set phase to MERGING)
+    # Start merge agent via tmux (will set phase to MERGING)
     print(f"[MERGE] Starting merge agent for {slug}")
-    start_merge_agent_async(task)
+    send_merge_command_tmux(task)
 
 
 def advance_planning_tasks(manager: ParallelTaskManager):
     """Advance planning phase for all tasks in PLANNING phase."""
     for task in list(manager.get_tasks_in_phase(TaskPhase.PLANNING)):
-        # If subprocess is still running, skip
-        if task.is_alive:
+        # If task is running in tmux, check for completion
+        if task.state == TaskState.RUNNING:
+            completed, exit_code = check_step_completion_tmux(task)
+            if not completed:
+                continue  # Still running
+            # Mark as idle to proceed to next step
+            task.state = TaskState.IDLE
+            print(f"[PLANNING] {task.slug} step {task.current_step} completed (exit {exit_code})")
+
+        # Skip if still running (legacy subprocess mode)
+        if task.process and task.is_alive:
+            continue
+
+        # Skip if in recovery mode
+        if task.state == TaskState.RECOVERING:
             continue
 
         # Check for Codex rate limit before retrying
@@ -1375,7 +1846,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
         # If plan.md exists, planning is complete
         if plan_final.exists():
             print(f"[PLANNING] {task.slug} complete, starting execution")
-            start_task_execution_async(task)
+            send_execution_command_tmux(task)
             continue
 
         # Determine current iteration from files
@@ -1386,7 +1857,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
             # Start: Claude creates plan-v1
             plan_v1 = task_dir / "plan-v1.md"
             if not plan_v1.exists():
-                start_claude_planning_async(task, version=1)
+                send_planning_command_tmux(task, version=1)
             else:
                 task.planning_iteration = 1
                 persist_task_state(task)
@@ -1396,9 +1867,9 @@ def advance_planning_tasks(manager: ParallelTaskManager):
             feedback_1 = task_dir / "feedback-1.md"
             plan_v2 = task_dir / "plan-v2.md"
             if not feedback_1.exists():
-                start_review_async(task, iteration=1)
+                send_review_command_tmux(task, iteration=1)
             elif not plan_v2.exists():
-                start_claude_planning_async(task, version=2)
+                send_planning_command_tmux(task, version=2)
             else:
                 task.planning_iteration = 2
                 persist_task_state(task)
@@ -1407,9 +1878,9 @@ def advance_planning_tasks(manager: ParallelTaskManager):
             # Codex reviews plan-v2 → feedback-2, then Claude creates plan-v3
             feedback_2 = task_dir / "feedback-2.md"
             if not feedback_2.exists():
-                start_review_async(task, iteration=2)
+                send_review_command_tmux(task, iteration=2)
             elif not plan_v3.exists():
-                start_claude_planning_async(task, version=3)
+                send_planning_command_tmux(task, version=3)
             else:
                 task.planning_iteration = 3
                 persist_task_state(task)
@@ -1417,7 +1888,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
         elif iteration >= 3:
             # Codex final review → feedback-3, then copy plan-v3 to plan.md
             if not feedback_3.exists():
-                start_review_async(task, iteration=3)
+                send_review_command_tmux(task, iteration=3)
             elif plan_v3.exists() and not plan_final.exists():
                 # Copy plan-v3 to plan.md
                 plan_final.write_text(plan_v3.read_text())
@@ -1431,7 +1902,7 @@ def advance_planning_tasks(manager: ParallelTaskManager):
                     check=False
                 )
                 print(f"[PLANNING] {task.slug} finalized, starting execution")
-                start_task_execution_async(task)
+                send_execution_command_tmux(task)
 
 
 def start_new_task_if_available(manager: ParallelTaskManager):
@@ -1449,23 +1920,26 @@ def start_new_task_if_available(manager: ParallelTaskManager):
         print(f"[NEW] Starting task {slug}")
         task = setup_task_in_worktree(slug, manager)
         if task:
-            # Start planning
-            start_claude_planning_async(task, version=1)
+            # Start planning via tmux
+            send_planning_command_tmux(task, version=1)
 
 
 def handle_execution_tasks(manager: ParallelTaskManager):
-    """Handle execution phase tasks - restart if crashed."""
+    """Handle execution phase tasks - check completion or restart if crashed."""
     for task in list(manager.get_tasks_in_phase(TaskPhase.EXECUTING)):
-        is_running, exit_code = check_task_subprocess(task)
+        # Check tmux pane for completion
+        if task.state == TaskState.RUNNING:
+            completed, exit_code = check_step_completion_tmux(task)
+            if not completed:
+                continue  # Still running
 
-        if not is_running and exit_code is not None:
-            # Subprocess finished - check if task completed
+            # Check if task completed (moved to outbound)
             outbound_dir = task.worktree_path / "workspace" / "tasks" / "outbound" / task.slug
 
             if outbound_dir.exists() and (outbound_dir / "ticket.md").exists():
-                # Task completed successfully
                 print(f"[EXEC] Task {task.slug} completed, queuing for merge")
                 task.phase = TaskPhase.OUTBOUND
+                task.state = TaskState.IDLE
                 persist_task_state(task)
                 manager.queue_for_merge(task.slug)
             elif exit_code != 0:
@@ -1476,19 +1950,31 @@ def handle_execution_tasks(manager: ParallelTaskManager):
                     persist_task_state(task)
                 else:
                     print(f"[EXEC] Task {task.slug} crashed (exit {exit_code}), restarting...")
-                start_task_execution_async(task)
+                send_execution_command_tmux(task)
             else:
                 # Exited 0 but not complete - restart
                 print(f"[EXEC] Task {task.slug} exited but not complete, restarting...")
-                start_task_execution_async(task)
+                send_execution_command_tmux(task)
+            continue
+
+        # Skip if in recovery
+        if task.state == TaskState.RECOVERING:
+            continue
+
+        # If idle (e.g., recovered task), start execution
+        if task.state == TaskState.IDLE:
+            send_execution_command_tmux(task)
 
 
 def handle_merging_tasks(manager: ParallelTaskManager):
     """Handle merging phase tasks - check if merge agent completed."""
     for task in list(manager.get_tasks_in_phase(TaskPhase.MERGING)):
-        is_running, exit_code = check_task_subprocess(task)
+        # Check tmux pane for completion
+        if task.state == TaskState.RUNNING:
+            completed, exit_code = check_step_completion_tmux(task)
+            if not completed:
+                continue  # Still running
 
-        if not is_running and exit_code is not None:
             # Merge agent finished - check result
             done_dir = task.worktree_path / "workspace" / "tasks" / "done" / task.slug
             needs_manual = task.worktree_path / ".needs-manual-rebase"
@@ -1496,26 +1982,34 @@ def handle_merging_tasks(manager: ParallelTaskManager):
             if done_dir.exists() and (done_dir / "ticket.md").exists():
                 # Merge agent succeeded - do final squash merge
                 print(f"[MERGE] Task {task.slug} rebased successfully, doing final squash merge")
+                task.state = TaskState.IDLE
                 if finalize_squash_merge(task, manager):
                     print(f"[MERGE] Task {task.slug} merged to main successfully")
+                    # Kill the pane since task is done
+                    kill_pane(task.pane_id)
                 else:
                     print(f"[MERGE] Task {task.slug} squash merge failed, will retry")
-                    # Restart merge agent
-                    start_merge_agent_async(task)
+                    send_merge_command_tmux(task)
             elif needs_manual.exists():
                 # Agent couldn't resolve conflicts
                 print(f"[MERGE] Task {task.slug} needs manual conflict resolution")
+                task.state = TaskState.FAILED
                 # Remove from merge queue, keep in MERGING phase
                 if task.slug in manager.merge_queue:
                     manager.merge_queue.remove(task.slug)
             elif exit_code != 0:
                 # Merge agent crashed - restart
                 print(f"[MERGE] Task {task.slug} merge agent crashed (exit {exit_code}), restarting...")
-                start_merge_agent_async(task)
+                send_merge_command_tmux(task)
             else:
                 # Exited 0 but not complete - restart
                 print(f"[MERGE] Task {task.slug} merge agent exited incomplete, restarting...")
-                start_merge_agent_async(task)
+                send_merge_command_tmux(task)
+            continue
+
+        # Skip if in recovery
+        if task.state == TaskState.RECOVERING:
+            continue
 
 
 def session_file_for(slug: str) -> Path:
@@ -2237,6 +2731,177 @@ def is_planning_complete(slug: str) -> bool:
         return False
 
 
+# =============================================================================
+# Overseer Functions (Stuck Detection and Recovery)
+# =============================================================================
+
+def check_if_stuck_with_claude(task: ActiveTask, pane_output: str) -> tuple[bool, str]:
+    """
+    Use Claude to analyze pane output and determine if task is stuck.
+    Returns (is_stuck, reason) tuple.
+    """
+    if not pane_output.strip():
+        return (False, "")
+
+    # First check for obvious stuck patterns without calling Claude
+    obvious_stuck_patterns = [
+        ("error:", "Error detected in output"),
+        ("panic:", "Panic detected"),
+        ("SIGTERM", "Process was terminated"),
+        ("rate limit", "Rate limit hit"),
+        ("usage_limit_reached", "Usage limit reached"),
+    ]
+
+    output_lower = pane_output.lower()
+    for pattern, reason in obvious_stuck_patterns:
+        if pattern.lower() in output_lower:
+            return (True, reason)
+
+    # Check if no progress for a long time (output hasn't changed)
+    # This is a simple heuristic - if the last 20 lines are all the same character
+    # or empty, consider it potentially stuck
+    last_lines = pane_output.strip().split('\n')[-20:]
+    if all(not line.strip() for line in last_lines):
+        return (True, "No output activity")
+
+    # For more complex analysis, could spawn Claude to analyze
+    # But for now, rely on timeout-based detection
+    return (False, "")
+
+
+def spawn_recovery_in_pane(task: ActiveTask, pane_output: str, reason: str):
+    """
+    Spawn a recovery Claude instance in the task's pane.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = task.worktree_task_dir() / "agent_logs"
+    log_file = log_dir / f"claude-recovery-{timestamp}.log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+
+    # Kill any running process in the pane first
+    send_to_pane(task.pane_id, "\x03")  # Ctrl+C
+    time.sleep(1)
+
+    prompt = f"""You are a RECOVERY AGENT for task: {task.slug}
+
+CONTEXT:
+- The previous agent appears to be stuck or has failed
+- Reason detected: {reason}
+- Current step: {task.current_step}
+- Phase: {task.phase.value}
+- Worktree: {task.worktree_path}
+
+RECENT PANE OUTPUT (last 100 lines):
+{pane_output[-5000:]}
+
+YOUR MISSION:
+1. Analyze what went wrong
+2. Fix any immediate issues (resolve conflicts, fix errors, etc.)
+3. Resume the task from where it left off
+
+Task files are in: ./workspace/tasks/in-progress/{task.slug}/
+
+If the task was in PLANNING phase:
+- Check which plan version exists, create the next one if needed
+- Ensure feedback files are written
+
+If the task was in EXECUTING phase:
+- Check ticket.md History for progress
+- Continue implementation from where it stopped
+
+If the task was in MERGING phase:
+- Check for rebase conflicts
+- Resolve conflicts or mark for manual intervention
+
+When done, EXIT the session. The orchestrator will restart the next step.
+"""
+
+    escaped = escape_for_shell(prompt)
+    cmd = f"claude -p '{escaped}' --allowedTools Edit,Write,Bash,Glob,Grep,Read 2>&1 | tee {log_file}; echo '__DONE_recovery_EXIT_'$?"
+
+    task.current_step = "recovery"
+    task.state = TaskState.RECOVERING
+    task.last_command_time = datetime.now()
+
+    send_long_command_to_pane(task.pane_id, cmd)
+    print(f"[OVERSEER] Spawned recovery agent for {task.slug} (reason: {reason})")
+
+
+def run_overseer(manager: ParallelTaskManager):
+    """
+    Background thread that monitors all panes for stuck tasks.
+    Runs every OVERSEER_CHECK_INTERVAL seconds.
+    """
+    print(f"[OVERSEER] Started (check interval: {OVERSEER_CHECK_INTERVAL}s, stuck timeout: {STUCK_TIMEOUT_MINUTES}min)")
+
+    while True:
+        time.sleep(OVERSEER_CHECK_INTERVAL)
+
+        for task in list(manager.active_tasks.values()):
+            # Skip tasks that have exceeded recovery attempts
+            if task.recovery_attempts >= MAX_RECOVERY_ATTEMPTS:
+                if task.state != TaskState.FAILED:
+                    print(f"[OVERSEER] Task {task.slug} exceeded max recovery attempts, marking as FAILED")
+                    task.state = TaskState.FAILED
+                continue
+
+            # Skip tasks without panes
+            if not task.pane_id:
+                continue
+
+            # Check if pane is still alive
+            if not is_pane_alive(task.pane_id):
+                print(f"[OVERSEER] Pane {task.pane_id} for {task.slug} is dead, recreating...")
+                task.pane_id = create_task_pane(task.slug, task.worktree_path)
+                if task.pane_id:
+                    # Restart the current step
+                    task.state = TaskState.IDLE
+                continue
+
+            # Check for stuck based on timeout
+            if task.last_command_time and task.state == TaskState.RUNNING:
+                elapsed = (datetime.now() - task.last_command_time).total_seconds()
+                if elapsed > STUCK_TIMEOUT_MINUTES * 60:
+                    print(f"[OVERSEER] Task {task.slug} appears stuck (no completion after {STUCK_TIMEOUT_MINUTES}min)")
+                    output = capture_pane_output(task.pane_id, 300)
+                    is_stuck, reason = check_if_stuck_with_claude(task, output)
+
+                    if is_stuck or elapsed > STUCK_TIMEOUT_MINUTES * 60 * 2:
+                        # Definitely stuck, spawn recovery
+                        task.recovery_attempts += 1
+                        reason = reason or f"Timeout after {int(elapsed / 60)} minutes"
+                        spawn_recovery_in_pane(task, output, reason)
+
+
+def recover_existing_panes(manager: ParallelTaskManager):
+    """
+    On startup, check for existing panes in the agent session and recover their state.
+    """
+    panes = list_session_panes()
+
+    for pane_info in panes:
+        pane_id = pane_info.get('pane_id', '')
+        title = pane_info.get('title', '')
+
+        # Skip the main pane
+        if not title or title == 'main':
+            continue
+
+        # Title should be the task slug
+        slug = title
+        task = manager.get_task(slug)
+
+        if task:
+            # Task exists, update its pane_id
+            print(f"[RECOVER] Reconnecting task {slug} to pane {pane_id}")
+            task.pane_id = pane_id
+            task.state = TaskState.RUNNING  # Assume it's running until we check
+        else:
+            # Orphan pane - kill it
+            print(f"[RECOVER] Killing orphan pane {pane_id} (title: {title})")
+            kill_pane(pane_id)
+
+
 def parse_args():
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -2261,9 +2926,13 @@ def parse_args():
 def main_parallel():
     """
     Parallel main loop that manages multiple concurrent tasks.
-    Each task runs in its own git worktree.
+    Each task runs in its own git worktree with tmux panes for visibility.
     """
     args = parse_args()
+
+    # Initialize tmux
+    check_tmux_installed()
+    ensure_agent_session()
 
     setup_directories()
 
@@ -2279,16 +2948,22 @@ def main_parallel():
     # Recover any existing worktrees from previous runs
     recover_existing_worktrees(manager)
 
-    # Restart any tasks that were running
+    # Recover existing tmux panes
+    recover_existing_panes(manager)
+
+    # Create panes for recovered tasks that don't have them
     for task in list(manager.active_tasks.values()):
-        if task.phase == TaskPhase.PLANNING:
-            print(f"[RECOVER] Restarting planning for {task.slug}")
-            # Will be picked up by advance_planning_tasks
-        elif task.phase == TaskPhase.EXECUTING:
-            print(f"[RECOVER] Restarting execution for {task.slug}")
-            start_task_execution_async(task)
+        if not task.pane_id:
+            task.pane_id = create_task_pane(task.slug, task.worktree_path)
+            task.state = TaskState.IDLE  # Will be restarted by main loop
+
+    # Start overseer thread for stuck detection
+    overseer = threading.Thread(target=run_overseer, args=(manager,), daemon=True)
+    overseer.start()
 
     print(f"[STARTUP] Parallel agent loop started (max {manager.max_tasks} concurrent tasks)")
+    print(f"[STARTUP] tmux session: {AGENT_SESSION}")
+    print(f"[STARTUP] Attach to see all tasks: tmux attach -t {AGENT_SESSION}")
     if args.tasks:
         print(f"[STARTUP] Priority queue: {', '.join(args.tasks)}")
     print(f"[STARTUP] Worktrees location: {WORKTREES_ROOT.resolve()}")
@@ -2325,8 +3000,9 @@ def main_parallel():
         # Status summary
         if manager.active_tasks:
             for task in manager.active_tasks.values():
-                status = "running" if task.is_alive else "idle"
-                print(f"  [{task.slug}] {task.phase.value} ({status})")
+                pane_info = f"pane {task.pane_id}" if task.pane_id else "no pane"
+                step_info = f" ({task.current_step})" if task.current_step else ""
+                print(f"  [{task.slug}] {task.phase.value}/{task.state.value}{step_info} [{pane_info}]")
 
         if not manager.active_tasks and not pick_next_task(skip_slugs=set(), manager=manager):
             print("Idle — no tasks")
