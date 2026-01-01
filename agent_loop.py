@@ -7,6 +7,7 @@
 Agent loop that manages codex tasks through todo -> in-progress -> outbound -> done workflow.
 """
 
+import argparse
 import fcntl
 import os
 import signal
@@ -31,7 +32,7 @@ LOGS_DIR = WORKSPACE / "logs"
 
 # Parallel execution settings
 WORKTREES_ROOT = Path("..") / "worktrees"
-MAX_CONCURRENT_TASKS = 3
+DEFAULT_MAX_CONCURRENT_TASKS = 3
 MERGE_LOCK_FILE = WORKSPACE / ".merge.lock"
 
 
@@ -74,12 +75,13 @@ class ActiveTask:
 @dataclass
 class ParallelTaskManager:
     """Manages multiple concurrent tasks."""
+    max_tasks: int = DEFAULT_MAX_CONCURRENT_TASKS
     active_tasks: dict[str, ActiveTask] = field(default_factory=dict)
     merge_queue: list[str] = field(default_factory=list)
 
     def can_start_new_task(self) -> bool:
         """Check if we can start another task."""
-        return len(self.active_tasks) < MAX_CONCURRENT_TASKS
+        return len(self.active_tasks) < self.max_tasks
 
     def get_task(self, slug: str) -> Optional[ActiveTask]:
         """Get a task by slug."""
@@ -1793,18 +1795,35 @@ def is_planning_complete(slug: str) -> bool:
         return False
 
 
+def parse_args():
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="Agent loop that manages parallel task execution via git worktrees."
+    )
+    parser.add_argument(
+        "-j", "--max-jobs",
+        type=int,
+        default=DEFAULT_MAX_CONCURRENT_TASKS,
+        metavar="N",
+        help=f"Maximum concurrent tasks (default: {DEFAULT_MAX_CONCURRENT_TASKS})"
+    )
+    return parser.parse_args()
+
+
 def main_parallel():
     """
     Parallel main loop that manages multiple concurrent tasks.
     Each task runs in its own git worktree.
     """
+    args = parse_args()
+
     setup_directories()
 
     # Check for stale merge lock from previous crash
     check_stale_merge_lock()
 
-    # Create task manager
-    manager = ParallelTaskManager()
+    # Create task manager with configured max tasks
+    manager = ParallelTaskManager(max_tasks=args.max_jobs)
 
     # Setup signal handlers for graceful shutdown
     setup_signal_handlers(manager)
@@ -1821,7 +1840,7 @@ def main_parallel():
             print(f"[RECOVER] Restarting execution for {task.slug}")
             start_task_execution_async(task)
 
-    print(f"[STARTUP] Parallel agent loop started (max {MAX_CONCURRENT_TASKS} concurrent tasks)")
+    print(f"[STARTUP] Parallel agent loop started (max {manager.max_tasks} concurrent tasks)")
     print(f"[STARTUP] Worktrees location: {WORKTREES_ROOT.resolve()}")
 
     while True:
