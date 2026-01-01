@@ -288,7 +288,11 @@ Then stop."""
     expected_plan = task_dir / plan_file
 
     run_agent_with_logs(
-        cmd=["claude", "--dangerously-skip-permissions"],
+        cmd=[
+            "claude", "-p",
+            "--tools", "Read,Write,Glob,Grep,Edit,Bash",
+            "--dangerously-skip-permissions"
+        ],
         log_file=log_file,
         label=f"Claude {plan_file}",
         input_text=prompt,
