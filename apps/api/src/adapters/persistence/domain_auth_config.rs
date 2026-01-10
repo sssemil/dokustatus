@@ -39,6 +39,39 @@ impl DomainAuthConfigRepo for PostgresPersistence {
         Ok(row.map(row_to_profile))
     }
 
+    async fn get_by_domain_ids(
+        &self,
+        domain_ids: &[Uuid],
+    ) -> AppResult<Vec<DomainAuthConfigProfile>> {
+        if domain_ids.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let rows = sqlx::query(
+            "SELECT id, domain_id, magic_link_enabled, google_oauth_enabled FROM domain_auth_config WHERE domain_id = ANY($1)",
+        )
+        .bind(domain_ids)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| DomainAuthConfigProfile {
+                id: row.get("id"),
+                domain_id: row.get("domain_id"),
+                magic_link_enabled: row.get("magic_link_enabled"),
+                google_oauth_enabled: row.get("google_oauth_enabled"),
+                redirect_url: None,
+                whitelist_enabled: false,
+                access_token_ttl_secs: 0,
+                refresh_token_ttl_days: 0,
+                created_at: None,
+                updated_at: None,
+            })
+            .collect())
+    }
+
     async fn upsert(
         &self,
         domain_id: Uuid,

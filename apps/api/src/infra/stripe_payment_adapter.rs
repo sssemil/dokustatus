@@ -6,15 +6,13 @@ use uuid::Uuid;
 use crate::{
     app_error::{AppError, AppResult},
     application::ports::payment_provider::{
-        CheckoutResult, CheckoutUrls, CustomerInfo, CustomerId, InvoiceInfo, InvoicePdfResult,
+        CheckoutResult, CheckoutUrls, CustomerId, CustomerInfo, InvoiceInfo, InvoicePdfResult,
         PaymentProviderPort, PlanChangePreview, PlanChangeResult, PlanChangeType, PlanInfo,
         SubscriptionId, SubscriptionInfo, SubscriptionResult,
     },
     domain::entities::{
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
-        payment_scenario::PaymentScenario,
-        user_subscription::SubscriptionStatus,
+        payment_mode::PaymentMode, payment_provider::PaymentProvider,
+        payment_scenario::PaymentScenario, user_subscription::SubscriptionStatus,
     },
     infra::stripe_client::StripeClient,
 };
@@ -58,9 +56,7 @@ impl StripePaymentAdapter {
 
     /// Convert timestamp to DateTime<Utc>
     fn timestamp_to_datetime(ts: i64) -> DateTime<Utc> {
-        Utc.timestamp_opt(ts, 0)
-            .single()
-            .unwrap_or_else(Utc::now)
+        Utc.timestamp_opt(ts, 0).single().unwrap_or_else(Utc::now)
     }
 
     /// Convert optional timestamp to Option<DateTime<Utc>>
@@ -94,7 +90,10 @@ impl PaymentProviderPort for StripePaymentAdapter {
             ("domain_id".to_string(), domain_id.to_string()),
         ]);
 
-        let customer = self.client.get_or_create_customer(email, Some(metadata)).await?;
+        let customer = self
+            .client
+            .get_or_create_customer(email, Some(metadata))
+            .await?;
         Ok(CustomerId::new(customer.id))
     }
 
@@ -121,9 +120,10 @@ impl PaymentProviderPort for StripePaymentAdapter {
         urls: &CheckoutUrls,
         _scenario: Option<PaymentScenario>, // Ignored for Stripe
     ) -> AppResult<CheckoutResult> {
-        let price_id = plan.external_price_id.as_ref().ok_or_else(|| {
-            AppError::InvalidInput("Plan missing Stripe price ID".to_string())
-        })?;
+        let price_id = plan
+            .external_price_id
+            .as_ref()
+            .ok_or_else(|| AppError::InvalidInput("Plan missing Stripe price ID".to_string()))?;
 
         let trial_days = if plan.trial_days > 0 {
             Some(plan.trial_days)
@@ -303,7 +303,12 @@ impl PaymentProviderPort for StripePaymentAdapter {
 
         if new_amount >= current_amount {
             // Upgrade: immediate with proration
-            let idempotency_key = format!("upgrade_{}_{}_{}", subscription_id, new_plan.id, Utc::now().timestamp());
+            let idempotency_key = format!(
+                "upgrade_{}_{}_{}",
+                subscription_id,
+                new_plan.id,
+                Utc::now().timestamp()
+            );
             let upgraded = self
                 .client
                 .upgrade_subscription(
@@ -331,7 +336,12 @@ impl PaymentProviderPort for StripePaymentAdapter {
         } else {
             // Downgrade: scheduled for period end
             let current_price_id = sub.price_id();
-            let idempotency_key = format!("downgrade_{}_{}_{}", subscription_id, new_plan.id, Utc::now().timestamp());
+            let idempotency_key = format!(
+                "downgrade_{}_{}_{}",
+                subscription_id,
+                new_plan.id,
+                Utc::now().timestamp()
+            );
 
             let schedule = self
                 .client

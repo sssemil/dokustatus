@@ -6,10 +6,8 @@ use uuid::Uuid;
 use crate::{
     app_error::AppResult,
     domain::entities::{
-        payment_mode::PaymentMode,
-        payment_provider::PaymentProvider,
-        payment_scenario::PaymentScenario,
-        user_subscription::SubscriptionStatus,
+        payment_mode::PaymentMode, payment_provider::PaymentProvider,
+        payment_scenario::PaymentScenario, user_subscription::SubscriptionStatus,
     },
 };
 
@@ -244,7 +242,14 @@ pub trait PaymentProviderPort: Send + Sync {
         domain_id: Uuid,
     ) -> AppResult<CustomerId>;
 
-    /// Get customer information by ID
+    /// Get customer information by ID from the payment provider.
+    ///
+    /// # Provider Behavior
+    /// - **Stripe**: Queries the Stripe API for customer data
+    /// - **Dummy**: Returns `None` - customer data is in the local database only
+    /// - **Coinbase**: Not yet implemented
+    ///
+    /// For dummy provider, customer data is only available in the local database.
     async fn get_customer(&self, customer_id: &CustomerId) -> AppResult<Option<CustomerInfo>>;
 
     // ========================================================================
@@ -272,16 +277,25 @@ pub trait PaymentProviderPort: Send + Sync {
     ) -> AppResult<SubscriptionResult>;
 
     /// Confirm a subscription requiring additional authentication (3DS).
-    async fn confirm_subscription(
-        &self,
-        confirmation_token: &str,
-    ) -> AppResult<SubscriptionResult>;
+    async fn confirm_subscription(&self, confirmation_token: &str)
+    -> AppResult<SubscriptionResult>;
 
     // ========================================================================
     // Subscription Lifecycle
     // ========================================================================
 
-    /// Get subscription information
+    /// Get subscription information from the payment provider.
+    ///
+    /// # Provider Behavior
+    /// - **Stripe**: Queries the Stripe API for current subscription state
+    /// - **Dummy**: Returns `None` - subscription state is in the local database only
+    /// - **Coinbase**: Not yet implemented (returns `ProviderNotSupported` from factory)
+    ///
+    /// # Return Value
+    /// - `Some(info)` - Subscription found in external provider
+    /// - `None` - Subscription not found or provider doesn't support external lookup
+    ///
+    /// For dummy provider, callers should use `UserSubscriptionRepo` to read subscription state.
     async fn get_subscription(
         &self,
         subscription_id: &SubscriptionId,
@@ -356,10 +370,7 @@ pub trait PaymentProviderPort: Send + Sync {
     /// Ensure product and price exist in the provider.
     /// For Stripe: Creates product/price if missing.
     /// For Dummy: No-op (returns provided IDs).
-    async fn ensure_product_and_price(
-        &self,
-        plan: &PlanInfo,
-    ) -> AppResult<(String, String)>; // (product_id, price_id)
+    async fn ensure_product_and_price(&self, plan: &PlanInfo) -> AppResult<(String, String)>; // (product_id, price_id)
 }
 
 /// Customer information

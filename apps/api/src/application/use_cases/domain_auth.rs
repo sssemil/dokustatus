@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -24,6 +25,10 @@ use crate::infra::crypto::ProcessCipher;
 pub trait DomainAuthConfigRepo: Send + Sync {
     async fn get_by_domain_id(&self, domain_id: Uuid)
     -> AppResult<Option<DomainAuthConfigProfile>>;
+    async fn get_by_domain_ids(
+        &self,
+        domain_ids: &[Uuid],
+    ) -> AppResult<Vec<DomainAuthConfigProfile>>;
     async fn upsert(
         &self,
         domain_id: Uuid,
@@ -125,6 +130,27 @@ pub trait DomainMagicLinkStore: Send + Sync {
 pub struct OAuthStateData {
     pub domain: String,
     pub code_verifier: String, // PKCE code_verifier for exchange
+    /// Status: "pending" (initial), "in_use" (being exchanged)
+    #[serde(default = "default_pending")]
+    pub status: String,
+    /// Unix timestamp when state was marked in-use (for retry window)
+    #[serde(default)]
+    pub marked_at: Option<i64>,
+}
+
+fn default_pending() -> String {
+    "pending".to_string()
+}
+
+/// Result of attempting to mark state in-use
+#[derive(Debug, Clone)]
+pub enum MarkStateResult {
+    /// State marked successfully, here's the data
+    Success(OAuthStateData),
+    /// State not found (doesn't exist or was deleted)
+    NotFound,
+    /// State is in-use and retry window has expired
+    RetryWindowExpired,
 }
 
 /// OAuth completion data stored in Redis after successful OAuth exchange
@@ -159,6 +185,19 @@ pub trait OAuthStateStore: Send + Sync {
     ) -> AppResult<()>;
     /// Consume state atomically (single-use) and return stored data
     async fn consume_state(&self, state: &str) -> AppResult<Option<OAuthStateData>>;
+    /// Mark state as "in_use". Refreshes TTL to ensure retry window is available.
+    /// Returns structured result instead of Option/Error.
+    async fn mark_state_in_use(
+        &self,
+        state: &str,
+        retry_window_secs: i64,
+    ) -> AppResult<MarkStateResult>;
+    /// Delete state unconditionally after successful completion.
+    /// This is called only after user creation succeeds.
+    async fn complete_state(&self, state: &str) -> AppResult<()>;
+    /// Abort state for terminal errors (unconditional delete).
+    /// Called when error is non-retryable (invalid_grant, validation failure).
+    async fn abort_state(&self, state: &str) -> AppResult<()>;
     /// Store completion token after successful OAuth exchange
     async fn store_completion(
         &self,
@@ -468,12 +507,13 @@ impl DomainAuthUseCases {
         raw_token: &str,
         session_id: &str,
     ) -> AppResult<Option<DomainEndUserProfile>> {
-        let token_hash = hash_domain_token(raw_token, domain_name);
-
-        if let Some(data) = self
-            .magic_link_store
-            .consume(&token_hash, session_id)
-            .await?
+        if let Some(data) = consume_magic_link_from_store(
+            self.magic_link_store.as_ref(),
+            raw_token,
+            domain_name,
+            session_id,
+        )
+        .await?
         {
             // Get the end user first to check access
             let end_user = self
@@ -526,6 +566,34 @@ impl DomainAuthUseCases {
     // ========================================================================
     // Protected endpoints (for dashboard)
     // ========================================================================
+
+    /// Batch check if domains have auth methods enabled.
+    ///
+    /// IMPORTANT: This method does NOT verify domain ownership. It must only be
+    /// called with domain IDs that have already been authorized.
+    /// Domains without explicit config default to `true` (matches get_auth_config).
+    pub(crate) async fn has_auth_methods_for_owner_domains(
+        &self,
+        domain_ids: &[Uuid],
+    ) -> AppResult<HashMap<Uuid, bool>> {
+        if domain_ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+
+        let configs = self.auth_config_repo.get_by_domain_ids(domain_ids).await?;
+        let mut result = HashMap::with_capacity(domain_ids.len());
+
+        for config in configs {
+            let has_methods = config.magic_link_enabled || config.google_oauth_enabled;
+            result.insert(config.domain_id, has_methods);
+        }
+
+        for &domain_id in domain_ids {
+            result.entry(domain_id).or_insert(true);
+        }
+
+        Ok(result)
+    }
 
     /// Get auth config for a domain (domain owner only)
     #[instrument(skip(self))]
@@ -1139,6 +1207,8 @@ impl DomainAuthUseCases {
         let state_data = OAuthStateData {
             domain: domain_name.to_string(),
             code_verifier: code_verifier.clone(),
+            status: default_pending(),
+            marked_at: None,
         };
 
         self.oauth_state_store
@@ -1156,6 +1226,30 @@ impl DomainAuthUseCases {
         state: &str,
     ) -> AppResult<Option<OAuthStateData>> {
         self.oauth_state_store.consume_state(state).await
+    }
+
+    /// Mark OAuth state as in-use (two-phase exchange).
+    #[instrument(skip(self))]
+    pub async fn mark_google_oauth_state_in_use(
+        &self,
+        state: &str,
+        retry_window_secs: i64,
+    ) -> AppResult<MarkStateResult> {
+        self.oauth_state_store
+            .mark_state_in_use(state, retry_window_secs)
+            .await
+    }
+
+    /// Complete OAuth state after successful exchange (best-effort delete).
+    #[instrument(skip(self))]
+    pub async fn complete_google_oauth_state(&self, state: &str) -> AppResult<()> {
+        self.oauth_state_store.complete_state(state).await
+    }
+
+    /// Abort OAuth state for terminal errors (delete).
+    #[instrument(skip(self))]
+    pub async fn abort_google_oauth_state(&self, state: &str) -> AppResult<()> {
+        self.oauth_state_store.abort_state(state).await
     }
 
     /// Get domain by name (for OAuth callback to look up domain from state)
@@ -1447,10 +1541,24 @@ fn generate_token() -> String {
 /// Note: session_id is stored separately in Redis for verification, not in the hash
 fn hash_domain_token(raw: &str, domain: &str) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(raw.as_bytes());
-    hasher.update(domain.as_bytes());
+    let raw_bytes = raw.as_bytes();
+    let domain_bytes = domain.as_bytes();
+    hasher.update((raw_bytes.len() as u32).to_be_bytes());
+    hasher.update(raw_bytes);
+    hasher.update((domain_bytes.len() as u32).to_be_bytes());
+    hasher.update(domain_bytes);
     let out = hasher.finalize();
     hex::encode(out)
+}
+
+async fn consume_magic_link_from_store(
+    magic_link_store: &dyn DomainMagicLinkStore,
+    raw_token: &str,
+    domain_name: &str,
+    session_id: &str,
+) -> AppResult<Option<DomainMagicLinkData>> {
+    let token_hash = hash_domain_token(raw_token, domain_name);
+    magic_link_store.consume(&token_hash, session_id).await
 }
 
 /// Validate that a redirect URL is on the specified domain or a subdomain
@@ -1470,6 +1578,597 @@ fn is_valid_redirect_url(url: &str, domain: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::application::use_cases::domain::DomainProfile;
+    use crate::domain::entities::stripe_mode::StripeMode;
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Default)]
+    struct InMemoryMagicLinkStore {
+        entries: Mutex<HashMap<String, StoredMagicLink>>,
+    }
+
+    struct StoredMagicLink {
+        data: DomainMagicLinkData,
+        session_id: String,
+    }
+
+    #[async_trait]
+    impl DomainMagicLinkStore for InMemoryMagicLinkStore {
+        async fn save(
+            &self,
+            token_hash: &str,
+            end_user_id: Uuid,
+            domain_id: Uuid,
+            session_id: &str,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            let mut entries = self.entries.lock().expect("magic link store lock");
+            entries.insert(
+                token_hash.to_string(),
+                StoredMagicLink {
+                    data: DomainMagicLinkData {
+                        end_user_id,
+                        domain_id,
+                    },
+                    session_id: session_id.to_string(),
+                },
+            );
+            Ok(())
+        }
+
+        async fn consume(
+            &self,
+            token_hash: &str,
+            session_id: &str,
+        ) -> AppResult<Option<DomainMagicLinkData>> {
+            let mut entries = self.entries.lock().expect("magic link store lock");
+            let Some(stored) = entries.remove(token_hash) else {
+                return Ok(None);
+            };
+
+            if stored.session_id != session_id {
+                entries.insert(token_hash.to_string(), stored);
+                return Err(AppError::SessionMismatch);
+            }
+
+            Ok(Some(stored.data))
+        }
+    }
+
+    /// Controllable clock for OAuth state testing
+    #[derive(Clone)]
+    struct TestClock {
+        now: Arc<Mutex<i64>>,
+    }
+
+    impl TestClock {
+        fn new(initial: i64) -> Self {
+            Self {
+                now: Arc::new(Mutex::new(initial)),
+            }
+        }
+
+        fn now(&self) -> i64 {
+            *self.now.lock().expect("clock lock")
+        }
+
+        fn advance(&self, seconds: i64) {
+            let mut now = self.now.lock().expect("clock lock");
+            *now += seconds;
+        }
+    }
+
+    struct InMemoryOAuthStateStore {
+        states: Mutex<HashMap<String, (OAuthStateData, i64)>>,
+        clock: TestClock,
+    }
+
+    impl InMemoryOAuthStateStore {
+        fn new(clock: TestClock) -> Self {
+            Self {
+                states: Mutex::new(HashMap::new()),
+                clock,
+            }
+        }
+    }
+
+    #[async_trait]
+    impl OAuthStateStore for InMemoryOAuthStateStore {
+        async fn store_state(
+            &self,
+            state: &str,
+            data: &OAuthStateData,
+            ttl_minutes: i64,
+        ) -> AppResult<()> {
+            let mut states = self.states.lock().expect("oauth state lock");
+            let ttl_secs = ttl_minutes.max(1) * 60;
+            let expires_at = self.clock.now() + ttl_secs;
+            states.insert(state.to_string(), (data.clone(), expires_at));
+            Ok(())
+        }
+
+        async fn consume_state(&self, state: &str) -> AppResult<Option<OAuthStateData>> {
+            let mut states = self.states.lock().expect("oauth state lock");
+            let now = self.clock.now();
+            let Some((data, expires_at)) = states.remove(state) else {
+                return Ok(None);
+            };
+            if now > expires_at {
+                return Ok(None);
+            }
+            Ok(Some(data))
+        }
+
+        async fn mark_state_in_use(
+            &self,
+            state: &str,
+            retry_window_secs: i64,
+        ) -> AppResult<MarkStateResult> {
+            let mut states = self.states.lock().expect("oauth state lock");
+            let now = self.clock.now();
+            let Some((data, expires_at)) = states.get_mut(state) else {
+                return Ok(MarkStateResult::NotFound);
+            };
+
+            if now > *expires_at {
+                states.remove(state);
+                return Ok(MarkStateResult::NotFound);
+            }
+
+            if data.status == "in_use" {
+                let marked_at = data.marked_at.unwrap_or(0);
+                if (now - marked_at) > retry_window_secs {
+                    return Ok(MarkStateResult::RetryWindowExpired);
+                }
+                *expires_at = now + retry_window_secs + 30;
+                return Ok(MarkStateResult::Success(data.clone()));
+            }
+
+            data.status = "in_use".to_string();
+            data.marked_at = Some(now);
+            *expires_at = now + retry_window_secs + 30;
+            Ok(MarkStateResult::Success(data.clone()))
+        }
+
+        async fn complete_state(&self, state: &str) -> AppResult<()> {
+            self.states.lock().expect("oauth state lock").remove(state);
+            Ok(())
+        }
+
+        async fn abort_state(&self, state: &str) -> AppResult<()> {
+            self.states.lock().expect("oauth state lock").remove(state);
+            Ok(())
+        }
+
+        async fn store_completion(
+            &self,
+            _token: &str,
+            _data: &OAuthCompletionData,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn consume_completion(&self, _token: &str) -> AppResult<Option<OAuthCompletionData>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn store_link_confirmation(
+            &self,
+            _token: &str,
+            _data: &OAuthLinkConfirmationData,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn consume_link_confirmation(
+            &self,
+            _token: &str,
+        ) -> AppResult<Option<OAuthLinkConfirmationData>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[derive(Default)]
+    struct InMemoryAuthConfigRepo {
+        configs: Mutex<HashMap<Uuid, DomainAuthConfigProfile>>,
+    }
+
+    #[async_trait]
+    impl DomainAuthConfigRepo for InMemoryAuthConfigRepo {
+        async fn get_by_domain_id(
+            &self,
+            domain_id: Uuid,
+        ) -> AppResult<Option<DomainAuthConfigProfile>> {
+            Ok(self
+                .configs
+                .lock()
+                .expect("auth config lock")
+                .get(&domain_id)
+                .cloned())
+        }
+
+        async fn get_by_domain_ids(
+            &self,
+            domain_ids: &[Uuid],
+        ) -> AppResult<Vec<DomainAuthConfigProfile>> {
+            let configs = self.configs.lock().expect("auth config lock");
+            Ok(domain_ids
+                .iter()
+                .filter_map(|id| configs.get(id).cloned())
+                .collect())
+        }
+
+        async fn upsert(
+            &self,
+            domain_id: Uuid,
+            magic_link_enabled: bool,
+            google_oauth_enabled: bool,
+            redirect_url: Option<&str>,
+            whitelist_enabled: bool,
+        ) -> AppResult<DomainAuthConfigProfile> {
+            let profile = DomainAuthConfigProfile {
+                id: Uuid::new_v4(),
+                domain_id,
+                magic_link_enabled,
+                google_oauth_enabled,
+                redirect_url: redirect_url.map(|value| value.to_string()),
+                whitelist_enabled,
+                access_token_ttl_secs: 0,
+                refresh_token_ttl_days: 0,
+                created_at: None,
+                updated_at: None,
+            };
+            self.configs
+                .lock()
+                .expect("auth config lock")
+                .insert(domain_id, profile.clone());
+            Ok(profile)
+        }
+
+        async fn delete(&self, domain_id: Uuid) -> AppResult<()> {
+            self.configs
+                .lock()
+                .expect("auth config lock")
+                .remove(&domain_id);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct NoopRepo;
+
+    #[async_trait]
+    impl DomainRepo for NoopRepo {
+        async fn create(
+            &self,
+            _owner_end_user_id: Uuid,
+            _domain: &str,
+        ) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_by_id(&self, _domain_id: Uuid) -> AppResult<Option<DomainProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_by_domain(&self, _domain: &str) -> AppResult<Option<DomainProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn list_by_owner(&self, _owner_end_user_id: Uuid) -> AppResult<Vec<DomainProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn update_status(&self, _domain_id: Uuid, _status: &str) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_verifying(&self, _domain_id: Uuid) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_verified(&self, _domain_id: Uuid) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_failed(&self, _domain_id: Uuid) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn delete(&self, _domain_id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_verifying_domains(&self) -> AppResult<Vec<DomainProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_billing_stripe_mode(
+            &self,
+            _domain_id: Uuid,
+            _mode: StripeMode,
+        ) -> AppResult<DomainProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl DomainAuthMagicLinkRepo for NoopRepo {
+        async fn get_by_domain_id(
+            &self,
+            _domain_id: Uuid,
+        ) -> AppResult<Option<DomainAuthMagicLinkProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn upsert(
+            &self,
+            _domain_id: Uuid,
+            _resend_api_key_encrypted: &str,
+            _from_email: &str,
+        ) -> AppResult<DomainAuthMagicLinkProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn update_from_email(&self, _domain_id: Uuid, _from_email: &str) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn delete(&self, _domain_id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl DomainAuthGoogleOAuthRepo for NoopRepo {
+        async fn get_by_domain_id(
+            &self,
+            _domain_id: Uuid,
+        ) -> AppResult<Option<DomainAuthGoogleOAuthProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn upsert(
+            &self,
+            _domain_id: Uuid,
+            _client_id: &str,
+            _client_secret_encrypted: &str,
+        ) -> AppResult<DomainAuthGoogleOAuthProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn delete(&self, _domain_id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl DomainEndUserRepo for NoopRepo {
+        async fn get_by_id(&self, _id: Uuid) -> AppResult<Option<DomainEndUserProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_by_domain_and_email(
+            &self,
+            _domain_id: Uuid,
+            _email: &str,
+        ) -> AppResult<Option<DomainEndUserProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_by_domain_and_google_id(
+            &self,
+            _domain_id: Uuid,
+            _google_id: &str,
+        ) -> AppResult<Option<DomainEndUserProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn upsert(&self, _domain_id: Uuid, _email: &str) -> AppResult<DomainEndUserProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn upsert_with_google_id(
+            &self,
+            _domain_id: Uuid,
+            _email: &str,
+            _google_id: &str,
+        ) -> AppResult<DomainEndUserProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn mark_verified(&self, _id: Uuid) -> AppResult<DomainEndUserProfile> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn update_last_login(&self, _id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_google_id(&self, _id: Uuid, _google_id: &str) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn clear_google_id(&self, _id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn list_by_domain(&self, _domain_id: Uuid) -> AppResult<Vec<DomainEndUserProfile>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn delete(&self, _id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_frozen(&self, _id: Uuid, _frozen: bool) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_whitelisted(&self, _id: Uuid, _whitelisted: bool) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn whitelist_all_in_domain(&self, _domain_id: Uuid) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn count_by_domain_ids(&self, _domain_ids: &[Uuid]) -> AppResult<i64> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn get_waitlist_position(&self, _domain_id: Uuid, _user_id: Uuid) -> AppResult<i64> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn set_roles(&self, _id: Uuid, _roles: &[String]) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn remove_role_from_all_users(
+            &self,
+            _domain_id: Uuid,
+            _role_name: &str,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn count_users_with_role(
+            &self,
+            _domain_id: Uuid,
+            _role_name: &str,
+        ) -> AppResult<i64> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl OAuthStateStore for NoopRepo {
+        async fn store_state(
+            &self,
+            _state: &str,
+            _data: &OAuthStateData,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn consume_state(&self, _state: &str) -> AppResult<Option<OAuthStateData>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn mark_state_in_use(
+            &self,
+            _state: &str,
+            _retry_window_secs: i64,
+        ) -> AppResult<MarkStateResult> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn complete_state(&self, _state: &str) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn abort_state(&self, _state: &str) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn store_completion(
+            &self,
+            _token: &str,
+            _data: &OAuthCompletionData,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn consume_completion(&self, _token: &str) -> AppResult<Option<OAuthCompletionData>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn store_link_confirmation(
+            &self,
+            _token: &str,
+            _data: &OAuthLinkConfirmationData,
+            _ttl_minutes: i64,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+
+        async fn consume_link_confirmation(
+            &self,
+            _token: &str,
+        ) -> AppResult<Option<OAuthLinkConfirmationData>> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    #[async_trait]
+    impl DomainEmailSender for NoopRepo {
+        async fn send(
+            &self,
+            _api_key: &str,
+            _from_email: &str,
+            _to: &str,
+            _subject: &str,
+            _html: &str,
+        ) -> AppResult<()> {
+            Err(AppError::Internal("not implemented".into()))
+        }
+    }
+
+    fn build_use_cases(auth_repo: Arc<dyn DomainAuthConfigRepo>) -> DomainAuthUseCases {
+        let key_b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 32]);
+        let cipher = ProcessCipher::new_from_base64(&key_b64).expect("cipher");
+        let noop = Arc::new(NoopRepo::default());
+        DomainAuthUseCases::new(
+            noop.clone(),
+            auth_repo,
+            noop.clone(),
+            noop.clone(),
+            noop.clone(),
+            Arc::new(InMemoryMagicLinkStore::default()),
+            noop.clone(),
+            noop,
+            cipher,
+            None,
+            None,
+            None,
+            None,
+        )
+    }
+
+    fn auth_config_profile(
+        domain_id: Uuid,
+        magic_link_enabled: bool,
+        google_oauth_enabled: bool,
+    ) -> DomainAuthConfigProfile {
+        DomainAuthConfigProfile {
+            id: Uuid::new_v4(),
+            domain_id,
+            magic_link_enabled,
+            google_oauth_enabled,
+            redirect_url: None,
+            whitelist_enabled: false,
+            access_token_ttl_secs: 0,
+            refresh_token_ttl_days: 0,
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
+    fn oauth_state_data(domain: &str, code_verifier: &str) -> OAuthStateData {
+        OAuthStateData {
+            domain: domain.to_string(),
+            code_verifier: code_verifier.to_string(),
+            status: default_pending(),
+            marked_at: None,
+        }
+    }
 
     #[test]
     fn test_is_valid_redirect_url() {
@@ -1517,5 +2216,224 @@ mod tests {
         // Invalid: malformed URLs
         assert!(!is_valid_redirect_url("not-a-url", "example.com"));
         assert!(!is_valid_redirect_url("", "example.com"));
+    }
+
+    #[test]
+    fn test_hash_domain_token_avoids_collisions() {
+        // "ab" + "c" vs "a" + "bc" both produce "abc" if naively concatenated.
+        let raw_a = "ab";
+        let domain_a = "c";
+        let raw_b = "a";
+        let domain_b = "bc";
+
+        let scoped_a = hash_domain_token(raw_a, domain_a);
+        let scoped_b = hash_domain_token(raw_b, domain_b);
+        assert_ne!(scoped_a, scoped_b);
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_empty_input() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let use_cases = build_use_cases(repo);
+
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[])
+            .await
+            .expect("has auth methods");
+
+        assert!(result.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_with_config() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let domain_id = Uuid::new_v4();
+        repo.configs
+            .lock()
+            .expect("auth config lock")
+            .insert(domain_id, auth_config_profile(domain_id, true, false));
+
+        let use_cases = build_use_cases(repo);
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[domain_id])
+            .await
+            .expect("has auth methods");
+
+        assert_eq!(result.get(&domain_id), Some(&true));
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_disabled_config() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let domain_id = Uuid::new_v4();
+        repo.configs
+            .lock()
+            .expect("auth config lock")
+            .insert(domain_id, auth_config_profile(domain_id, false, false));
+
+        let use_cases = build_use_cases(repo);
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[domain_id])
+            .await
+            .expect("has auth methods");
+
+        assert_eq!(result.get(&domain_id), Some(&false));
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_missing_config_defaults_to_true() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let domain_id = Uuid::new_v4();
+        let use_cases = build_use_cases(repo);
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[domain_id])
+            .await
+            .expect("has auth methods");
+
+        assert_eq!(result.get(&domain_id), Some(&true));
+    }
+
+    #[tokio::test]
+    async fn test_has_auth_methods_for_owner_domains_mixed_configs() {
+        let repo = Arc::new(InMemoryAuthConfigRepo::default());
+        let domain_a = Uuid::new_v4();
+        let domain_b = Uuid::new_v4();
+        let domain_c = Uuid::new_v4();
+        {
+            let mut configs = repo.configs.lock().expect("auth config lock");
+            configs.insert(domain_a, auth_config_profile(domain_a, true, false));
+            configs.insert(domain_b, auth_config_profile(domain_b, false, false));
+        }
+
+        let use_cases = build_use_cases(repo);
+        let result = use_cases
+            .has_auth_methods_for_owner_domains(&[domain_a, domain_b, domain_c])
+            .await
+            .expect("has auth methods");
+
+        assert_eq!(result.get(&domain_a), Some(&true));
+        assert_eq!(result.get(&domain_b), Some(&false));
+        assert_eq!(result.get(&domain_c), Some(&true));
+    }
+
+    #[tokio::test]
+    async fn test_two_phase_happy_path() {
+        let clock = TestClock::new(1000);
+        let store = InMemoryOAuthStateStore::new(clock);
+
+        store
+            .store_state("abc", &oauth_state_data("example.com", "verifier"), 10)
+            .await
+            .unwrap();
+
+        let result = store.mark_state_in_use("abc", 90).await.unwrap();
+        assert!(matches!(result, MarkStateResult::Success(_)));
+
+        store.complete_state("abc").await.unwrap();
+
+        let result = store.mark_state_in_use("abc", 90).await.unwrap();
+        assert!(matches!(result, MarkStateResult::NotFound));
+    }
+
+    #[tokio::test]
+    async fn test_retry_within_window() {
+        let clock = TestClock::new(1000);
+        let store = InMemoryOAuthStateStore::new(clock.clone());
+
+        store
+            .store_state("abc", &oauth_state_data("example.com", "verifier"), 10)
+            .await
+            .unwrap();
+
+        store.mark_state_in_use("abc", 90).await.unwrap();
+
+        clock.advance(30);
+
+        let result = store.mark_state_in_use("abc", 90).await.unwrap();
+        assert!(matches!(result, MarkStateResult::Success(_)));
+    }
+
+    #[tokio::test]
+    async fn test_retry_after_window_expires() {
+        let clock = TestClock::new(1000);
+        let store = InMemoryOAuthStateStore::new(clock.clone());
+
+        store
+            .store_state("abc", &oauth_state_data("example.com", "verifier"), 10)
+            .await
+            .unwrap();
+
+        store.mark_state_in_use("abc", 90).await.unwrap();
+
+        clock.advance(100);
+
+        let result = store.mark_state_in_use("abc", 90).await.unwrap();
+        assert!(matches!(result, MarkStateResult::RetryWindowExpired));
+    }
+
+    #[tokio::test]
+    async fn test_retry_expired_abort_removes_state() {
+        let clock = TestClock::new(1000);
+        let store = InMemoryOAuthStateStore::new(clock.clone());
+
+        store
+            .store_state("abc", &oauth_state_data("example.com", "verifier"), 10)
+            .await
+            .unwrap();
+        store.mark_state_in_use("abc", 90).await.unwrap();
+
+        clock.advance(100);
+
+        let result = store.mark_state_in_use("abc", 90).await.unwrap();
+        assert!(matches!(result, MarkStateResult::RetryWindowExpired));
+
+        store.abort_state("abc").await.unwrap();
+
+        let result = store.mark_state_in_use("abc", 90).await.unwrap();
+        assert!(matches!(result, MarkStateResult::NotFound));
+    }
+
+    #[tokio::test]
+    async fn test_abort_removes_state() {
+        let clock = TestClock::new(1000);
+        let store = InMemoryOAuthStateStore::new(clock.clone());
+
+        store
+            .store_state("abc", &oauth_state_data("example.com", "verifier"), 10)
+            .await
+            .unwrap();
+        store.mark_state_in_use("abc", 90).await.unwrap();
+
+        store.abort_state("abc").await.unwrap();
+
+        let result = store.mark_state_in_use("abc", 90).await.unwrap();
+        assert!(matches!(result, MarkStateResult::NotFound));
+    }
+
+    #[test]
+    fn test_backward_compat_old_state() {
+        let json = r#"{"domain":"example.com","code_verifier":"verifier"}"#;
+        let data: OAuthStateData = serde_json::from_str(json).unwrap();
+
+        assert_eq!(data.status, "pending");
+        assert_eq!(data.marked_at, None);
+    }
+
+    #[tokio::test]
+    async fn test_ttl_refresh_on_mark() {
+        let clock = TestClock::new(1000);
+        let store = InMemoryOAuthStateStore::new(clock.clone());
+
+        store
+            .store_state("abc", &oauth_state_data("example.com", "verifier"), 1)
+            .await
+            .unwrap();
+
+        store.mark_state_in_use("abc", 90).await.unwrap();
+
+        clock.advance(80);
+
+        let result = store.mark_state_in_use("abc", 90).await.unwrap();
+        assert!(matches!(result, MarkStateResult::Success(_)));
     }
 }

@@ -1,5 +1,59 @@
 # Repository Guidelines
 
+## Org
+
+You work inside a text-only workspace. Everything is Markdown.
+
+Workspace layout:
+
+./workspace
+    /plans
+       High-level plans. One file per plan. You may edit and expand these files over time.
+    /tasks
+        /todo
+            New tasks. One Markdown file per task.
+        /in-progress
+            Tasks you are currently working on.
+        /done
+            Finished tasks. Read-only unless you need to append a short post-mortem.
+
+All plans and tasks must live inside the /workspace directory. Do not create files or folders outside it.
+
+Task file format:
+
+- Title on the first line
+- Short description
+- Checklist or steps (if relevant)
+- "History" section at the bottom where you append dated notes as you work
+
+Rules for working:
+
+- Only .md files are allowed.
+- You update documents by appending or editing text. Do not delete history.
+- Every change must be recorded in the task’s "History" section with a timestamp and a short note.
+- When you start a task, move its file from /workspace/tasks/todo to /workspace/tasks/in-progress and append a history entry.
+- As you make progress, append notes instead of rewriting earlier content.
+- When a task is complete, move it to /workspace/tasks/done and append a final history entry.
+
+Plans:
+
+- Plans describe direction, scope, and next steps.
+- When tasks come from a plan, link the plan file at the top of the task.
+- If a plan changes, append a dated "Revision" section instead of replacing earlier text.
+
+General behavior:
+
+- Prefer small, incremental edits.
+- Keep filenames stable; if you must rename, record it in the file history.
+- Never change the folder structure under /workspace.
+- Treat the workspace as the source of truth. If something is unclear, add a note to the relevant plan or task.
+
+Your goal is to move work forward by editing, appending, creating tasks, and moving them through todo → in-progress → done while keeping a clear written trail of changes — all inside /workspace.
+
+Use 4-digit numbers to number tasks.
+
+## Intro
+
 This project pairs a Rust backend (Axum + SQLx) with a Next.js UI, a TypeScript SDK, and demo apps. Local dev uses Docker (Postgres, Redis, CoreDNS, Caddy) plus mkcert for TLS. Prefer the `./run` helper for common tasks.
 
 ## Project Structure & Module Organization
@@ -51,6 +105,16 @@ This runs `SQLX_OFFLINE=true cargo build --release` because the local database m
 - **Deploy command**: `BUILD_ARGS="--network=host" DEPLOY_HOST=63.178.106.82 DEPLOY_USER=ubuntu REMOTE_DIR=/opt/reauth ./infra/deploy.sh`
 - The deploy script builds Docker images, syncs them to the server, and runs `docker compose -f infra/compose.yml --env-file infra/.env up -d`.
 - Production uses Caddy for TLS termination and routes API/UI/demo traffic.
+
+### Analytics Tracking
+
+To enable Umami analytics, add the website ID to BUILD_ARGS when deploying:
+
+```bash
+BUILD_ARGS="--network=host --build-arg NEXT_PUBLIC_UMAMI_WEBSITE_ID=c8305e3a-8646-454b-a40f-2c3ab99aeb61" DEPLOY_HOST=63.178.106.82 DEPLOY_USER=ubuntu REMOTE_DIR=/opt/reauth ./infra/deploy.sh
+```
+
+If the build arg is omitted, no analytics script is included (safe for local/staging).
 
 ## Secrets Management
 Secrets are stored in `infra/secrets/` as individual files (one secret per file). These are mounted into containers via Docker secrets and read at runtime.

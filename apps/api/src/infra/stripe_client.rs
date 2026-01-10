@@ -3,6 +3,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 
 use crate::app_error::{AppError, AppResult};
+use crate::infra::http_client;
 
 const STRIPE_API_BASE: &str = "https://api.stripe.com/v1";
 
@@ -15,14 +16,15 @@ pub struct StripeClient {
 impl StripeClient {
     pub fn new(secret_key: String) -> Self {
         Self {
-            client: Client::new(),
+            client: http_client::build_client(),
             secret_key,
         }
     }
 
     fn auth_header(&self) -> String {
         use base64::Engine;
-        let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{}:", self.secret_key));
+        let encoded =
+            base64::engine::general_purpose::STANDARD.encode(format!("{}:", self.secret_key));
         format!("Basic {}", encoded)
     }
 
@@ -30,14 +32,19 @@ impl StripeClient {
     // Products
     // ========================================================================
 
-    pub async fn create_product(&self, name: &str, description: Option<&str>) -> AppResult<StripeProduct> {
+    pub async fn create_product(
+        &self,
+        name: &str,
+        description: Option<&str>,
+    ) -> AppResult<StripeProduct> {
         let mut params = HashMap::new();
         params.insert("name", name.to_string());
         if let Some(desc) = description {
             params.insert("description", desc.to_string());
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/products", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -68,7 +75,8 @@ impl StripeClient {
             ("recurring[interval_count]", interval_count.to_string()),
         ];
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/prices", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -88,9 +96,7 @@ impl StripeClient {
         email: &str,
         metadata: Option<HashMap<String, String>>,
     ) -> AppResult<StripeCustomer> {
-        let mut params: Vec<(String, String)> = vec![
-            ("email".to_string(), email.to_string()),
-        ];
+        let mut params: Vec<(String, String)> = vec![("email".to_string(), email.to_string())];
 
         if let Some(meta) = metadata {
             for (key, value) in meta {
@@ -98,7 +104,8 @@ impl StripeClient {
             }
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/customers", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -115,7 +122,8 @@ impl StripeClient {
         metadata: Option<HashMap<String, String>>,
     ) -> AppResult<StripeCustomer> {
         // Search for existing customer by email
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/customers", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .query(&[("email", email), ("limit", "1")])
@@ -160,11 +168,15 @@ impl StripeClient {
 
         if let Some(days) = trial_days {
             if days > 0 {
-                params.push(("subscription_data[trial_period_days]".to_string(), days.to_string()));
+                params.push((
+                    "subscription_data[trial_period_days]".to_string(),
+                    days.to_string(),
+                ));
             }
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/checkout/sessions", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -184,12 +196,10 @@ impl StripeClient {
         customer_id: &str,
         return_url: &str,
     ) -> AppResult<StripePortalSession> {
-        let params = vec![
-            ("customer", customer_id),
-            ("return_url", return_url),
-        ];
+        let params = vec![("customer", customer_id), ("return_url", return_url)];
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/billing_portal/sessions", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -205,8 +215,12 @@ impl StripeClient {
     // ========================================================================
 
     pub async fn get_subscription(&self, subscription_id: &str) -> AppResult<StripeSubscription> {
-        let response = self.client
-            .get(format!("{}/subscriptions/{}", STRIPE_API_BASE, subscription_id))
+        let response = self
+            .client
+            .get(format!(
+                "{}/subscriptions/{}",
+                STRIPE_API_BASE, subscription_id
+            ))
             .header("Authorization", self.auth_header())
             .send()
             .await
@@ -222,8 +236,12 @@ impl StripeClient {
     ) -> AppResult<StripeSubscription> {
         if at_period_end {
             // Update to cancel at period end
-            let response = self.client
-                .post(format!("{}/subscriptions/{}", STRIPE_API_BASE, subscription_id))
+            let response = self
+                .client
+                .post(format!(
+                    "{}/subscriptions/{}",
+                    STRIPE_API_BASE, subscription_id
+                ))
                 .header("Authorization", self.auth_header())
                 .form(&[("cancel_at_period_end", "true")])
                 .send()
@@ -233,8 +251,12 @@ impl StripeClient {
             self.handle_response(response).await
         } else {
             // Cancel immediately
-            let response = self.client
-                .delete(format!("{}/subscriptions/{}", STRIPE_API_BASE, subscription_id))
+            let response = self
+                .client
+                .delete(format!(
+                    "{}/subscriptions/{}",
+                    STRIPE_API_BASE, subscription_id
+                ))
                 .header("Authorization", self.auth_header())
                 .send()
                 .await
@@ -255,12 +277,19 @@ impl StripeClient {
         let params: Vec<(&str, String)> = vec![
             ("customer", customer_id.to_string()),
             ("subscription", subscription_id.to_string()),
-            ("subscription_items[0][id]", subscription_item_id.to_string()),
+            (
+                "subscription_items[0][id]",
+                subscription_item_id.to_string(),
+            ),
             ("subscription_items[0][price]", new_price_id.to_string()),
-            ("subscription_proration_behavior", "always_invoice".to_string()),
+            (
+                "subscription_proration_behavior",
+                "always_invoice".to_string(),
+            ),
         ];
 
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/invoices/upcoming", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .query(&params)
@@ -285,19 +314,32 @@ impl StripeClient {
             ("items[0][id]".to_string(), subscription_item_id.to_string()),
             ("items[0][price]".to_string(), new_price_id.to_string()),
             ("items[0][quantity]".to_string(), quantity.to_string()),
-            ("proration_behavior".to_string(), "always_invoice".to_string()),
-            ("payment_behavior".to_string(), "default_incomplete".to_string()),
+            (
+                "proration_behavior".to_string(),
+                "always_invoice".to_string(),
+            ),
+            (
+                "payment_behavior".to_string(),
+                "default_incomplete".to_string(),
+            ),
             ("cancel_at_period_end".to_string(), "false".to_string()),
             // Expand latest_invoice and payment_intent to get client_secret for SCA
-            ("expand[0]".to_string(), "latest_invoice.payment_intent".to_string()),
+            (
+                "expand[0]".to_string(),
+                "latest_invoice.payment_intent".to_string(),
+            ),
         ];
 
         if end_trial {
             params.push(("trial_end".to_string(), "now".to_string()));
         }
 
-        let response = self.client
-            .post(format!("{}/subscriptions/{}", STRIPE_API_BASE, subscription_id))
+        let response = self
+            .client
+            .post(format!(
+                "{}/subscriptions/{}",
+                STRIPE_API_BASE, subscription_id
+            ))
             .header("Authorization", self.auth_header())
             .header("Idempotency-Key", idempotency_key)
             .form(&params)
@@ -318,7 +360,8 @@ impl StripeClient {
         idempotency_key: &str,
     ) -> AppResult<StripeSubscriptionSchedule> {
         // First, create a schedule from the existing subscription
-        let create_response = self.client
+        let create_response = self
+            .client
             .post(format!("{}/subscription_schedules", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .header("Idempotency-Key", format!("{}-create", idempotency_key))
@@ -335,14 +378,27 @@ impl StripeClient {
             ("end_behavior".to_string(), "release".to_string()),
             // Phase 1: current plan until period end (already handled by from_subscription)
             // Phase 2: new plan starting at period end
-            ("phases[0][items][0][price]".to_string(), current_price_id.to_string()),
-            ("phases[0][end_date]".to_string(), current_period_end.to_string()),
-            ("phases[1][items][0][price]".to_string(), new_price_id.to_string()),
+            (
+                "phases[0][items][0][price]".to_string(),
+                current_price_id.to_string(),
+            ),
+            (
+                "phases[0][end_date]".to_string(),
+                current_period_end.to_string(),
+            ),
+            (
+                "phases[1][items][0][price]".to_string(),
+                new_price_id.to_string(),
+            ),
             ("phases[1][iterations]".to_string(), "1".to_string()),
         ];
 
-        let update_response = self.client
-            .post(format!("{}/subscription_schedules/{}", STRIPE_API_BASE, schedule.id))
+        let update_response = self
+            .client
+            .post(format!(
+                "{}/subscription_schedules/{}",
+                STRIPE_API_BASE, schedule.id
+            ))
             .header("Authorization", self.auth_header())
             .header("Idempotency-Key", format!("{}-update", idempotency_key))
             .form(&params)
@@ -351,7 +407,10 @@ impl StripeClient {
             .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
 
         // If update fails, cancel the orphaned schedule to clean up
-        match self.handle_response::<StripeSubscriptionSchedule>(update_response).await {
+        match self
+            .handle_response::<StripeSubscriptionSchedule>(update_response)
+            .await
+        {
             Ok(updated_schedule) => Ok(updated_schedule),
             Err(e) => {
                 // Best-effort cleanup: cancel the schedule we just created
@@ -362,9 +421,16 @@ impl StripeClient {
     }
 
     /// Cancel a pending subscription schedule (releases the subscription back to normal)
-    pub async fn cancel_schedule(&self, schedule_id: &str) -> AppResult<StripeSubscriptionSchedule> {
-        let response = self.client
-            .post(format!("{}/subscription_schedules/{}/cancel", STRIPE_API_BASE, schedule_id))
+    pub async fn cancel_schedule(
+        &self,
+        schedule_id: &str,
+    ) -> AppResult<StripeSubscriptionSchedule> {
+        let response = self
+            .client
+            .post(format!(
+                "{}/subscription_schedules/{}/cancel",
+                STRIPE_API_BASE, schedule_id
+            ))
             .header("Authorization", self.auth_header())
             .send()
             .await
@@ -375,7 +441,8 @@ impl StripeClient {
 
     /// Get a customer to check for default payment method
     pub async fn get_customer(&self, customer_id: &str) -> AppResult<StripeCustomerFull> {
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/customers/{}", STRIPE_API_BASE, customer_id))
             .header("Authorization", self.auth_header())
             .send()
@@ -395,9 +462,8 @@ impl StripeClient {
         amount: Option<i64>,
         reason: Option<&str>,
     ) -> AppResult<StripeRefund> {
-        let mut params: Vec<(String, String)> = vec![
-            ("payment_intent".to_string(), payment_intent_id.to_string()),
-        ];
+        let mut params: Vec<(String, String)> =
+            vec![("payment_intent".to_string(), payment_intent_id.to_string())];
 
         if let Some(amt) = amount {
             params.push(("amount".to_string(), amt.to_string()));
@@ -407,7 +473,8 @@ impl StripeClient {
             params.push(("reason".to_string(), r.to_string()));
         }
 
-        let response = self.client
+        let response = self
+            .client
             .post(format!("{}/refunds", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .form(&params)
@@ -432,7 +499,8 @@ impl StripeClient {
             query.push(("limit", l.to_string()));
         }
 
-        let response = self.client
+        let response = self
+            .client
             .get(format!("{}/invoices", STRIPE_API_BASE))
             .header("Authorization", self.auth_header())
             .query(&query)
@@ -452,6 +520,16 @@ impl StripeClient {
         payload: &str,
         signature_header: &str,
         webhook_secret: &str,
+    ) -> AppResult<()> {
+        let now = chrono::Utc::now().timestamp();
+        Self::verify_webhook_signature_at(payload, signature_header, webhook_secret, now)
+    }
+
+    fn verify_webhook_signature_at(
+        payload: &str,
+        signature_header: &str,
+        webhook_secret: &str,
+        now: i64,
     ) -> AppResult<()> {
         let payload = payload.as_bytes();
         use hmac::{Hmac, Mac};
@@ -473,29 +551,33 @@ impl StripeClient {
             }
         }
 
-        let timestamp = timestamp.ok_or_else(|| {
-            AppError::InvalidInput("Missing timestamp in signature".into())
-        })?;
+        let timestamp = timestamp
+            .ok_or_else(|| AppError::InvalidInput("Missing timestamp in signature".into()))?;
 
         if signatures.is_empty() {
             return Err(AppError::InvalidInput("Missing signature".into()));
         }
 
-        // Compute expected signature
+        // Compute signed payload once (outside loop).
         let signed_payload = format!("{}.{}", timestamp, String::from_utf8_lossy(payload));
-        let mut mac = Hmac::<Sha256>::new_from_slice(webhook_secret.as_bytes())
-            .map_err(|_| AppError::Internal("HMAC error".into()))?;
-        mac.update(signed_payload.as_bytes());
-        let expected = hex::encode(mac.finalize().into_bytes());
 
-        // Check if any signature matches
-        for sig in signatures {
-            if constant_time_compare(sig, &expected) {
+        // Check if any v1 signature matches (constant-time via verify_slice).
+        // Note: per-signature MAC recomputation is required because verify_slice consumes the MAC.
+        for sig in &signatures {
+            let sig_bytes = match hex::decode(sig) {
+                Ok(bytes) => bytes,
+                Err(_) => continue,
+            };
+
+            let mut mac = Hmac::<Sha256>::new_from_slice(webhook_secret.as_bytes())
+                .map_err(|_| AppError::Internal("HMAC error".into()))?;
+            mac.update(signed_payload.as_bytes());
+
+            if mac.verify_slice(&sig_bytes).is_ok() {
                 // Verify timestamp is not too old (5 minutes tolerance)
-                let ts: i64 = timestamp.parse().map_err(|_| {
-                    AppError::InvalidInput("Invalid timestamp".into())
-                })?;
-                let now = chrono::Utc::now().timestamp();
+                let ts: i64 = timestamp
+                    .parse()
+                    .map_err(|_| AppError::InvalidInput("Invalid timestamp".into()))?;
                 if (now - ts).abs() > 300 {
                     return Err(AppError::InvalidInput("Timestamp too old".into()));
                 }
@@ -510,48 +592,61 @@ impl StripeClient {
     // Helpers
     // ========================================================================
 
+    /// Extracts safe debugging info from a Stripe response body.
+    ///
+    /// # Security
+    /// Never logs raw body content to avoid exposing customer PII (emails,
+    /// addresses, payment details). For non-error responses that fail to parse,
+    /// logs only the byte count for correlation with Stripe's dashboard.
+    fn redact_stripe_body(body: &str) -> String {
+        if let Ok(error) = serde_json::from_str::<StripeErrorResponse>(body) {
+            format!(
+                "type={}, code={:?}, message={:?}",
+                error.error.error_type, error.error.code, error.error.message
+            )
+        } else {
+            // Non-Stripe-error response (HTML error pages, unexpected JSON).
+            // Log byte count to help correlate with Stripe dashboard logs.
+            format!("<body redacted, {} bytes>", body.len())
+        }
+    }
+
     async fn handle_response<T: for<'de> Deserialize<'de>>(
         &self,
         response: reqwest::Response,
     ) -> AppResult<T> {
         let status = response.status();
-        let body = response.text().await.map_err(|e| {
-            AppError::Internal(format!("Failed to read response: {}", e))
-        })?;
+        let body = response
+            .text()
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to read response: {}", e)))?;
 
         if !status.is_success() {
-            tracing::error!(status = %status, body = %body, "Stripe API error");
+            tracing::error!(status = %status, error_details = %Self::redact_stripe_body(&body), "Stripe API error");
 
             // Try to parse Stripe error
             if let Ok(error) = serde_json::from_str::<StripeErrorResponse>(&body) {
                 return Err(AppError::InvalidInput(format!(
                     "Stripe error: {}",
-                    error.error.message.unwrap_or_else(|| error.error.error_type)
+                    error
+                        .error
+                        .message
+                        .unwrap_or_else(|| error.error.error_type)
                 )));
             }
 
             return Err(AppError::Internal(format!(
                 "Stripe API error: {} - {}",
-                status, body
+                status,
+                Self::redact_stripe_body(&body)
             )));
         }
 
         serde_json::from_str(&body).map_err(|e| {
-            tracing::error!(body = %body, error = %e, "Failed to parse Stripe response");
+            tracing::error!(body_len = body.len(), error = %e, "Failed to parse Stripe response");
             AppError::Internal(format!("Failed to parse Stripe response: {}", e))
         })
     }
-}
-
-fn constant_time_compare(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut result = 0u8;
-    for (x, y) in a.bytes().zip(b.bytes()) {
-        result |= x ^ y;
-    }
-    result == 0
 }
 
 // ============================================================================
@@ -659,7 +754,8 @@ pub struct StripePaymentIntent {
 impl StripeSubscription {
     /// Get the first price ID from the subscription items
     pub fn price_id(&self) -> String {
-        self.items.data
+        self.items
+            .data
             .first()
             .map(|item| item.price.id.clone())
             .unwrap_or_default()
@@ -893,5 +989,264 @@ impl StripeCustomerFull {
                 .as_ref()
                 .and_then(|s| s.default_payment_method.as_ref())
                 .is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    const TEST_SECRET: &str = "whsec_test_secret_key";
+    const NOW_TS: i64 = 1_700_000_000;
+    const TOLERANCE_SECS: i64 = 300;
+
+    fn compute_signature(payload: &str, timestamp: i64, secret: &str) -> String {
+        let signed_payload = format!("{}.{}", timestamp, payload);
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+        mac.update(signed_payload.as_bytes());
+        hex::encode(mac.finalize().into_bytes())
+    }
+
+    fn verify(payload: &str, header: &str) -> AppResult<()> {
+        StripeClient::verify_webhook_signature_at(payload, header, TEST_SECRET, NOW_TS)
+    }
+
+    // -------------------------------------------------------------------------
+    // Basic signature verification
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_valid_signature() {
+        let payload = r#"{"type":"checkout.session.completed"}"#;
+        let ts = NOW_TS;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_ok(), "Valid signature should pass");
+    }
+
+    #[test]
+    fn test_invalid_signature() {
+        let payload = r#"{"type":"checkout.session.completed"}"#;
+        let ts = NOW_TS;
+        let header = format!(
+            "t={},v1=0000000000000000000000000000000000000000000000000000000000000000",
+            ts
+        );
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Invalid signature should fail");
+    }
+
+    // -------------------------------------------------------------------------
+    // Timestamp validation (deterministic)
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_expired_timestamp() {
+        let payload = r#"{"type":"checkout.session.completed"}"#;
+        let ts = NOW_TS - TOLERANCE_SECS - 100;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Expired timestamp should fail");
+    }
+
+    #[test]
+    fn test_future_timestamp_within_tolerance() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS + 60;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(
+            result.is_ok(),
+            "Future timestamp within tolerance should pass"
+        );
+    }
+
+    #[test]
+    fn test_future_timestamp_beyond_tolerance() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS + TOLERANCE_SECS + 100;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(
+            result.is_err(),
+            "Future timestamp beyond tolerance should fail"
+        );
+    }
+
+    // -------------------------------------------------------------------------
+    // Header parsing edge cases
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_missing_timestamp() {
+        let result = verify(
+            "payload",
+            "v1=abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+        );
+        assert!(result.is_err(), "Missing timestamp should fail");
+    }
+
+    #[test]
+    fn test_missing_signature() {
+        let ts = NOW_TS;
+        let result = verify("payload", &format!("t={}", ts));
+        assert!(result.is_err(), "Missing signature should fail");
+    }
+
+    #[test]
+    fn test_multiple_v1_signatures_second_valid() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let valid_sig = compute_signature(payload, ts, TEST_SECRET);
+        let invalid_sig = "0000000000000000000000000000000000000000000000000000000000000000";
+
+        let header = format!("t={},v1={},v1={}", ts, invalid_sig, valid_sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_ok(), "Second valid signature should pass");
+    }
+
+    #[test]
+    fn test_non_v1_signatures_ignored() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let valid_sig = compute_signature(payload, ts, TEST_SECRET);
+
+        let header = format!("t={},v0=ignored,v1={}", ts, valid_sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_ok(), "Non-v1 signatures should be ignored");
+    }
+
+    // -------------------------------------------------------------------------
+    // Malformed signature handling
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_malformed_hex_non_hex_chars() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let header = format!(
+            "t={},v1=ZZZZ0000000000000000000000000000000000000000000000000000000000",
+            ts
+        );
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Malformed hex should fail");
+    }
+
+    #[test]
+    fn test_malformed_hex_odd_length() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let header = format!("t={},v1=abc", ts);
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Odd-length hex should fail");
+    }
+
+    #[test]
+    fn test_empty_signature_value() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let header = format!("t={},v1=", ts);
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Empty signature should fail");
+    }
+
+    #[test]
+    fn test_wrong_length_signature() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let header = format!("t={},v1=abcd1234", ts);
+
+        let result = verify(payload, &header);
+        assert!(result.is_err(), "Wrong-length signature should fail");
+    }
+
+    // -------------------------------------------------------------------------
+    // Header whitespace handling
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_header_with_spaces_around_comma() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={}, v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(
+            result.is_err(),
+            "Header with spaces should fail (documents current behavior)"
+        );
+    }
+
+    #[test]
+    fn test_header_standard_stripe_format() {
+        let payload = r#"{"type":"test"}"#;
+        let ts = NOW_TS;
+        let sig = compute_signature(payload, ts, TEST_SECRET);
+        let header = format!("t={},v1={}", ts, sig);
+
+        let result = verify(payload, &header);
+        assert!(result.is_ok(), "Standard Stripe format should pass");
+    }
+
+    // -------------------------------------------------------------------------
+    // Body redaction
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_redact_stripe_body_valid_error() {
+        let body = r#"{"error":{"type":"card_error","code":"card_declined","message":"Your card was declined."}}"#;
+        let result = StripeClient::redact_stripe_body(body);
+        assert!(result.contains("type=card_error"));
+        assert!(result.contains(r#"code=Some("card_declined")"#));
+        assert!(result.contains(r#"message=Some("Your card was declined.")"#));
+    }
+
+    #[test]
+    fn test_redact_stripe_body_minimal_error() {
+        let body = r#"{"error":{"type":"api_error"}}"#;
+        let result = StripeClient::redact_stripe_body(body);
+        assert!(result.contains("type=api_error"));
+        assert!(result.contains("code=None"));
+        assert!(result.contains("message=None"));
+    }
+
+    #[test]
+    fn test_redact_stripe_body_invalid_json() {
+        let body = "not valid json";
+        let result = StripeClient::redact_stripe_body(body);
+        assert_eq!(result, "<body redacted, 14 bytes>");
+    }
+
+    #[test]
+    fn test_redact_stripe_body_empty() {
+        let result = StripeClient::redact_stripe_body("");
+        assert_eq!(result, "<body redacted, 0 bytes>");
+    }
+
+    #[test]
+    fn test_redact_stripe_body_non_error_json() {
+        // Customer object with PII that should NOT be logged
+        let body = r#"{"id":"cus_123","email":"user@example.com"}"#;
+        let result = StripeClient::redact_stripe_body(body);
+        assert!(result.starts_with("<body redacted,"));
+        assert!(!result.contains("email"));
+        assert!(!result.contains("user@example.com"));
     }
 }

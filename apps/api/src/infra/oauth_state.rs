@@ -4,7 +4,7 @@ use redis::{AsyncCommands, aio::ConnectionManager};
 use crate::{
     app_error::{AppError, AppResult},
     application::use_cases::domain_auth::{
-        OAuthCompletionData, OAuthLinkConfirmationData, OAuthStateData,
+        MarkStateResult, OAuthCompletionData, OAuthLinkConfirmationData, OAuthStateData,
         OAuthStateStore as OAuthStateStoreTrait,
     },
 };
@@ -85,6 +85,87 @@ impl OAuthStateStoreTrait for OAuthStateStore {
             }
             None => Ok(None), // State not found (expired, consumed, or never existed)
         }
+    }
+
+    async fn mark_state_in_use(
+        &self,
+        state: &str,
+        retry_window_secs: i64,
+    ) -> AppResult<MarkStateResult> {
+        let mut conn = self.manager.clone();
+        let key = Self::state_key(state);
+
+        let min_ttl = retry_window_secs + 30;
+
+        let script = redis::Script::new(
+            r#"
+            local value = redis.call('GET', KEYS[1])
+            if not value then
+                return {1, nil}
+            end
+
+            local data = cjson.decode(value)
+            local retry_window = tonumber(ARGV[1])
+            local min_ttl = tonumber(ARGV[2])
+
+            local time_result = redis.call('TIME')
+            local now = tonumber(time_result[1])
+
+            if data.status == 'in_use' then
+                local marked_at = data.marked_at or 0
+                if (now - marked_at) > retry_window then
+                    return {2, nil}
+                end
+                redis.call('EXPIRE', KEYS[1], min_ttl)
+                return {0, value}
+            end
+
+            data.status = 'in_use'
+            data.marked_at = now
+            local new_value = cjson.encode(data)
+            redis.call('SET', KEYS[1], new_value, 'EX', min_ttl)
+            return {0, new_value}
+            "#,
+        );
+
+        let result: (i32, Option<String>) = script
+            .key(&key)
+            .arg(retry_window_secs)
+            .arg(min_ttl)
+            .invoke_async(&mut conn)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to mark OAuth state in-use: {e}")))?;
+
+        match result.0 {
+            0 => {
+                let json = result
+                    .1
+                    .ok_or_else(|| AppError::Internal("Lua returned success but no data".into()))?;
+                let data: OAuthStateData = serde_json::from_str(&json)
+                    .map_err(|e| AppError::Internal(format!("Failed to parse OAuth state: {e}")))?;
+                Ok(MarkStateResult::Success(data))
+            }
+            1 => Ok(MarkStateResult::NotFound),
+            2 => Ok(MarkStateResult::RetryWindowExpired),
+            _ => Err(AppError::Internal(format!(
+                "Unknown status code from Lua: {}",
+                result.0
+            ))),
+        }
+    }
+
+    async fn complete_state(&self, state: &str) -> AppResult<()> {
+        let mut conn = self.manager.clone();
+        let key = Self::state_key(state);
+        let _: () = conn
+            .del(&key)
+            .await
+            .map_err(|e| AppError::Internal(format!("Failed to complete OAuth state: {e}")))?;
+        Ok(())
+    }
+
+    async fn abort_state(&self, state: &str) -> AppResult<()> {
+        self.complete_state(state).await
     }
 
     async fn store_completion(

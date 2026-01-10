@@ -19,11 +19,13 @@ function GoogleCallbackHandler() {
   const [errorMessage, setErrorMessage] = useState('');
   const [linkData, setLinkData] = useState<LinkConfirmationData | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [retryExpired, setRetryExpired] = useState(false);
   const router = useRouter();
   const searchParams = useSearchParams();
 
   useEffect(() => {
     const handleCallback = async () => {
+      setRetryExpired(false);
       const code = searchParams.get('code');
       const state = searchParams.get('state');
       const error = searchParams.get('error');
@@ -79,7 +81,11 @@ function GoogleCallbackHandler() {
         } else {
           const errData = await res.json().catch(() => ({}));
           setStatus('error');
-          if (errData.message?.includes('not enabled')) {
+          if (res.status === 410 || errData.code === 'OAUTH_RETRY_EXPIRED') {
+            sessionStorage.removeItem('oauth_state');
+            setRetryExpired(true);
+            setErrorMessage('Your sign-in session expired. Please restart the login process.');
+          } else if (errData.message?.includes('not enabled')) {
             setErrorMessage('Google OAuth is not enabled for this domain.');
           } else if (errData.message?.includes('expired')) {
             setErrorMessage('The sign-in session has expired. Please try again.');
@@ -210,7 +216,7 @@ function GoogleCallbackHandler() {
               className="primary"
               style={{ marginTop: 'var(--spacing-md)' }}
             >
-              Try again
+              {retryExpired ? 'Restart sign-in' : 'Try again'}
             </button>
           </>
         )}
