@@ -24,9 +24,6 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # Production defaults for build-time env vars
 ARG NEXT_PUBLIC_DOMAIN=anypost.xyz
 ENV NEXT_PUBLIC_DOMAIN=${NEXT_PUBLIC_DOMAIN}
-ARG NEXT_PUBLIC_UMAMI_WEBSITE_ID=
-ENV NEXT_PUBLIC_UMAMI_WEBSITE_ID=${NEXT_PUBLIC_UMAMI_WEBSITE_ID}
-
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/libs ./libs
 COPY apps/demo_ui/ .

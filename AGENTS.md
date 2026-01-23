@@ -106,16 +106,6 @@ This runs `SQLX_OFFLINE=true cargo build --release` because the local database m
 - The deploy script builds Docker images, syncs them to the server, and runs `docker compose -f infra/compose.yml --env-file infra/.env up -d`.
 - Production uses Caddy for TLS termination and routes API/UI/demo traffic.
 
-### Analytics Tracking
-
-To enable Umami analytics, add the website ID to BUILD_ARGS when deploying:
-
-```bash
-BUILD_ARGS="--network=host --build-arg NEXT_PUBLIC_UMAMI_WEBSITE_ID=c8305e3a-8646-454b-a40f-2c3ab99aeb61" DEPLOY_HOST=63.178.106.82 DEPLOY_USER=ubuntu REMOTE_DIR=/opt/reauth ./infra/deploy.sh
-```
-
-If the build arg is omitted, no analytics script is included (safe for local/staging).
-
 ## Secrets Management
 Secrets are stored in `infra/secrets/` as individual files (one secret per file). These are mounted into containers via Docker secrets and read at runtime.
 
