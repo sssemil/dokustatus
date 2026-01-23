@@ -91,6 +91,7 @@ This runs `SQLX_OFFLINE=true cargo build --release` because the local database m
 - Error handling uses `anyhow` for main and typed errors in `application`; propagate via `?` and map to HTTP errors in adapters.
 - Prefer enums for error codes and variant propagation; avoid free-form strings for error types.
 - Frontend: functional React components in `apps/ui/app` and `apps/demo_ui/app`, `PascalCase` component names, co-locate styles in `globals.css` or module styles.
+- Comments should help future readers understand the code, not document what changed. Avoid transient comments like "(now always true)" or "(was optional before)" - these become confusing historical artifacts. Write comments as if the code has always been this way.
 
 ## Testing Guidelines
 - Add `#[cfg(test)]` modules near the logic they verify; prefer unit tests for use cases and lightweight integration tests for adapters.
