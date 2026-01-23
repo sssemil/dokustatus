@@ -93,7 +93,7 @@ services:
 
         export JWT_SECRET="$$(cat /run/secrets/jwt_secret)"
         export FALLBACK_RESEND_API_KEY="$$(cat /run/secrets/fallback_resend_api_key)"
-        export FALLBACK_EMAIL_DOMAIN="${FALLBACK_EMAIL_DOMAIN:-mail.reauth.dev}"
+        export FALLBACK_EMAIL_DOMAIN="${FALLBACK_EMAIL_DOMAIN:-hi.reauth.dev}"
         export PROCESS_NUMBER_KEY="$$(cat /run/secrets/process_number_key)"
         export FALLBACK_GOOGLE_CLIENT_ID="$$(cat /run/secrets/fallback_google_client_id)"
         export FALLBACK_GOOGLE_CLIENT_SECRET="$$(cat /run/secrets/fallback_google_client_secret)"

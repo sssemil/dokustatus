@@ -323,10 +323,10 @@ pub struct DomainAuthUseCases {
     oauth_state_store: Arc<dyn OAuthStateStore>,
     email_sender: Arc<dyn DomainEmailSender>,
     cipher: ProcessCipher,
-    fallback_resend_api_key: Option<String>,
-    fallback_email_domain: Option<String>,
-    fallback_google_client_id: Option<String>,
-    fallback_google_client_secret: Option<String>,
+    fallback_resend_api_key: String,
+    fallback_email_domain: String,
+    fallback_google_client_id: String,
+    fallback_google_client_secret: String,
 }
 
 impl DomainAuthUseCases {
@@ -341,10 +341,10 @@ impl DomainAuthUseCases {
         oauth_state_store: Arc<dyn OAuthStateStore>,
         email_sender: Arc<dyn DomainEmailSender>,
         cipher: ProcessCipher,
-        fallback_resend_api_key: Option<String>,
-        fallback_email_domain: Option<String>,
-        fallback_google_client_id: Option<String>,
-        fallback_google_client_secret: Option<String>,
+        fallback_resend_api_key: String,
+        fallback_email_domain: String,
+        fallback_google_client_id: String,
+        fallback_google_client_secret: String,
     ) -> Self {
         Self {
             domain_repo,
@@ -388,21 +388,16 @@ impl DomainAuthUseCases {
             .and_then(|c| c.redirect_url.clone())
             .unwrap_or_else(|| format!("https://{}", domain.domain));
 
-        // Magic link is enabled by default if fallback is available
-        let magic_link_fallback_available =
-            self.fallback_resend_api_key.is_some() && self.fallback_email_domain.is_some();
+        // Use domain config if set, otherwise default to enabled
         let magic_link_enabled = auth_config
             .as_ref()
             .map(|c| c.magic_link_enabled)
-            .unwrap_or(magic_link_fallback_available);
+            .unwrap_or(true);
 
-        // Google OAuth is enabled by default if fallback is available
-        let google_oauth_fallback_available = self.fallback_google_client_id.is_some()
-            && self.fallback_google_client_secret.is_some();
         let google_oauth_enabled = auth_config
             .as_ref()
             .map(|c| c.google_oauth_enabled)
-            .unwrap_or(google_oauth_fallback_available);
+            .unwrap_or(true);
 
         Ok(PublicDomainConfig {
             domain_id: domain.id,
@@ -620,7 +615,7 @@ impl DomainAuthUseCases {
             .unwrap_or(DomainAuthConfigProfile {
                 id: Uuid::nil(),
                 domain_id,
-                magic_link_enabled: true, // enabled by default with fallback
+                magic_link_enabled: true,
                 google_oauth_enabled: false,
                 redirect_url: None,
                 whitelist_enabled: false,
@@ -1072,7 +1067,7 @@ impl DomainAuthUseCases {
         Ok(domain)
     }
 
-    /// Get email config for a domain, with fallback to global config if available.
+    /// Get email config for a domain. Uses domain-specific config if set, otherwise global fallback.
     /// Returns (api_key, from_email, is_using_fallback).
     async fn get_email_config(
         &self,
@@ -1089,30 +1084,16 @@ impl DomainAuthUseCases {
             return Ok((api_key, config.from_email, false));
         }
 
-        // Fall back to global config if available
-        if let (Some(api_key), Some(email_domain)) =
-            (&self.fallback_resend_api_key, &self.fallback_email_domain)
-        {
-            let sanitized_domain = sanitize_domain_for_email(domain_name);
-            let from_email = format!("{}@{}", sanitized_domain, email_domain);
-            return Ok((api_key.clone(), from_email, true));
-        }
-
-        Err(AppError::InvalidInput(
-            "Email not configured for this domain. Please add a Resend API key.".into(),
-        ))
+        // Use global fallback config
+        let sanitized_domain = sanitize_domain_for_email(domain_name);
+        let from_email = format!("{}@{}", sanitized_domain, self.fallback_email_domain);
+        Ok((self.fallback_resend_api_key.clone(), from_email, true))
     }
 
-    /// Check if fallback email config is available and return the generated from_email.
-    pub fn get_fallback_email_info(&self, domain_name: &str) -> Option<String> {
-        if let (Some(_), Some(email_domain)) =
-            (&self.fallback_resend_api_key, &self.fallback_email_domain)
-        {
-            let sanitized = sanitize_domain_for_email(domain_name);
-            Some(format!("{}@{}", sanitized, email_domain))
-        } else {
-            None
-        }
+    /// Get the generated from_email for fallback email config.
+    pub fn get_fallback_email_info(&self, domain_name: &str) -> String {
+        let sanitized = sanitize_domain_for_email(domain_name);
+        format!("{}@{}", sanitized, self.fallback_email_domain)
     }
 
     /// Count total users across multiple domains
@@ -1150,22 +1131,12 @@ impl DomainAuthUseCases {
             return Ok((config.client_id, client_secret, false));
         }
 
-        // Fall back to global config if available
-        if let (Some(client_id), Some(client_secret)) = (
-            &self.fallback_google_client_id,
-            &self.fallback_google_client_secret,
-        ) {
-            return Ok((client_id.clone(), client_secret.clone(), true));
-        }
-
-        Err(AppError::InvalidInput(
-            "Google OAuth not configured for this domain. Please add credentials.".into(),
+        // Use global fallback config
+        Ok((
+            self.fallback_google_client_id.clone(),
+            self.fallback_google_client_secret.clone(),
+            true,
         ))
-    }
-
-    /// Check if Google OAuth fallback config is available
-    pub fn has_google_oauth_fallback(&self) -> bool {
-        self.fallback_google_client_id.is_some() && self.fallback_google_client_secret.is_some()
     }
 
     /// Create OAuth state for Google OAuth flow.
@@ -1191,7 +1162,7 @@ impl DomainAuthUseCases {
         let google_oauth_enabled = auth_config
             .as_ref()
             .map(|c| c.google_oauth_enabled)
-            .unwrap_or(self.has_google_oauth_fallback());
+            .unwrap_or(true);
 
         if !google_oauth_enabled {
             return Err(AppError::InvalidInput(
@@ -1267,7 +1238,7 @@ impl DomainAuthUseCases {
         Ok(auth_config
             .as_ref()
             .map(|c| c.google_oauth_enabled)
-            .unwrap_or(self.has_google_oauth_fallback()))
+            .unwrap_or(true))
     }
 
     /// Find or create end user by Google ID (for OAuth login).
@@ -2135,10 +2106,10 @@ mod tests {
             noop.clone(),
             noop,
             cipher,
-            None,
-            None,
-            None,
-            None,
+            "test_resend_key".to_string(),
+            "test.example.com".to_string(),
+            "test_google_client_id".to_string(),
+            "test_google_client_secret".to_string(),
         )
     }
 

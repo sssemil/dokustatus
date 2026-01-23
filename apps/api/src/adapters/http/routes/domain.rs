@@ -452,7 +452,7 @@ struct AuthConfigResponse {
     whitelist_enabled: bool,
     magic_link_config: Option<MagicLinkConfigResponse>,
     using_fallback: bool,
-    fallback_from_email: Option<String>,
+    fallback_from_email: String,
     google_oauth_config: Option<GoogleOAuthConfigResponse>,
     using_google_fallback: bool,
 }
@@ -488,12 +488,11 @@ async fn get_auth_config(
         .await?;
 
     // Check if using fallback or custom config for magic link
-    // Always compute fallback_from_email so UI can show "switch to shared service" option
     let has_custom_config = magic_link_config.is_some();
     let fallback_from_email = app_state
         .domain_auth_use_cases
         .get_fallback_email_info(&domain.domain);
-    let using_fallback = !has_custom_config && fallback_from_email.is_some();
+    let using_fallback = !has_custom_config;
 
     let magic_link_response = magic_link_config.map(|c| MagicLinkConfigResponse {
         from_email: c.from_email,
@@ -514,8 +513,7 @@ async fn get_auth_config(
                 has_client_secret: c.has_client_secret,
             });
 
-    let has_google_fallback = app_state.domain_auth_use_cases.has_google_oauth_fallback();
-    let using_google_fallback = google_oauth_config_info.is_none() && has_google_fallback;
+    let using_google_fallback = google_oauth_config_info.is_none();
 
     Ok(Json(AuthConfigResponse {
         magic_link_enabled: auth_config.magic_link_enabled,

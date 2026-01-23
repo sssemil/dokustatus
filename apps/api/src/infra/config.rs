@@ -29,13 +29,13 @@ pub struct AppConfig {
     /// The main reauth domain (e.g., "reauth.dev" in prod, "reauth.test" for local dev).
     pub main_domain: String,
     /// Fallback Resend API key for domains without custom email config.
-    pub fallback_resend_api_key: Option<String>,
-    /// Fallback email domain (e.g., "mail.reauth.dev"). Used with domain name to construct from email.
-    pub fallback_email_domain: Option<String>,
+    pub fallback_resend_api_key: String,
+    /// Fallback email domain (e.g., "hi.reauth.dev"). Used with domain name to construct from email.
+    pub fallback_email_domain: String,
     /// Fallback Google OAuth client ID for domains without custom OAuth config.
-    pub fallback_google_client_id: Option<String>,
+    pub fallback_google_client_id: String,
     /// Fallback Google OAuth client secret for domains without custom OAuth config.
-    pub fallback_google_client_secret: Option<String>,
+    pub fallback_google_client_secret: String,
     // NOTE: No fallback Stripe credentials - we cannot accept payments on behalf of other developers.
     // Each domain must configure their own Stripe account.
 }
@@ -69,19 +69,10 @@ impl AppConfig {
             .ok()
             .and_then(|s| s.parse().ok());
         let main_domain: String = get_env_default("MAIN_DOMAIN", "reauth.dev".to_string());
-        let fallback_resend_api_key: Option<String> = std::env::var("FALLBACK_RESEND_API_KEY")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let fallback_email_domain: Option<String> = std::env::var("FALLBACK_EMAIL_DOMAIN")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let fallback_google_client_id: Option<String> = std::env::var("FALLBACK_GOOGLE_CLIENT_ID")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let fallback_google_client_secret: Option<String> =
-            std::env::var("FALLBACK_GOOGLE_CLIENT_SECRET")
-                .ok()
-                .filter(|s| !s.is_empty());
+        let fallback_resend_api_key: String = get_env("FALLBACK_RESEND_API_KEY");
+        let fallback_email_domain: String = get_env("FALLBACK_EMAIL_DOMAIN");
+        let fallback_google_client_id: String = get_env("FALLBACK_GOOGLE_CLIENT_ID");
+        let fallback_google_client_secret: String = get_env("FALLBACK_GOOGLE_CLIENT_SECRET");
         // NOTE: No fallback Stripe credentials - each domain must configure their own Stripe account.
 
         Self {
