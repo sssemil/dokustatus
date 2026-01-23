@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 import { isMainApp as checkIsMainApp, getRootDomain, URLS } from '@/lib/domain-utils';
+import { Button } from '@/components/ui';
 
 type ErrorType = 'expired' | 'suspended' | 'session_mismatch' | 'generic';
 
@@ -101,53 +102,53 @@ function MagicLinkHandler() {
   }, [searchParams, router]);
 
   return (
-    <main className="flex items-center justify-center">
-      <div className="card text-center" style={{ maxWidth: '400px', width: '100%' }}>
+    <main className="flex items-center justify-center min-h-screen">
+      <div className="bg-zinc-900 rounded-lg p-8 border border-zinc-800 text-center max-w-[400px] w-full">
         {status === 'loading' && (
           <>
-            <div className="spinner" style={{ margin: '0 auto', marginBottom: 'var(--spacing-lg)' }} />
-            <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>Signing you in...</h2>
-            <p className="text-muted">Please wait a moment.</p>
+            <div className="spinner mx-auto mb-6" />
+            <h2 className="text-xl font-semibold text-white">Signing you in...</h2>
+            <p className="text-zinc-400 mt-2">Please wait a moment.</p>
           </>
         )}
 
         {status === 'success' && (
           <>
-            <div style={{ marginBottom: 'var(--spacing-lg)' }}>
-              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" strokeWidth="2" style={{ margin: '0 auto' }}>
+            <div className="mb-6 text-emerald-400">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mx-auto">
                 <path d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
-            <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>You&apos;re in!</h2>
-            <p className="text-muted">Redirecting...</p>
+            <h2 className="text-xl font-semibold text-white">You&apos;re in!</h2>
+            <p className="text-zinc-400 mt-2">Redirecting...</p>
           </>
         )}
 
         {status === 'error' && (
           <>
-            <div style={{ marginBottom: 'var(--spacing-lg)' }}>
+            <div className="mb-6 text-red-400">
               {errorType === 'suspended' ? (
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-red)" strokeWidth="2" style={{ margin: '0 auto' }}>
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mx-auto">
                   <path d="M18.364 18.364A9 9 0 005.636 5.636m12.728 12.728A9 9 0 015.636 5.636m12.728 12.728L5.636 5.636" />
                 </svg>
               ) : (
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="var(--accent-red)" strokeWidth="2" style={{ margin: '0 auto' }}>
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="mx-auto">
                   <path d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
                 </svg>
               )}
             </div>
-            <h2 style={{ borderBottom: 'none', paddingBottom: 0 }}>
+            <h2 className="text-xl font-semibold text-white">
               {errorType === 'suspended' ? 'Account suspended' : errorType === 'expired' ? 'Link expired' : errorType === 'session_mismatch' ? 'Wrong browser' : 'Something went wrong'}
             </h2>
-            <p className="text-muted">{errorMessage}</p>
+            <p className="text-zinc-400 mt-2">{errorMessage}</p>
             {errorType !== 'suspended' && (
-              <button
+              <Button
                 onClick={() => router.push('/')}
-                className="primary"
-                style={{ marginTop: 'var(--spacing-md)' }}
+                variant="primary"
+                className="mt-4"
               >
                 Try again
-              </button>
+              </Button>
             )}
           </>
         )}
@@ -159,10 +160,10 @@ function MagicLinkHandler() {
 export default function MagicPage() {
   return (
     <Suspense fallback={
-      <main className="flex items-center justify-center">
-        <div className="card text-center" style={{ maxWidth: '400px', width: '100%' }}>
-          <div className="spinner" style={{ margin: '0 auto' }} />
-          <h2 style={{ marginTop: 'var(--spacing-lg)', borderBottom: 'none', paddingBottom: 0 }}>Loading...</h2>
+      <main className="flex items-center justify-center min-h-screen">
+        <div className="bg-zinc-900 rounded-lg p-8 border border-zinc-800 text-center max-w-[400px] w-full">
+          <div className="spinner mx-auto" />
+          <h2 className="text-xl font-semibold text-white mt-6">Loading...</h2>
         </div>
       </main>
     }>
