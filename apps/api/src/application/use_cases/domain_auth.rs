@@ -1550,7 +1550,7 @@ fn is_valid_redirect_url(url: &str, domain: &str) -> bool {
 mod tests {
     use super::*;
     use crate::application::use_cases::domain::DomainProfile;
-    use crate::domain::entities::stripe_mode::StripeMode;
+    use crate::domain::entities::payment_mode::PaymentMode;
     use async_trait::async_trait;
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
@@ -1858,10 +1858,10 @@ mod tests {
             Err(AppError::Internal("not implemented".into()))
         }
 
-        async fn set_billing_stripe_mode(
+        async fn set_active_payment_mode(
             &self,
             _domain_id: Uuid,
-            _mode: StripeMode,
+            _mode: PaymentMode,
         ) -> AppResult<DomainProfile> {
             Err(AppError::Internal("not implemented".into()))
         }
@@ -2379,15 +2379,6 @@ mod tests {
 
         let result = store.mark_state_in_use("abc", 90).await.unwrap();
         assert!(matches!(result, MarkStateResult::NotFound));
-    }
-
-    #[test]
-    fn test_backward_compat_old_state() {
-        let json = r#"{"domain":"example.com","code_verifier":"verifier"}"#;
-        let data: OAuthStateData = serde_json::from_str(json).unwrap();
-
-        assert_eq!(data.status, "pending");
-        assert_eq!(data.marked_at, None);
     }
 
     #[tokio::test]

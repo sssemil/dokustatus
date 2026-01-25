@@ -101,7 +101,7 @@ impl std::str::FromStr for PaymentProvider {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "stripe" => Ok(PaymentProvider::Stripe),
-            "dummy" | "test" => Ok(PaymentProvider::Dummy),
+            "dummy" => Ok(PaymentProvider::Dummy),
             "coinbase" => Ok(PaymentProvider::Coinbase),
             _ => Err(format!(
                 "Invalid payment provider: {}. Must be 'stripe', 'dummy', or 'coinbase'",
@@ -225,10 +225,7 @@ mod tests {
             "dummy".parse::<PaymentProvider>().unwrap(),
             PaymentProvider::Dummy
         );
-        assert_eq!(
-            "test".parse::<PaymentProvider>().unwrap(),
-            PaymentProvider::Dummy
-        );
+        assert!("test".parse::<PaymentProvider>().is_err());
         assert!("invalid".parse::<PaymentProvider>().is_err());
     }
 }

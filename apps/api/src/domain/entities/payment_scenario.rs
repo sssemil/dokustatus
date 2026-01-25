@@ -142,13 +142,11 @@ impl std::str::FromStr for PaymentScenario {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "success" => Ok(PaymentScenario::Success),
-            "decline" | "declined" => Ok(PaymentScenario::Decline),
-            "insufficient_funds" | "insufficientfunds" => Ok(PaymentScenario::InsufficientFunds),
-            "three_d_secure" | "3ds" | "threeds" | "three_ds" => Ok(PaymentScenario::ThreeDSecure),
-            "expired_card" | "expiredcard" | "expired" => Ok(PaymentScenario::ExpiredCard),
-            "processing_error" | "processingerror" | "error" => {
-                Ok(PaymentScenario::ProcessingError)
-            }
+            "decline" => Ok(PaymentScenario::Decline),
+            "insufficient_funds" => Ok(PaymentScenario::InsufficientFunds),
+            "three_d_secure" => Ok(PaymentScenario::ThreeDSecure),
+            "expired_card" => Ok(PaymentScenario::ExpiredCard),
+            "processing_error" => Ok(PaymentScenario::ProcessingError),
             _ => Err(format!("Invalid payment scenario: {}", s)),
         }
     }
@@ -209,9 +207,10 @@ mod tests {
             PaymentScenario::Decline
         );
         assert_eq!(
-            "3ds".parse::<PaymentScenario>().unwrap(),
+            "three_d_secure".parse::<PaymentScenario>().unwrap(),
             PaymentScenario::ThreeDSecure
         );
+        assert!("3ds".parse::<PaymentScenario>().is_err());
         assert!("invalid".parse::<PaymentScenario>().is_err());
     }
 }

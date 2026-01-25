@@ -80,8 +80,8 @@ impl std::str::FromStr for BillingState {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "active" => Ok(BillingState::Active),
-            "pending_switch" | "pendingswitch" => Ok(BillingState::PendingSwitch),
-            "switch_failed" | "switchfailed" | "failed" => Ok(BillingState::SwitchFailed),
+            "pending_switch" => Ok(BillingState::PendingSwitch),
+            "switch_failed" => Ok(BillingState::SwitchFailed),
             _ => Err(format!("Invalid billing state: {}", s)),
         }
     }

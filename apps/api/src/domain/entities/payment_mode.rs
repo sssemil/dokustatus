@@ -63,15 +63,6 @@ impl Default for PaymentMode {
     }
 }
 
-impl From<crate::domain::entities::stripe_mode::StripeMode> for PaymentMode {
-    fn from(mode: crate::domain::entities::stripe_mode::StripeMode) -> Self {
-        match mode {
-            crate::domain::entities::stripe_mode::StripeMode::Test => PaymentMode::Test,
-            crate::domain::entities::stripe_mode::StripeMode::Live => PaymentMode::Live,
-        }
-    }
-}
-
 impl std::fmt::Display for PaymentMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.as_str())
@@ -83,8 +74,8 @@ impl std::str::FromStr for PaymentMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "test" | "sandbox" => Ok(PaymentMode::Test),
-            "live" | "production" | "prod" => Ok(PaymentMode::Live),
+            "test" => Ok(PaymentMode::Test),
+            "live" => Ok(PaymentMode::Live),
             _ => Err(format!(
                 "Invalid payment mode: {}. Must be 'test' or 'live'",
                 s
@@ -172,11 +163,8 @@ mod tests {
     fn test_from_str() {
         assert_eq!("test".parse::<PaymentMode>().unwrap(), PaymentMode::Test);
         assert_eq!("live".parse::<PaymentMode>().unwrap(), PaymentMode::Live);
-        assert_eq!("sandbox".parse::<PaymentMode>().unwrap(), PaymentMode::Test);
-        assert_eq!(
-            "production".parse::<PaymentMode>().unwrap(),
-            PaymentMode::Live
-        );
+        assert!("sandbox".parse::<PaymentMode>().is_err());
+        assert!("production".parse::<PaymentMode>().is_err());
         assert!("invalid".parse::<PaymentMode>().is_err());
     }
 
