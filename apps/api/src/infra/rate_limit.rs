@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use redis::{AsyncCommands, aio::ConnectionManager};
+use redis::{Script, aio::ConnectionManager};
 
 use super::InfraError;
 use crate::app_error::{AppError, AppResult};
@@ -12,6 +12,21 @@ pub trait RateLimiterTrait: Send + Sync {
     async fn check(&self, ip: &str, email: Option<&str>) -> AppResult<()>;
 }
 
+/// Lua script for atomic increment with TTL.
+/// Returns the new count after increment.
+/// If the key doesn't exist, it's created with TTL.
+/// If the key exists but has no TTL (edge case from old bug), TTL is set.
+const INCR_WITH_TTL_SCRIPT: &str = r#"
+local current = redis.call('INCR', KEYS[1])
+if current == 1 then
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+elseif redis.call('TTL', KEYS[1]) == -1 then
+    -- Key exists but has no TTL (shouldn't happen, but fix it)
+    redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return current
+"#;
+
 /// Redis-backed rate limiter for production use.
 #[derive(Clone)]
 pub struct RedisRateLimiter {
@@ -19,6 +34,7 @@ pub struct RedisRateLimiter {
     window_secs: u64,
     max_per_ip: u64,
     max_per_email: u64,
+    script: Script,
 }
 
 impl RedisRateLimiter {
@@ -32,26 +48,24 @@ impl RedisRateLimiter {
         let manager = ConnectionManager::new(client)
             .await
             .map_err(InfraError::RedisConnection)?;
+        let script = Script::new(INCR_WITH_TTL_SCRIPT);
         Ok(Self {
             manager,
             window_secs,
             max_per_ip,
             max_per_email,
+            script,
         })
     }
 
     async fn bump(&self, conn: &mut ConnectionManager, key: &str, limit: u64) -> AppResult<()> {
-        let current: u64 = conn
-            .incr(key, 1u32)
+        let current: u64 = self
+            .script
+            .key(key)
+            .arg(self.window_secs)
+            .invoke_async(conn)
             .await
             .map_err(|e| AppError::Internal(e.to_string()))?;
-
-        if current == 1 {
-            let _: () = conn
-                .expire(key, self.window_secs as i64)
-                .await
-                .map_err(|e| AppError::Internal(e.to_string()))?;
-        }
 
         if current > limit {
             return Err(AppError::RateLimited);
