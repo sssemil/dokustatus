@@ -1,17 +1,17 @@
 use crate::{
     adapters::{
         dns::HickoryDnsVerifier, http::app_state::AppState,
-        persistence::domain_role::DomainRoleRepo,
-        persistence::enabled_payment_providers::EnabledPaymentProvidersRepo,
+        persistence::domain_role::DomainRoleRepoTrait,
+        persistence::enabled_payment_providers::EnabledPaymentProvidersRepoTrait,
     },
-    application::use_cases::api_key::{ApiKeyRepo, ApiKeyUseCases},
+    application::use_cases::api_key::{ApiKeyRepoTrait, ApiKeyUseCases},
     application::use_cases::domain_auth::{
-        DomainAuthConfigRepo, DomainAuthGoogleOAuthRepo, DomainAuthMagicLinkRepo,
-        DomainAuthUseCases, DomainEndUserRepo,
+        DomainAuthConfigRepoTrait, DomainAuthGoogleOAuthRepoTrait, DomainAuthMagicLinkRepoTrait,
+        DomainAuthUseCases, DomainEndUserRepoTrait,
     },
     application::use_cases::domain_billing::{
-        BillingPaymentRepo, BillingStripeConfigRepo, DomainBillingUseCases, SubscriptionEventRepo,
-        SubscriptionPlanRepo, UserSubscriptionRepo,
+        BillingPaymentRepoTrait, BillingStripeConfigRepoTrait, DomainBillingUseCases,
+        SubscriptionEventRepoTrait, SubscriptionPlanRepoTrait, UserSubscriptionRepoTrait,
     },
     application::use_cases::domain_roles::DomainRolesUseCases,
     application::use_cases::payment_provider_factory::PaymentProviderFactory,
@@ -20,7 +20,7 @@ use crate::{
         domain_magic_links::DomainMagicLinkStore, oauth_state::OAuthStateStore,
         postgres_persistence, rate_limit::RateLimiter,
     },
-    use_cases::domain::{DomainRepo, DomainUseCases},
+    use_cases::domain::{DomainRepoTrait, DomainUseCases},
 };
 use std::fs::File;
 use std::sync::Arc;
@@ -49,13 +49,14 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
 
     let domain_email_sender = Arc::new(DomainEmailSender::new());
 
-    let domain_repo_arc = postgres_arc.clone() as Arc<dyn DomainRepo>;
-    let auth_config_repo_arc = postgres_arc.clone() as Arc<dyn DomainAuthConfigRepo>;
-    let magic_link_config_repo_arc = postgres_arc.clone() as Arc<dyn DomainAuthMagicLinkRepo>;
-    let google_oauth_config_repo_arc = postgres_arc.clone() as Arc<dyn DomainAuthGoogleOAuthRepo>;
-    let end_user_repo_arc = postgres_arc.clone() as Arc<dyn DomainEndUserRepo>;
-    let api_key_repo_arc = postgres_arc.clone() as Arc<dyn ApiKeyRepo>;
-    let role_repo_arc = postgres_arc.clone() as Arc<dyn DomainRoleRepo>;
+    let domain_repo_arc = postgres_arc.clone() as Arc<dyn DomainRepoTrait>;
+    let auth_config_repo_arc = postgres_arc.clone() as Arc<dyn DomainAuthConfigRepoTrait>;
+    let magic_link_config_repo_arc = postgres_arc.clone() as Arc<dyn DomainAuthMagicLinkRepoTrait>;
+    let google_oauth_config_repo_arc =
+        postgres_arc.clone() as Arc<dyn DomainAuthGoogleOAuthRepoTrait>;
+    let end_user_repo_arc = postgres_arc.clone() as Arc<dyn DomainEndUserRepoTrait>;
+    let api_key_repo_arc = postgres_arc.clone() as Arc<dyn ApiKeyRepoTrait>;
+    let role_repo_arc = postgres_arc.clone() as Arc<dyn DomainRoleRepoTrait>;
 
     let dns_verifier = Arc::new(match config.dns_server {
         Some(addr) => HickoryDnsVerifier::with_nameserver(addr),
@@ -96,12 +97,12 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
         DomainRolesUseCases::new(domain_repo_arc.clone(), role_repo_arc, end_user_repo_arc);
 
     // Billing use cases
-    let billing_stripe_config_repo = postgres_arc.clone() as Arc<dyn BillingStripeConfigRepo>;
-    let enabled_providers_repo = postgres_arc.clone() as Arc<dyn EnabledPaymentProvidersRepo>;
-    let subscription_plan_repo = postgres_arc.clone() as Arc<dyn SubscriptionPlanRepo>;
-    let user_subscription_repo = postgres_arc.clone() as Arc<dyn UserSubscriptionRepo>;
-    let subscription_event_repo = postgres_arc.clone() as Arc<dyn SubscriptionEventRepo>;
-    let billing_payment_repo = postgres_arc.clone() as Arc<dyn BillingPaymentRepo>;
+    let billing_stripe_config_repo = postgres_arc.clone() as Arc<dyn BillingStripeConfigRepoTrait>;
+    let enabled_providers_repo = postgres_arc.clone() as Arc<dyn EnabledPaymentProvidersRepoTrait>;
+    let subscription_plan_repo = postgres_arc.clone() as Arc<dyn SubscriptionPlanRepoTrait>;
+    let user_subscription_repo = postgres_arc.clone() as Arc<dyn UserSubscriptionRepoTrait>;
+    let subscription_event_repo = postgres_arc.clone() as Arc<dyn SubscriptionEventRepoTrait>;
+    let billing_payment_repo = postgres_arc.clone() as Arc<dyn BillingPaymentRepoTrait>;
 
     let billing_cipher = ProcessCipher::from_env()?;
 

@@ -6,7 +6,7 @@ use uuid::Uuid;
 
 use crate::{
     adapters::persistence::enabled_payment_providers::{
-        EnabledPaymentProviderProfile, EnabledPaymentProvidersRepo,
+        EnabledPaymentProviderProfile, EnabledPaymentProvidersRepoTrait,
     },
     app_error::{AppError, AppResult},
     application::ports::payment_provider::{
@@ -20,7 +20,7 @@ use crate::{
     infra::crypto::ProcessCipher,
 };
 
-use super::domain::DomainRepo;
+use super::domain::DomainRepoTrait;
 
 /// Number of months in a year, used for MRR calculations
 const MONTHS_PER_YEAR: i64 = 12;
@@ -364,7 +364,7 @@ pub struct PlanChangeResult {
 // ============================================================================
 
 #[async_trait]
-pub trait BillingStripeConfigRepo: Send + Sync {
+pub trait BillingStripeConfigRepoTrait: Send + Sync {
     /// Get Stripe config for a specific mode
     async fn get_by_domain_and_mode(
         &self,
@@ -393,7 +393,7 @@ pub trait BillingStripeConfigRepo: Send + Sync {
 }
 
 #[async_trait]
-pub trait SubscriptionPlanRepo: Send + Sync {
+pub trait SubscriptionPlanRepoTrait: Send + Sync {
     async fn get_by_id(&self, id: Uuid) -> AppResult<Option<SubscriptionPlanProfile>>;
     async fn get_by_domain_and_code(
         &self,
@@ -437,7 +437,7 @@ pub trait SubscriptionPlanRepo: Send + Sync {
 }
 
 #[async_trait]
-pub trait UserSubscriptionRepo: Send + Sync {
+pub trait UserSubscriptionRepoTrait: Send + Sync {
     async fn get_by_id(&self, id: Uuid) -> AppResult<Option<UserSubscriptionProfile>>;
     async fn get_by_user_and_mode(
         &self,
@@ -495,7 +495,7 @@ pub trait UserSubscriptionRepo: Send + Sync {
 }
 
 #[async_trait]
-pub trait SubscriptionEventRepo: Send + Sync {
+pub trait SubscriptionEventRepoTrait: Send + Sync {
     async fn create(&self, input: &CreateSubscriptionEventInput) -> AppResult<()>;
     async fn list_by_subscription(
         &self,
@@ -505,7 +505,7 @@ pub trait SubscriptionEventRepo: Send + Sync {
 }
 
 #[async_trait]
-pub trait BillingPaymentRepo: Send + Sync {
+pub trait BillingPaymentRepoTrait: Send + Sync {
     /// Create or update a payment from Stripe webhook data
     async fn upsert_from_stripe(
         &self,
@@ -571,13 +571,13 @@ pub trait BillingPaymentRepo: Send + Sync {
 
 #[derive(Clone)]
 pub struct DomainBillingUseCases {
-    domain_repo: Arc<dyn DomainRepo>,
-    stripe_config_repo: Arc<dyn BillingStripeConfigRepo>,
-    enabled_providers_repo: Arc<dyn EnabledPaymentProvidersRepo>,
-    plan_repo: Arc<dyn SubscriptionPlanRepo>,
-    subscription_repo: Arc<dyn UserSubscriptionRepo>,
-    event_repo: Arc<dyn SubscriptionEventRepo>,
-    payment_repo: Arc<dyn BillingPaymentRepo>,
+    domain_repo: Arc<dyn DomainRepoTrait>,
+    stripe_config_repo: Arc<dyn BillingStripeConfigRepoTrait>,
+    enabled_providers_repo: Arc<dyn EnabledPaymentProvidersRepoTrait>,
+    plan_repo: Arc<dyn SubscriptionPlanRepoTrait>,
+    subscription_repo: Arc<dyn UserSubscriptionRepoTrait>,
+    event_repo: Arc<dyn SubscriptionEventRepoTrait>,
+    payment_repo: Arc<dyn BillingPaymentRepoTrait>,
     cipher: ProcessCipher,
     provider_factory: Arc<PaymentProviderFactory>,
     // NOTE: No fallback Stripe credentials - we cannot accept payments on behalf of other developers.
@@ -586,13 +586,13 @@ pub struct DomainBillingUseCases {
 
 impl DomainBillingUseCases {
     pub fn new(
-        domain_repo: Arc<dyn DomainRepo>,
-        stripe_config_repo: Arc<dyn BillingStripeConfigRepo>,
-        enabled_providers_repo: Arc<dyn EnabledPaymentProvidersRepo>,
-        plan_repo: Arc<dyn SubscriptionPlanRepo>,
-        subscription_repo: Arc<dyn UserSubscriptionRepo>,
-        event_repo: Arc<dyn SubscriptionEventRepo>,
-        payment_repo: Arc<dyn BillingPaymentRepo>,
+        domain_repo: Arc<dyn DomainRepoTrait>,
+        stripe_config_repo: Arc<dyn BillingStripeConfigRepoTrait>,
+        enabled_providers_repo: Arc<dyn EnabledPaymentProvidersRepoTrait>,
+        plan_repo: Arc<dyn SubscriptionPlanRepoTrait>,
+        subscription_repo: Arc<dyn UserSubscriptionRepoTrait>,
+        event_repo: Arc<dyn SubscriptionEventRepoTrait>,
+        payment_repo: Arc<dyn BillingPaymentRepoTrait>,
         cipher: ProcessCipher,
         provider_factory: Arc<PaymentProviderFactory>,
     ) -> Self {
@@ -2331,5 +2331,4960 @@ mod plan_change_type_tests {
     fn test_as_ref_all_variants() {
         assert_eq!(PlanChangeType::Upgrade.as_ref(), "upgrade");
         assert_eq!(PlanChangeType::Downgrade.as_ref(), "downgrade");
+    }
+}
+
+#[cfg(test)]
+mod billing_integration_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use crate::{
+        infra::crypto::ProcessCipher,
+        test_utils::{
+            InMemoryBillingPaymentRepo, InMemoryBillingStripeConfigRepo, InMemoryDomainRepo,
+            InMemoryEnabledPaymentProvidersRepo, InMemorySubscriptionEventRepo,
+            InMemorySubscriptionPlanRepo, InMemoryUserSubscriptionRepo, create_test_domain,
+            create_test_payment, create_test_plan, create_test_subscription,
+        },
+    };
+
+    // Test key: 32 bytes of zeros, base64 encoded
+    const TEST_KEY_B64: &str = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";
+
+    /// Helper to create a test billing use cases instance with in-memory repos.
+    fn create_test_use_cases() -> (
+        DomainBillingUseCases,
+        Arc<InMemoryDomainRepo>,
+        Arc<InMemorySubscriptionPlanRepo>,
+        Arc<InMemoryUserSubscriptionRepo>,
+        Arc<InMemorySubscriptionEventRepo>,
+    ) {
+        let domain_repo = Arc::new(InMemoryDomainRepo::new());
+        let stripe_config_repo = Arc::new(InMemoryBillingStripeConfigRepo::new());
+        let enabled_providers_repo = Arc::new(InMemoryEnabledPaymentProvidersRepo::new());
+        let plan_repo = Arc::new(InMemorySubscriptionPlanRepo::new());
+        // Link subscription repo to plan repo so list_by_domain_and_mode can retrieve plan data
+        let subscription_repo =
+            Arc::new(InMemoryUserSubscriptionRepo::new().with_plan_repo(plan_repo.clone()));
+        let event_repo = Arc::new(InMemorySubscriptionEventRepo::new());
+        let payment_repo = Arc::new(InMemoryBillingPaymentRepo::new());
+
+        // Use a test cipher (32 bytes of zeros, base64 encoded)
+        let cipher = ProcessCipher::new_from_base64(TEST_KEY_B64).unwrap();
+
+        // Create a simple provider factory that returns DummyPaymentClient
+        // For testing, we create a minimal mock that just returns the dummy client
+        let factory = Arc::new(PaymentProviderFactory::new(
+            cipher.clone(),
+            stripe_config_repo.clone() as Arc<dyn BillingStripeConfigRepoTrait>,
+        ));
+
+        let use_cases = DomainBillingUseCases::new(
+            domain_repo.clone() as Arc<dyn super::super::domain::DomainRepoTrait>,
+            stripe_config_repo as Arc<dyn BillingStripeConfigRepoTrait>,
+            enabled_providers_repo as Arc<dyn EnabledPaymentProvidersRepoTrait>,
+            plan_repo.clone() as Arc<dyn SubscriptionPlanRepoTrait>,
+            subscription_repo.clone() as Arc<dyn UserSubscriptionRepoTrait>,
+            event_repo.clone() as Arc<dyn SubscriptionEventRepoTrait>,
+            payment_repo as Arc<dyn BillingPaymentRepoTrait>,
+            cipher,
+            factory,
+        );
+
+        (
+            use_cases,
+            domain_repo,
+            plan_repo,
+            subscription_repo,
+            event_repo,
+        )
+    }
+
+    // ========================================================================
+    // Plan CRUD Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_create_plan_success() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        // Create a test domain
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Create a plan
+        let input = CreatePlanInput {
+            code: "basic".to_string(),
+            name: "Basic Plan".to_string(),
+            description: Some("A basic plan".to_string()),
+            price_cents: 999,
+            currency: "usd".to_string(),
+            interval: "monthly".to_string(),
+            interval_count: 1,
+            trial_days: 7,
+            features: vec!["Feature A".to_string()],
+            is_public: true,
+        };
+
+        let plan = use_cases
+            .create_plan(owner_id, domain.id, input)
+            .await
+            .unwrap();
+
+        assert_eq!(plan.code, "basic");
+        assert_eq!(plan.name, "Basic Plan");
+        assert_eq!(plan.price_cents, 999);
+        assert_eq!(plan.payment_mode, PaymentMode::Test);
+        assert_eq!(plan.trial_days, 7);
+
+        // Verify plan is in the repo
+        let stored = plan_repo.get_by_id(plan.id).await.unwrap();
+        assert!(stored.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_rejects_invalid_code() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Empty code should fail
+        let input = CreatePlanInput {
+            code: "".to_string(),
+            name: "Test Plan".to_string(),
+            description: None,
+            price_cents: 999,
+            currency: "usd".to_string(),
+            interval: "monthly".to_string(),
+            interval_count: 1,
+            trial_days: 0,
+            features: vec![],
+            is_public: true,
+        };
+
+        let result = use_cases.create_plan(owner_id, domain.id, input).await;
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_rejects_negative_price() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let input = CreatePlanInput {
+            code: "test".to_string(),
+            name: "Test Plan".to_string(),
+            description: None,
+            price_cents: -100,
+            currency: "usd".to_string(),
+            interval: "monthly".to_string(),
+            interval_count: 1,
+            trial_days: 0,
+            features: vec![],
+            is_public: true,
+        };
+
+        let result = use_cases.create_plan(owner_id, domain.id, input).await;
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_forbidden_for_non_owner() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let other_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let input = CreatePlanInput {
+            code: "test".to_string(),
+            name: "Test Plan".to_string(),
+            description: None,
+            price_cents: 999,
+            currency: "usd".to_string(),
+            interval: "monthly".to_string(),
+            interval_count: 1,
+            trial_days: 0,
+            features: vec![],
+            is_public: true,
+        };
+
+        // Non-owner should get Forbidden
+        let result = use_cases.create_plan(other_user_id, domain.id, input).await;
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn test_list_plans_excludes_archived_by_default() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Add active and archived plans
+        let active_plan = create_test_plan(domain.id, |p| {
+            p.is_archived = false;
+            p.payment_mode = PaymentMode::Test;
+        });
+        let archived_plan = create_test_plan(domain.id, |p| {
+            p.is_archived = true;
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        {
+            let mut plans = plan_repo.plans.lock().unwrap();
+            plans.insert(active_plan.id, active_plan.clone());
+            plans.insert(archived_plan.id, archived_plan.clone());
+        }
+
+        // List without archived
+        let plans = use_cases
+            .list_plans(owner_id, domain.id, false)
+            .await
+            .unwrap();
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].id, active_plan.id);
+
+        // List with archived
+        let plans = use_cases
+            .list_plans(owner_id, domain.id, true)
+            .await
+            .unwrap();
+        assert_eq!(plans.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_delete_plan_fails_with_subscribers() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |_| {});
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        // Set subscriber count > 0
+        plan_repo.set_subscriber_count(plan.id, 5);
+
+        let result = use_cases.delete_plan(owner_id, domain.id, plan.id).await;
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_delete_plan_succeeds_with_no_subscribers() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |_| {});
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        // No subscribers, should succeed
+        let result = use_cases.delete_plan(owner_id, domain.id, plan.id).await;
+        assert!(result.is_ok());
+
+        // Plan should be gone
+        let stored = plan_repo.get_by_id(plan.id).await.unwrap();
+        assert!(stored.is_none());
+    }
+
+    // ========================================================================
+    // MRR Calculation Tests (Use Case Level)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_calculate_mrr_aggregates_correctly() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Create two plans: monthly and yearly
+        let monthly_plan = create_test_plan(domain.id, |p| {
+            p.code = "monthly".to_string();
+            p.price_cents = 999; // $9.99/month
+            p.interval = "monthly".to_string();
+            p.payment_mode = PaymentMode::Test;
+        });
+        let yearly_plan = create_test_plan(domain.id, |p| {
+            p.code = "yearly".to_string();
+            p.price_cents = 9999; // $99.99/year
+            p.interval = "yearly".to_string();
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        {
+            let mut plans = plan_repo.plans.lock().unwrap();
+            plans.insert(monthly_plan.id, monthly_plan.clone());
+            plans.insert(yearly_plan.id, yearly_plan.clone());
+        }
+
+        // Create subscriptions
+        let user1 = Uuid::new_v4();
+        let user2 = Uuid::new_v4();
+
+        let sub1 = create_test_subscription(domain.id, user1, monthly_plan.id, |s| {
+            s.status = SubscriptionStatus::Active;
+            s.payment_mode = PaymentMode::Test;
+        });
+        let sub2 = create_test_subscription(domain.id, user2, yearly_plan.id, |s| {
+            s.status = SubscriptionStatus::Active;
+            s.payment_mode = PaymentMode::Test;
+        });
+
+        {
+            let mut subs = subscription_repo.subscriptions.lock().unwrap();
+            subs.insert(sub1.id, sub1);
+            subs.insert(sub2.id, sub2);
+        }
+
+        // Calculate MRR via get_analytics
+        let analytics = use_cases.get_analytics(owner_id, domain.id).await.unwrap();
+
+        // Expected: $9.99 + ($99.99/12) = $9.99 + $8.33 = $18.32 = 1832 cents
+        // More precisely: 999 + 833 (rounded from 9999/12 = 833.25) = 1832
+        assert!(
+            analytics.mrr_cents >= 1831 && analytics.mrr_cents <= 1833,
+            "MRR should be around 1832 cents, got {}",
+            analytics.mrr_cents
+        );
+    }
+
+    // ========================================================================
+    // Subscription Claims Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_get_subscription_claims_active() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.code = "premium".to_string();
+            p.name = "Premium Plan".to_string();
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        let sub = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.status = SubscriptionStatus::Active;
+            s.payment_mode = PaymentMode::Test;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(sub.id, sub.clone());
+
+        // Get subscription claims for user
+        let claims = use_cases
+            .get_subscription_claims(domain.id, end_user_id)
+            .await
+            .unwrap();
+
+        assert_eq!(claims.status, "active");
+        assert_eq!(claims.plan_code, Some("premium".to_string()));
+        assert_eq!(claims.plan_name, Some("Premium Plan".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_subscription_claims_returns_none_status_for_no_subscription() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Non-existent user should return "none" status
+        let claims = use_cases
+            .get_subscription_claims(domain.id, Uuid::new_v4())
+            .await
+            .unwrap();
+
+        assert_eq!(claims.status, "none");
+        assert!(claims.plan_code.is_none());
+    }
+
+    // ========================================================================
+    // Provider Enablement Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_enable_dummy_provider() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Enable Dummy provider for test mode (doesn't require Stripe config)
+        let result = use_cases
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let provider = result.unwrap();
+        assert_eq!(provider.provider, PaymentProvider::Dummy);
+        assert!(provider.is_active);
+    }
+
+    #[tokio::test]
+    async fn test_enable_stripe_requires_config() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Enabling Stripe without config should fail
+        let result = use_cases
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Stripe,
+                PaymentMode::Test,
+            )
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    // ========================================================================
+    // Stripe Config Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_update_stripe_config_success() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await;
+
+        assert!(result.is_ok());
+        let status = result.unwrap();
+        assert!(status.is_connected);
+    }
+
+    #[tokio::test]
+    async fn test_update_stripe_config_rejects_mismatched_key_mode() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Live key for test mode should fail
+        let result = use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_live_abc123", // Wrong prefix for test mode
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_get_stripe_config_returns_configured_mode_only() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Configure test mode only
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        let config = use_cases
+            .get_stripe_config(owner_id, domain.id)
+            .await
+            .unwrap();
+
+        // Only test mode should be configured
+        assert!(config.test.is_some());
+        assert!(config.live.is_none());
+        assert_eq!(config.active_mode, PaymentMode::Test);
+    }
+
+    #[tokio::test]
+    async fn test_set_active_mode_requires_config() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Switching to live without config should fail
+        let result = use_cases
+            .set_active_mode(owner_id, domain.id, PaymentMode::Live)
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_set_active_mode_succeeds_with_config() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Configure live mode first
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Live,
+                "sk_live_abc123",
+                "pk_live_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        // Now switching should succeed
+        let result = use_cases
+            .set_active_mode(owner_id, domain.id, PaymentMode::Live)
+            .await;
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), PaymentMode::Live);
+    }
+
+    // ========================================================================
+    // Subscription Management Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_grant_subscription_creates_new_subscription() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, event_repo) =
+            create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        let result = use_cases
+            .grant_subscription(owner_id, domain.id, end_user_id, plan.id, "cus_test123")
+            .await;
+
+        assert!(result.is_ok());
+        let sub = result.unwrap();
+        assert_eq!(sub.end_user_id, end_user_id);
+        assert_eq!(sub.plan_id, plan.id);
+        assert!(sub.manually_granted);
+        assert_eq!(sub.status, SubscriptionStatus::Active);
+
+        // Should be stored in repo
+        let stored = subscription_repo.get_by_id(sub.id).await.unwrap();
+        assert!(stored.is_some());
+
+        // Should have logged an event
+        let events = event_repo.get_all();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "granted");
+    }
+
+    #[tokio::test]
+    async fn test_grant_subscription_fails_for_wrong_mode_plan() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Plan is for live mode, but domain is in test mode
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Live;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        let result = use_cases
+            .grant_subscription(owner_id, domain.id, end_user_id, plan.id, "cus_test123")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_revoke_subscription_cancels_subscription() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, event_repo) =
+            create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        let sub = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.status = SubscriptionStatus::Active;
+            s.payment_mode = PaymentMode::Test;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(sub.id, sub.clone());
+
+        // revoke_subscription takes user_id, not subscription_id
+        let result = use_cases
+            .revoke_subscription(owner_id, domain.id, end_user_id)
+            .await;
+
+        assert!(result.is_ok());
+
+        // Subscription should be canceled
+        let stored = subscription_repo.get_by_id(sub.id).await.unwrap().unwrap();
+        assert_eq!(stored.status, SubscriptionStatus::Canceled);
+
+        // Should have logged an event
+        let events = event_repo.get_all();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event_type, "revoked");
+    }
+
+    #[tokio::test]
+    async fn test_get_user_subscription_returns_subscription() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        let sub = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.status = SubscriptionStatus::Active;
+            s.payment_mode = PaymentMode::Test;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(sub.id, sub.clone());
+
+        let result = use_cases
+            .get_user_subscription(domain.id, end_user_id)
+            .await
+            .unwrap();
+
+        assert!(result.is_some());
+        let retrieved = result.unwrap();
+        assert_eq!(retrieved.id, sub.id);
+    }
+
+    #[tokio::test]
+    async fn test_list_subscribers_returns_all_subscriptions() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        // Create multiple subscriptions
+        for i in 0..3 {
+            let user_id = Uuid::new_v4();
+            let sub = create_test_subscription(domain.id, user_id, plan.id, |s| {
+                s.status = SubscriptionStatus::Active;
+                s.payment_mode = PaymentMode::Test;
+            });
+            subscription_repo
+                .subscriptions
+                .lock()
+                .unwrap()
+                .insert(sub.id, sub);
+            subscription_repo.set_user_email(user_id, &format!("user{}@test.com", i));
+        }
+
+        let subscribers = use_cases
+            .list_subscribers(owner_id, domain.id)
+            .await
+            .unwrap();
+
+        assert_eq!(subscribers.len(), 3);
+    }
+
+    // ========================================================================
+    // Plan Update Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_update_plan_modifies_fields() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.name = "Old Name".to_string();
+            p.price_cents = 999;
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        let input = UpdatePlanInput {
+            name: Some("New Name".to_string()),
+            price_cents: Some(1999),
+            description: None,
+            interval: None,
+            interval_count: None,
+            trial_days: None,
+            features: None,
+            is_public: None,
+        };
+
+        let updated = use_cases
+            .update_plan(owner_id, domain.id, plan.id, input)
+            .await
+            .unwrap();
+
+        assert_eq!(updated.name, "New Name");
+        assert_eq!(updated.price_cents, 1999);
+    }
+
+    #[tokio::test]
+    async fn test_archive_plan_marks_as_archived() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.is_archived = false;
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        use_cases
+            .archive_plan(owner_id, domain.id, plan.id)
+            .await
+            .unwrap();
+
+        let stored = plan_repo.get_by_id(plan.id).await.unwrap().unwrap();
+        assert!(stored.is_archived);
+        assert!(stored.archived_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_public_plans_excludes_private() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let public_plan = create_test_plan(domain.id, |p| {
+            p.is_public = true;
+            p.is_archived = false;
+            p.payment_mode = PaymentMode::Test;
+        });
+        let private_plan = create_test_plan(domain.id, |p| {
+            p.is_public = false;
+            p.is_archived = false;
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        {
+            let mut plans = plan_repo.plans.lock().unwrap();
+            plans.insert(public_plan.id, public_plan.clone());
+            plans.insert(private_plan.id, private_plan.clone());
+        }
+
+        let public_plans = use_cases.get_public_plans(domain.id).await.unwrap();
+
+        assert_eq!(public_plans.len(), 1);
+        assert_eq!(public_plans[0].id, public_plan.id);
+    }
+
+    // ========================================================================
+    // Payment Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_get_payment_summary_calculates_correctly() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // For this test we need to access the payment repo directly
+        // since payments are typically created via webhooks
+        let summary = use_cases
+            .get_payment_summary(owner_id, domain.id, None, None)
+            .await
+            .unwrap();
+
+        // With no payments, all should be zero
+        assert_eq!(summary.total_revenue_cents, 0);
+        assert_eq!(summary.payment_count, 0);
+    }
+
+    // ========================================================================
+    // Analytics Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_get_analytics_includes_plan_distribution() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let basic = create_test_plan(domain.id, |p| {
+            p.code = "basic".to_string();
+            p.name = "Basic".to_string();
+            p.price_cents = 999;
+            p.payment_mode = PaymentMode::Test;
+        });
+        let premium = create_test_plan(domain.id, |p| {
+            p.code = "premium".to_string();
+            p.name = "Premium".to_string();
+            p.price_cents = 2999;
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        {
+            let mut plans = plan_repo.plans.lock().unwrap();
+            plans.insert(basic.id, basic.clone());
+            plans.insert(premium.id, premium.clone());
+        }
+
+        // 2 basic subscribers, 1 premium
+        for _ in 0..2 {
+            let sub = create_test_subscription(domain.id, Uuid::new_v4(), basic.id, |s| {
+                s.status = SubscriptionStatus::Active;
+                s.payment_mode = PaymentMode::Test;
+            });
+            subscription_repo
+                .subscriptions
+                .lock()
+                .unwrap()
+                .insert(sub.id, sub);
+        }
+        let premium_sub = create_test_subscription(domain.id, Uuid::new_v4(), premium.id, |s| {
+            s.status = SubscriptionStatus::Active;
+            s.payment_mode = PaymentMode::Test;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(premium_sub.id, premium_sub);
+
+        let analytics = use_cases.get_analytics(owner_id, domain.id).await.unwrap();
+
+        assert_eq!(analytics.active_subscribers, 3);
+        assert_eq!(analytics.plan_distribution.len(), 2);
+
+        // Find basic plan distribution
+        let basic_dist = analytics
+            .plan_distribution
+            .iter()
+            .find(|d| d.plan_name == "Basic")
+            .unwrap();
+        assert_eq!(basic_dist.subscriber_count, 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_analytics_counts_trialing_subscribers() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        // One active, one trialing
+        let active_sub = create_test_subscription(domain.id, Uuid::new_v4(), plan.id, |s| {
+            s.status = SubscriptionStatus::Active;
+            s.payment_mode = PaymentMode::Test;
+        });
+        let trialing_sub = create_test_subscription(domain.id, Uuid::new_v4(), plan.id, |s| {
+            s.status = SubscriptionStatus::Trialing;
+            s.payment_mode = PaymentMode::Test;
+        });
+
+        {
+            let mut subs = subscription_repo.subscriptions.lock().unwrap();
+            subs.insert(active_sub.id, active_sub);
+            subs.insert(trialing_sub.id, trialing_sub);
+        }
+
+        let analytics = use_cases.get_analytics(owner_id, domain.id).await.unwrap();
+
+        assert_eq!(analytics.active_subscribers, 1);
+        assert_eq!(analytics.trialing_subscribers, 1);
+    }
+
+    // ========================================================================
+    // Webhook Event Idempotency Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_is_event_processed_returns_false_for_new_event() {
+        let (use_cases, _, _, _, _) = create_test_use_cases();
+
+        let result = use_cases
+            .is_event_processed("evt_new_event_123")
+            .await
+            .unwrap();
+
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_is_event_processed_returns_true_for_existing_event() {
+        let (use_cases, _, _, _, event_repo) = create_test_use_cases();
+
+        // Manually add an event with a stripe_event_id
+        let input = CreateSubscriptionEventInput {
+            subscription_id: Uuid::new_v4(),
+            event_type: "test".to_string(),
+            previous_status: None,
+            new_status: None,
+            stripe_event_id: Some("evt_existing_123".to_string()),
+            metadata: serde_json::json!({}),
+            created_by: None,
+        };
+        event_repo.create(&input).await.unwrap();
+
+        let result = use_cases
+            .is_event_processed("evt_existing_123")
+            .await
+            .unwrap();
+
+        assert!(result);
+    }
+
+    // ========================================================================
+    // Payment Status Tests (Step 1)
+    // ========================================================================
+
+    /// Helper that also returns payment repo for payment-focused tests.
+    fn create_test_use_cases_with_payments() -> (
+        DomainBillingUseCases,
+        Arc<InMemoryDomainRepo>,
+        Arc<InMemorySubscriptionPlanRepo>,
+        Arc<InMemoryUserSubscriptionRepo>,
+        Arc<InMemorySubscriptionEventRepo>,
+        Arc<InMemoryBillingPaymentRepo>,
+    ) {
+        let domain_repo = Arc::new(InMemoryDomainRepo::new());
+        let stripe_config_repo = Arc::new(InMemoryBillingStripeConfigRepo::new());
+        let enabled_providers_repo = Arc::new(InMemoryEnabledPaymentProvidersRepo::new());
+        let plan_repo = Arc::new(InMemorySubscriptionPlanRepo::new());
+        let subscription_repo =
+            Arc::new(InMemoryUserSubscriptionRepo::new().with_plan_repo(plan_repo.clone()));
+        let event_repo = Arc::new(InMemorySubscriptionEventRepo::new());
+        let payment_repo = Arc::new(InMemoryBillingPaymentRepo::new());
+
+        let cipher = ProcessCipher::new_from_base64(TEST_KEY_B64).unwrap();
+
+        let factory = Arc::new(PaymentProviderFactory::new(
+            cipher.clone(),
+            stripe_config_repo.clone() as Arc<dyn BillingStripeConfigRepoTrait>,
+        ));
+
+        let use_cases = DomainBillingUseCases::new(
+            domain_repo.clone() as Arc<dyn super::super::domain::DomainRepoTrait>,
+            stripe_config_repo as Arc<dyn BillingStripeConfigRepoTrait>,
+            enabled_providers_repo as Arc<dyn EnabledPaymentProvidersRepoTrait>,
+            plan_repo.clone() as Arc<dyn SubscriptionPlanRepoTrait>,
+            subscription_repo.clone() as Arc<dyn UserSubscriptionRepoTrait>,
+            event_repo.clone() as Arc<dyn SubscriptionEventRepoTrait>,
+            payment_repo.clone() as Arc<dyn BillingPaymentRepoTrait>,
+            cipher,
+            factory,
+        );
+
+        (
+            use_cases,
+            domain_repo,
+            plan_repo,
+            subscription_repo,
+            event_repo,
+            payment_repo,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_create_dummy_payment_success() {
+        let (use_cases, domain_repo, plan_repo, _, _, payment_repo) =
+            create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let subscription_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.price_cents = 1999;
+            p.currency = "eur".to_string();
+            p.name = "Premium Plan".to_string();
+            p.code = "premium".to_string();
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        let payment = use_cases
+            .create_dummy_payment(domain.id, user_id, subscription_id, &plan)
+            .await
+            .unwrap();
+
+        assert_eq!(payment.domain_id, domain.id);
+        assert_eq!(payment.end_user_id, user_id);
+        assert_eq!(payment.subscription_id, Some(subscription_id));
+        assert_eq!(payment.amount_cents, 1999);
+        assert_eq!(payment.amount_paid_cents, 1999);
+        assert_eq!(payment.currency, "EUR");
+        assert_eq!(payment.status, PaymentStatus::Paid);
+        assert_eq!(payment.plan_code, Some("premium".to_string()));
+        assert_eq!(payment.plan_name, Some("Premium Plan".to_string()));
+        assert!(payment.stripe_invoice_id.starts_with("dummy_inv_"));
+        assert!(payment.stripe_payment_intent_id.unwrap().starts_with("dummy_pi_"));
+
+        let stored = payment_repo
+            .get_by_stripe_invoice_id(&payment.stripe_invoice_id)
+            .await
+            .unwrap();
+        assert!(stored.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_payment_status_to_refunded() {
+        let (use_cases, _, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let payment = create_test_payment(domain_id, user_id, |p| {
+            p.status = PaymentStatus::Paid;
+            p.amount_cents = 1000;
+            p.amount_paid_cents = 1000;
+        });
+        let invoice_id = payment.stripe_invoice_id.clone();
+
+        {
+            let key = (domain_id, payment.payment_mode, invoice_id.clone());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        use_cases
+            .update_payment_status(&invoice_id, PaymentStatus::Refunded, Some(1000), None)
+            .await
+            .unwrap();
+
+        let updated = payment_repo
+            .get_by_stripe_invoice_id(&invoice_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.status, PaymentStatus::Refunded);
+        assert_eq!(updated.amount_refunded_cents, 1000);
+        assert!(updated.refunded_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_update_payment_status_partial_refund() {
+        let (use_cases, _, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let payment = create_test_payment(domain_id, user_id, |p| {
+            p.status = PaymentStatus::Paid;
+            p.amount_cents = 1000;
+            p.amount_paid_cents = 1000;
+        });
+        let invoice_id = payment.stripe_invoice_id.clone();
+
+        {
+            let key = (domain_id, payment.payment_mode, invoice_id.clone());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        use_cases
+            .update_payment_status(&invoice_id, PaymentStatus::PartialRefund, Some(500), None)
+            .await
+            .unwrap();
+
+        let updated = payment_repo
+            .get_by_stripe_invoice_id(&invoice_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.status, PaymentStatus::PartialRefund);
+        assert_eq!(updated.amount_refunded_cents, 500);
+    }
+
+    #[tokio::test]
+    async fn test_update_payment_status_terminal_state_preserved() {
+        let (use_cases, _, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let payment = create_test_payment(domain_id, user_id, |p| {
+            p.status = PaymentStatus::Refunded;
+            p.amount_refunded_cents = 1000;
+        });
+        let invoice_id = payment.stripe_invoice_id.clone();
+
+        {
+            let key = (domain_id, payment.payment_mode, invoice_id.clone());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        use_cases
+            .update_payment_status(&invoice_id, PaymentStatus::Paid, None, None)
+            .await
+            .unwrap();
+
+        let stored = payment_repo
+            .get_by_stripe_invoice_id(&invoice_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.status, PaymentStatus::Refunded);
+    }
+
+    #[tokio::test]
+    async fn test_update_payment_status_with_failure_message() {
+        let (use_cases, _, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let payment = create_test_payment(domain_id, user_id, |p| {
+            p.status = PaymentStatus::Pending;
+        });
+        let invoice_id = payment.stripe_invoice_id.clone();
+
+        {
+            let key = (domain_id, payment.payment_mode, invoice_id.clone());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        use_cases
+            .update_payment_status(
+                &invoice_id,
+                PaymentStatus::Failed,
+                None,
+                Some("Card declined".to_string()),
+            )
+            .await
+            .unwrap();
+
+        let updated = payment_repo
+            .get_by_stripe_invoice_id(&invoice_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(updated.status, PaymentStatus::Failed);
+        assert_eq!(updated.failure_message, Some("Card declined".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_update_payment_status_missing_invoice_ok() {
+        let (use_cases, _, _, _, _, _) = create_test_use_cases_with_payments();
+
+        let result = use_cases
+            .update_payment_status("nonexistent_invoice", PaymentStatus::Refunded, None, None)
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_get_user_payments_returns_user_payments() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        for i in 0..3 {
+            let payment = create_test_payment(domain.id, user_id, |p| {
+                p.stripe_invoice_id = format!("inv_user_{}", i);
+                p.payment_mode = PaymentMode::Test;
+            });
+            let key = (domain.id, PaymentMode::Test, payment.stripe_invoice_id.clone());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        payment_repo.set_user_email(user_id, "user@test.com");
+
+        let result = use_cases
+            .get_user_payments(domain.id, user_id, 1, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.payments.len(), 3);
+        assert_eq!(result.total, 3);
+        assert!(result.payments.iter().all(|p| p.user_email == "user@test.com"));
+    }
+
+    #[tokio::test]
+    async fn test_get_user_payments_pagination() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        for i in 0..5 {
+            let payment = create_test_payment(domain.id, user_id, |p| {
+                p.stripe_invoice_id = format!("inv_page_{}", i);
+                p.payment_mode = PaymentMode::Test;
+            });
+            let key = (domain.id, PaymentMode::Test, payment.stripe_invoice_id.clone());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        let page1 = use_cases
+            .get_user_payments(domain.id, user_id, 1, 2)
+            .await
+            .unwrap();
+        let page2 = use_cases
+            .get_user_payments(domain.id, user_id, 2, 2)
+            .await
+            .unwrap();
+
+        assert_eq!(page1.payments.len(), 2);
+        assert_eq!(page1.page, 1);
+        assert_eq!(page1.total, 5);
+        assert_eq!(page1.total_pages, 3);
+
+        assert_eq!(page2.payments.len(), 2);
+        assert_eq!(page2.page, 2);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_payments_empty_list() {
+        let (use_cases, domain_repo, _, _, _, _) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .get_user_payments(domain.id, user_id, 1, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.payments.len(), 0);
+        assert_eq!(result.total, 0);
+    }
+
+    #[tokio::test]
+    async fn test_get_user_payments_respects_mode() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let test_payment = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_test_mode".to_string();
+            p.payment_mode = PaymentMode::Test;
+        });
+        let live_payment = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_live_mode".to_string();
+            p.payment_mode = PaymentMode::Live;
+        });
+
+        {
+            let mut payments = payment_repo.payments.lock().unwrap();
+            payments.insert(
+                (domain.id, PaymentMode::Test, "inv_test_mode".to_string()),
+                test_payment,
+            );
+            payments.insert(
+                (domain.id, PaymentMode::Live, "inv_live_mode".to_string()),
+                live_payment,
+            );
+        }
+
+        let result = use_cases
+            .get_user_payments(domain.id, user_id, 1, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.payments.len(), 1);
+        assert_eq!(result.payments[0].payment.stripe_invoice_id, "inv_test_mode");
+    }
+
+    #[tokio::test]
+    async fn test_list_domain_payments_all() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        for i in 0..3 {
+            let user_id = Uuid::new_v4();
+            let payment = create_test_payment(domain.id, user_id, |p| {
+                p.stripe_invoice_id = format!("inv_domain_{}", i);
+                p.payment_mode = PaymentMode::Test;
+            });
+            payment_repo.set_user_email(user_id, &format!("user{}@test.com", i));
+            let key = (domain.id, PaymentMode::Test, payment.stripe_invoice_id.clone());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        let filters = PaymentListFilters {
+            status: None,
+            date_from: None,
+            date_to: None,
+            plan_code: None,
+            user_email: None,
+        };
+
+        let result = use_cases
+            .list_domain_payments(owner_id, domain.id, &filters, 1, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.payments.len(), 3);
+        assert_eq!(result.total, 3);
+    }
+
+    #[tokio::test]
+    async fn test_list_domain_payments_filter_by_status() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let paid = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_paid".to_string();
+            p.status = PaymentStatus::Paid;
+            p.payment_mode = PaymentMode::Test;
+        });
+        let failed = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_failed".to_string();
+            p.status = PaymentStatus::Failed;
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        {
+            let mut payments = payment_repo.payments.lock().unwrap();
+            payments.insert(
+                (domain.id, PaymentMode::Test, "inv_paid".to_string()),
+                paid,
+            );
+            payments.insert(
+                (domain.id, PaymentMode::Test, "inv_failed".to_string()),
+                failed,
+            );
+        }
+
+        let filters = PaymentListFilters {
+            status: Some(PaymentStatus::Paid),
+            date_from: None,
+            date_to: None,
+            plan_code: None,
+            user_email: None,
+        };
+
+        let result = use_cases
+            .list_domain_payments(owner_id, domain.id, &filters, 1, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.payments.len(), 1);
+        assert_eq!(result.payments[0].payment.status, PaymentStatus::Paid);
+    }
+
+    #[tokio::test]
+    async fn test_list_domain_payments_filter_by_plan_code() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let basic = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_basic".to_string();
+            p.plan_code = Some("basic".to_string());
+            p.payment_mode = PaymentMode::Test;
+        });
+        let premium = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_premium".to_string();
+            p.plan_code = Some("premium".to_string());
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        {
+            let mut payments = payment_repo.payments.lock().unwrap();
+            payments.insert(
+                (domain.id, PaymentMode::Test, "inv_basic".to_string()),
+                basic,
+            );
+            payments.insert(
+                (domain.id, PaymentMode::Test, "inv_premium".to_string()),
+                premium,
+            );
+        }
+
+        let filters = PaymentListFilters {
+            status: None,
+            date_from: None,
+            date_to: None,
+            plan_code: Some("premium".to_string()),
+            user_email: None,
+        };
+
+        let result = use_cases
+            .list_domain_payments(owner_id, domain.id, &filters, 1, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.payments.len(), 1);
+        assert_eq!(
+            result.payments[0].payment.plan_code,
+            Some("premium".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_list_domain_payments_filter_by_user_email() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user1 = Uuid::new_v4();
+        let user2 = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let p1 = create_test_payment(domain.id, user1, |p| {
+            p.stripe_invoice_id = "inv_alice".to_string();
+            p.payment_mode = PaymentMode::Test;
+        });
+        let p2 = create_test_payment(domain.id, user2, |p| {
+            p.stripe_invoice_id = "inv_bob".to_string();
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        payment_repo.set_user_email(user1, "alice@example.com");
+        payment_repo.set_user_email(user2, "bob@example.com");
+
+        {
+            let mut payments = payment_repo.payments.lock().unwrap();
+            payments.insert(
+                (domain.id, PaymentMode::Test, "inv_alice".to_string()),
+                p1,
+            );
+            payments.insert(
+                (domain.id, PaymentMode::Test, "inv_bob".to_string()),
+                p2,
+            );
+        }
+
+        let filters = PaymentListFilters {
+            status: None,
+            date_from: None,
+            date_to: None,
+            plan_code: None,
+            user_email: Some("alice".to_string()),
+        };
+
+        let result = use_cases
+            .list_domain_payments(owner_id, domain.id, &filters, 1, 10)
+            .await
+            .unwrap();
+
+        assert_eq!(result.payments.len(), 1);
+        assert_eq!(result.payments[0].user_email, "alice@example.com");
+    }
+
+    #[tokio::test]
+    async fn test_list_domain_payments_forbidden_non_owner() {
+        let (use_cases, domain_repo, _, _, _, _) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let other_user = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let filters = PaymentListFilters {
+            status: None,
+            date_from: None,
+            date_to: None,
+            plan_code: None,
+            user_email: None,
+        };
+
+        let result = use_cases
+            .list_domain_payments(other_user, domain.id, &filters, 1, 10)
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn test_export_payments_csv_format() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let payment = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_csv_test".to_string();
+            p.plan_name = Some("Basic Plan".to_string());
+            p.amount_cents = 999;
+            p.status = PaymentStatus::Paid;
+            p.invoice_number = Some("INV-001".to_string());
+            p.billing_reason = Some("subscription_create".to_string());
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        payment_repo.set_user_email(user_id, "test@example.com");
+
+        {
+            let key = (domain.id, PaymentMode::Test, "inv_csv_test".to_string());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        let filters = PaymentListFilters {
+            status: None,
+            date_from: None,
+            date_to: None,
+            plan_code: None,
+            user_email: None,
+        };
+
+        let csv = use_cases
+            .export_payments_csv(owner_id, domain.id, &filters)
+            .await
+            .unwrap();
+
+        assert!(csv.starts_with("Date,User Email,Plan,Amount,Status,Invoice Number,Billing Reason\n"));
+        assert!(csv.contains("test@example.com"));
+        assert!(csv.contains("Basic Plan"));
+        assert!(csv.contains("9.99"));
+        assert!(csv.contains("paid"));
+        assert!(csv.contains("INV-001"));
+    }
+
+    #[tokio::test]
+    async fn test_export_payments_csv_escapes_commas() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let payment = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_comma".to_string();
+            p.plan_name = Some("Pro Plan, Annual".to_string());
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        payment_repo.set_user_email(user_id, "user@test.com");
+
+        {
+            let key = (domain.id, PaymentMode::Test, "inv_comma".to_string());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        let filters = PaymentListFilters::default();
+
+        let csv = use_cases
+            .export_payments_csv(owner_id, domain.id, &filters)
+            .await
+            .unwrap();
+
+        assert!(csv.contains("\"Pro Plan, Annual\""));
+    }
+
+    #[tokio::test]
+    async fn test_export_payments_csv_escapes_quotes() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let payment = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_quote".to_string();
+            p.plan_name = Some("The \"Best\" Plan".to_string());
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        payment_repo.set_user_email(user_id, "user@test.com");
+
+        {
+            let key = (domain.id, PaymentMode::Test, "inv_quote".to_string());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        let filters = PaymentListFilters::default();
+
+        let csv = use_cases
+            .export_payments_csv(owner_id, domain.id, &filters)
+            .await
+            .unwrap();
+
+        assert!(csv.contains("\"The \"\"Best\"\" Plan\""));
+    }
+
+    #[tokio::test]
+    async fn test_export_payments_csv_prevents_formula_injection() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let payment = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_formula".to_string();
+            p.plan_name = Some("=SUM(A1:A10)".to_string());
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        payment_repo.set_user_email(user_id, "user@test.com");
+
+        {
+            let key = (domain.id, PaymentMode::Test, "inv_formula".to_string());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        let filters = PaymentListFilters::default();
+
+        let csv = use_cases
+            .export_payments_csv(owner_id, domain.id, &filters)
+            .await
+            .unwrap();
+
+        assert!(csv.contains("\"'=SUM(A1:A10)\""));
+    }
+
+    #[tokio::test]
+    async fn test_export_payments_csv_handles_null_fields() {
+        let (use_cases, domain_repo, _, _, _, payment_repo) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let payment = create_test_payment(domain.id, user_id, |p| {
+            p.stripe_invoice_id = "inv_nulls".to_string();
+            p.plan_name = None;
+            p.invoice_number = None;
+            p.billing_reason = None;
+            p.payment_mode = PaymentMode::Test;
+        });
+
+        payment_repo.set_user_email(user_id, "user@test.com");
+
+        {
+            let key = (domain.id, PaymentMode::Test, "inv_nulls".to_string());
+            payment_repo
+                .payments
+                .lock()
+                .unwrap()
+                .insert(key, payment);
+        }
+
+        let filters = PaymentListFilters::default();
+
+        let result = use_cases
+            .export_payments_csv(owner_id, domain.id, &filters)
+            .await;
+
+        assert!(result.is_ok());
+        let csv = result.unwrap();
+        assert!(csv.lines().count() >= 2);
+    }
+
+    #[tokio::test]
+    async fn test_export_payments_csv_forbidden_non_owner() {
+        let (use_cases, domain_repo, _, _, _, _) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let other_user = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let filters = PaymentListFilters::default();
+
+        let result = use_cases
+            .export_payments_csv(other_user, domain.id, &filters)
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    // ========================================================================
+    // Stripe Config Tests (Step 2)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_delete_stripe_config_inactive_mode_success() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Live,
+                "sk_live_abc123",
+                "pk_live_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        let result = use_cases
+            .delete_stripe_config(owner_id, domain.id, PaymentMode::Live)
+            .await;
+
+        assert!(result.is_ok());
+
+        let is_configured = use_cases
+            .is_stripe_configured_for_mode(domain.id, PaymentMode::Live)
+            .await
+            .unwrap();
+        assert!(!is_configured);
+    }
+
+    #[tokio::test]
+    async fn test_delete_stripe_config_active_mode_no_data_success() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        let result = use_cases
+            .delete_stripe_config(owner_id, domain.id, PaymentMode::Test)
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_delete_stripe_config_active_mode_with_plans_fails() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan);
+
+        let result = use_cases
+            .delete_stripe_config(owner_id, domain.id, PaymentMode::Test)
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_delete_stripe_config_active_mode_with_subscriptions_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        let sub = create_test_subscription(domain.id, Uuid::new_v4(), plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(sub.id, sub);
+
+        let result = use_cases
+            .delete_stripe_config(owner_id, domain.id, PaymentMode::Test)
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_delete_stripe_config_forbidden_non_owner() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let other_user = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .delete_stripe_config(other_user, domain.id, PaymentMode::Test)
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn test_get_stripe_secret_key_success() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_secret123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        let key = use_cases.get_stripe_secret_key(domain.id).await.unwrap();
+        assert_eq!(key, "sk_test_secret123");
+    }
+
+    #[tokio::test]
+    async fn test_get_stripe_secret_key_not_configured_fails() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases.get_stripe_secret_key(domain.id).await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_get_stripe_secret_key_for_mode_success() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Live,
+                "sk_live_modesecret",
+                "pk_live_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        let key = use_cases
+            .get_stripe_secret_key_for_mode(domain.id, PaymentMode::Live)
+            .await
+            .unwrap();
+        assert_eq!(key, "sk_live_modesecret");
+    }
+
+    #[tokio::test]
+    async fn test_get_stripe_secret_key_for_mode_not_configured_fails() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .get_stripe_secret_key_for_mode(domain.id, PaymentMode::Live)
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_get_stripe_webhook_secret_for_mode_success() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_webhooksecret",
+            )
+            .await
+            .unwrap();
+
+        let secret = use_cases
+            .get_stripe_webhook_secret_for_mode(domain.id, PaymentMode::Test)
+            .await
+            .unwrap();
+        assert_eq!(secret, "whsec_webhooksecret");
+    }
+
+    #[tokio::test]
+    async fn test_get_stripe_webhook_secret_for_mode_not_configured_fails() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .get_stripe_webhook_secret_for_mode(domain.id, PaymentMode::Live)
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_is_stripe_configured_true() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        let result = use_cases.is_stripe_configured(domain.id).await.unwrap();
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn test_is_stripe_configured_false() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases.is_stripe_configured(domain.id).await.unwrap();
+        assert!(!result);
+    }
+
+    #[tokio::test]
+    async fn test_is_stripe_configured_for_mode_true() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Live,
+                "sk_live_abc123",
+                "pk_live_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        let live_configured = use_cases
+            .is_stripe_configured_for_mode(domain.id, PaymentMode::Live)
+            .await
+            .unwrap();
+        let test_configured = use_cases
+            .is_stripe_configured_for_mode(domain.id, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        assert!(live_configured);
+        assert!(!test_configured);
+    }
+
+    #[tokio::test]
+    async fn test_is_stripe_configured_for_mode_false() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .is_stripe_configured_for_mode(domain.id, PaymentMode::Test)
+            .await
+            .unwrap();
+        assert!(!result);
+    }
+
+    // ========================================================================
+    // Provider Management Tests (Step 3)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_disable_provider_success_multiple_active() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Stripe, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        let result = use_cases
+            .disable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await;
+
+        assert!(result.is_ok());
+
+        let is_enabled = use_cases
+            .is_provider_enabled(domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+        assert!(!is_enabled);
+    }
+
+    #[tokio::test]
+    async fn test_disable_provider_last_active_fails() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        let result = use_cases
+            .disable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_disable_provider_forbidden_non_owner() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let other_user = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .disable_provider(other_user, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn test_set_provider_active_enable() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        let result = use_cases
+            .set_provider_active(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test, true)
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_set_provider_active_disable_not_last() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Add Stripe config so we can enable Stripe provider
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        // Enable both Dummy and Stripe in Test mode
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Stripe, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        // Disable Dummy - should succeed since Stripe is still active
+        let result = use_cases
+            .set_provider_active(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+                false,
+            )
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_set_provider_active_disable_last_fails() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        let result = use_cases
+            .set_provider_active(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+                false,
+            )
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_list_enabled_providers_returns_all() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Add Stripe config so we can enable Stripe provider
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        // Enable both Dummy and Stripe in Test mode
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Stripe, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        let providers = use_cases
+            .list_enabled_providers(owner_id, domain.id)
+            .await
+            .unwrap();
+
+        assert_eq!(providers.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_list_enabled_providers_empty() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let providers = use_cases
+            .list_enabled_providers(owner_id, domain.id)
+            .await
+            .unwrap();
+
+        assert!(providers.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_active_providers_filters_inactive() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Add Stripe config so we can enable Stripe provider
+        use_cases
+            .update_stripe_config(
+                owner_id,
+                domain.id,
+                PaymentMode::Test,
+                "sk_test_abc123",
+                "pk_test_abc123",
+                "whsec_abc123",
+            )
+            .await
+            .unwrap();
+
+        // Enable both Dummy and Stripe in Test mode
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Stripe, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        // Disable Dummy - Stripe is still active
+        use_cases
+            .set_provider_active(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+                false,
+            )
+            .await
+            .unwrap();
+
+        let active_providers = use_cases.list_active_providers(domain.id).await.unwrap();
+
+        assert_eq!(active_providers.len(), 1);
+        assert_eq!(active_providers[0].provider, PaymentProvider::Stripe);
+    }
+
+    #[tokio::test]
+    async fn test_set_provider_display_order_success() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        let result = use_cases
+            .set_provider_display_order(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+                5,
+            )
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_is_provider_enabled_true() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        use_cases
+            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        let result = use_cases
+            .is_provider_enabled(domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        assert!(result);
+    }
+
+    #[tokio::test]
+    async fn test_is_provider_enabled_false() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .is_provider_enabled(domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        assert!(!result);
+    }
+
+    // ========================================================================
+    // Step 4: Plan Management Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_list_plans_for_mode_returns_test_plans() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let test_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "test_plan".to_string();
+        });
+        let live_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Live;
+            p.code = "live_plan".to_string();
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(test_plan.id, test_plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(live_plan.id, live_plan.clone());
+
+        let plans = use_cases
+            .list_plans_for_mode(owner_id, domain.id, PaymentMode::Test, false)
+            .await
+            .unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].code, "test_plan");
+    }
+
+    #[tokio::test]
+    async fn test_list_plans_for_mode_returns_live_plans() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Live;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let test_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "test_plan".to_string();
+        });
+        let live_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Live;
+            p.code = "live_plan".to_string();
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(test_plan.id, test_plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(live_plan.id, live_plan.clone());
+
+        let plans = use_cases
+            .list_plans_for_mode(owner_id, domain.id, PaymentMode::Live, false)
+            .await
+            .unwrap();
+
+        assert_eq!(plans.len(), 1);
+        assert_eq!(plans[0].code, "live_plan");
+    }
+
+    #[tokio::test]
+    async fn test_reorder_plans_success() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan_a = create_test_plan(domain.id, |p| {
+            p.code = "plan_a".to_string();
+            p.display_order = 0;
+        });
+        let plan_b = create_test_plan(domain.id, |p| {
+            p.code = "plan_b".to_string();
+            p.display_order = 1;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan_a.id, plan_a.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan_b.id, plan_b.clone());
+
+        // Reverse the order
+        let result = use_cases
+            .reorder_plans(owner_id, domain.id, vec![plan_b.id, plan_a.id])
+            .await;
+
+        assert!(result.is_ok());
+
+        let plans = plan_repo.plans.lock().unwrap();
+        assert_eq!(plans.get(&plan_b.id).unwrap().display_order, 0);
+        assert_eq!(plans.get(&plan_a.id).unwrap().display_order, 1);
+    }
+
+    #[tokio::test]
+    async fn test_reorder_plans_wrong_domain_fails() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let other_domain_id = Uuid::new_v4();
+        let plan = create_test_plan(other_domain_id, |p| {
+            p.code = "other_domain_plan".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let result = use_cases
+            .reorder_plans(owner_id, domain.id, vec![plan.id])
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn test_reorder_plans_not_found_fails() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let nonexistent_plan_id = Uuid::new_v4();
+
+        let result = use_cases
+            .reorder_plans(owner_id, domain.id, vec![nonexistent_plan_id])
+            .await;
+
+        assert!(matches!(result, Err(AppError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_reorder_plans_forbidden_non_owner() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let other_user = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |_| {});
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let result = use_cases
+            .reorder_plans(other_user, domain.id, vec![plan.id])
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn test_get_plan_by_code_found() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let result = use_cases
+            .get_plan_by_code(domain.id, "premium")
+            .await
+            .unwrap();
+
+        assert!(result.is_some());
+        assert_eq!(result.unwrap().code, "premium");
+    }
+
+    #[tokio::test]
+    async fn test_get_plan_by_code_not_found() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .get_plan_by_code(domain.id, "nonexistent")
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_plan_by_code_wrong_mode_not_found() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test; // Active mode is Test
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Create plan in Live mode
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Live;
+            p.code = "premium".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        // get_plan_by_code uses active mode (Test), so Live plan not found
+        let result = use_cases
+            .get_plan_by_code(domain.id, "premium")
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_set_stripe_ids_success() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.stripe_product_id = None;
+            p.stripe_price_id = None;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let result = use_cases
+            .set_stripe_ids(plan.id, "prod_abc123", "price_xyz789")
+            .await;
+
+        assert!(result.is_ok());
+
+        let updated = plan_repo.plans.lock().unwrap();
+        let updated_plan = updated.get(&plan.id).unwrap();
+        assert_eq!(
+            updated_plan.stripe_product_id,
+            Some("prod_abc123".to_string())
+        );
+        assert_eq!(
+            updated_plan.stripe_price_id,
+            Some("price_xyz789".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_plan_by_stripe_price_id_found() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.stripe_price_id = Some("price_unique123".to_string());
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let result = use_cases
+            .get_plan_by_stripe_price_id(domain.id, PaymentMode::Test, "price_unique123")
+            .await
+            .unwrap();
+
+        assert!(result.is_some());
+        assert_eq!(
+            result.unwrap().stripe_price_id,
+            Some("price_unique123".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_plan_by_stripe_price_id_not_found() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .get_plan_by_stripe_price_id(domain.id, PaymentMode::Test, "nonexistent_price")
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_user_subscription_with_plan_found() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .get_user_subscription_with_plan(domain.id, end_user_id)
+            .await
+            .unwrap();
+
+        assert!(result.is_some());
+        let (sub, retrieved_plan) = result.unwrap();
+        assert_eq!(sub.end_user_id, end_user_id);
+        assert_eq!(retrieved_plan.code, "basic");
+    }
+
+    #[tokio::test]
+    async fn test_get_user_subscription_with_plan_not_found() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .get_user_subscription_with_plan(domain.id, end_user_id)
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_list_subscribers_for_mode_test() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        // Add a Live mode subscription that shouldn't be returned
+        let live_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Live;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(live_plan.id, live_plan.clone());
+
+        let live_subscription =
+            create_test_subscription(domain.id, Uuid::new_v4(), live_plan.id, |s| {
+                s.payment_mode = PaymentMode::Live;
+            });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(live_subscription.id, live_subscription.clone());
+
+        let result = use_cases
+            .list_subscribers_for_mode(owner_id, domain.id, PaymentMode::Test)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].subscription.payment_mode, PaymentMode::Test);
+    }
+
+    #[tokio::test]
+    async fn test_list_subscribers_for_mode_live() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Live;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Live;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Live;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .list_subscribers_for_mode(owner_id, domain.id, PaymentMode::Live)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].subscription.payment_mode, PaymentMode::Live);
+    }
+
+    // ========================================================================
+    // Step 5: Webhook/Sync Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_create_or_update_subscription_creates_new() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let input = CreateSubscriptionInput {
+            domain_id: domain.id,
+            payment_mode: PaymentMode::Test,
+            end_user_id,
+            plan_id: plan.id,
+            status: SubscriptionStatus::Active,
+            stripe_customer_id: "cus_test123".to_string(),
+            stripe_subscription_id: Some("sub_test123".to_string()),
+            current_period_start: None,
+            current_period_end: None,
+            trial_start: None,
+            trial_end: None,
+        };
+
+        let result = use_cases.create_or_update_subscription(&input).await;
+
+        assert!(result.is_ok());
+        let sub = result.unwrap();
+        assert_eq!(sub.end_user_id, end_user_id);
+        assert_eq!(sub.status, SubscriptionStatus::Active);
+
+        // Verify it was stored
+        let stored = subscription_repo.subscriptions.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_or_update_subscription_updates_existing() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        // Create existing subscription
+        let existing = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Trialing;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(existing.id, existing.clone());
+
+        // Now "update" it with new data via create_or_update
+        let input = CreateSubscriptionInput {
+            domain_id: domain.id,
+            payment_mode: PaymentMode::Test,
+            end_user_id,
+            plan_id: new_plan.id,
+            status: SubscriptionStatus::Active,
+            stripe_customer_id: "cus_new_test123".to_string(),
+            stripe_subscription_id: Some("sub_new_test123".to_string()),
+            current_period_start: None,
+            current_period_end: None,
+            trial_start: None,
+            trial_end: None,
+        };
+
+        let result = use_cases.create_or_update_subscription(&input).await;
+
+        assert!(result.is_ok());
+        let sub = result.unwrap();
+        assert_eq!(sub.status, SubscriptionStatus::Active);
+        assert_eq!(sub.plan_id, new_plan.id);
+
+        // Still only one subscription (updated, not duplicated)
+        let stored = subscription_repo.subscriptions.lock().unwrap();
+        assert_eq!(stored.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_update_subscription_from_stripe_success() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_stripe123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let update = StripeSubscriptionUpdate {
+            status: SubscriptionStatus::Canceled,
+            plan_id: None,
+            stripe_subscription_id: None,
+            current_period_start: None,
+            current_period_end: None,
+            cancel_at_period_end: true,
+            canceled_at: Some(chrono::Utc::now().naive_utc()),
+            trial_start: None,
+            trial_end: None,
+        };
+
+        let result = use_cases
+            .update_subscription_from_stripe("sub_stripe123", &update)
+            .await;
+
+        assert!(result.is_ok());
+        let updated = result.unwrap();
+        assert_eq!(updated.status, SubscriptionStatus::Canceled);
+        assert!(updated.cancel_at_period_end);
+    }
+
+    #[tokio::test]
+    async fn test_update_subscription_from_stripe_not_found() {
+        let (use_cases, _, _, _, _) = create_test_use_cases();
+
+        let update = StripeSubscriptionUpdate {
+            status: SubscriptionStatus::Active,
+            plan_id: None,
+            stripe_subscription_id: None,
+            current_period_start: None,
+            current_period_end: None,
+            cancel_at_period_end: false,
+            canceled_at: None,
+            trial_start: None,
+            trial_end: None,
+        };
+
+        let result = use_cases
+            .update_subscription_from_stripe("sub_nonexistent", &update)
+            .await;
+
+        assert!(matches!(result, Err(AppError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_log_webhook_event_creates_record() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, event_repo) =
+            create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |_| {});
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |_| {});
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .log_webhook_event(
+                subscription.id,
+                "customer.subscription.updated",
+                Some(SubscriptionStatus::Trialing),
+                Some(SubscriptionStatus::Active),
+                "evt_stripe123",
+                serde_json::json!({"trigger": "trial_end"}),
+            )
+            .await;
+
+        assert!(result.is_ok());
+
+        let events = event_repo.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        let event = events.first().unwrap();
+        assert_eq!(event.event_type, "customer.subscription.updated");
+        assert_eq!(event.previous_status, Some(SubscriptionStatus::Trialing));
+        assert_eq!(event.new_status, Some(SubscriptionStatus::Active));
+    }
+
+    #[tokio::test]
+    async fn test_sync_invoice_from_webhook_creates_payment() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _, payment_repo) =
+            create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.name = "Basic Plan".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.stripe_customer_id = "cus_webhook123".to_string();
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let invoice_json = serde_json::json!({
+            "id": "in_webhook123",
+            "customer": "cus_webhook123",
+            "amount_due": 1999,
+            "amount_paid": 1999,
+            "currency": "usd",
+            "status": "paid",
+            "hosted_invoice_url": "https://invoice.stripe.com/test",
+            "invoice_pdf": "https://invoice.stripe.com/test.pdf",
+            "number": "INV-001",
+            "billing_reason": "subscription_create",
+            "created": 1704067200,
+            "status_transitions": {
+                "paid_at": 1704067300
+            }
+        });
+
+        let result = use_cases
+            .sync_invoice_from_webhook(domain.id, PaymentMode::Test, &invoice_json)
+            .await;
+
+        assert!(result.is_ok());
+        let payment = result.unwrap();
+        assert_eq!(payment.stripe_invoice_id, "in_webhook123");
+        assert_eq!(payment.amount_cents, 1999);
+        assert_eq!(payment.status, PaymentStatus::Paid);
+        assert_eq!(payment.plan_code, Some("basic".to_string()));
+
+        // Verify it was stored
+        let payments = payment_repo.payments.lock().unwrap();
+        assert_eq!(payments.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_sync_invoice_from_webhook_no_subscription_fails() {
+        let (use_cases, domain_repo, _, _, _, _) = create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let invoice_json = serde_json::json!({
+            "id": "in_orphan123",
+            "customer": "cus_nonexistent",
+            "amount_due": 1000,
+            "amount_paid": 0,
+            "currency": "usd",
+            "status": "open"
+        });
+
+        let result = use_cases
+            .sync_invoice_from_webhook(domain.id, PaymentMode::Test, &invoice_json)
+            .await;
+
+        assert!(matches!(result, Err(AppError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn test_sync_invoice_from_webhook_updates_existing() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _, payment_repo) =
+            create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.stripe_customer_id = "cus_upsert123".to_string();
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        // Create initial payment with "open" status
+        let initial_payment = create_test_payment(domain.id, end_user_id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.stripe_invoice_id = "in_upsert123".to_string();
+            p.status = PaymentStatus::Pending;
+            p.amount_paid_cents = 0;
+        });
+        payment_repo.payments.lock().unwrap().insert(
+            (
+                initial_payment.domain_id,
+                initial_payment.payment_mode,
+                initial_payment.stripe_invoice_id.clone(),
+            ),
+            initial_payment,
+        );
+
+        // Now sync with updated (paid) status
+        let invoice_json = serde_json::json!({
+            "id": "in_upsert123",
+            "customer": "cus_upsert123",
+            "amount_due": 2999,
+            "amount_paid": 2999,
+            "currency": "usd",
+            "status": "paid",
+            "status_transitions": {
+                "paid_at": 1704067300
+            }
+        });
+
+        let result = use_cases
+            .sync_invoice_from_webhook(domain.id, PaymentMode::Test, &invoice_json)
+            .await;
+
+        assert!(result.is_ok());
+        let payment = result.unwrap();
+        assert_eq!(payment.status, PaymentStatus::Paid);
+        assert_eq!(payment.amount_paid_cents, 2999);
+
+        // Still only one payment (updated via upsert)
+        let payments = payment_repo.payments.lock().unwrap();
+        assert_eq!(payments.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_sync_invoice_extracts_all_fields_correctly() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _, _) =
+            create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+            p.name = "Premium Plan".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.stripe_customer_id = "cus_fields123".to_string();
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let invoice_json = serde_json::json!({
+            "id": "in_fields123",
+            "customer": "cus_fields123",
+            "payment_intent": "pi_intent123",
+            "amount_due": 4999,
+            "amount_paid": 4999,
+            "currency": "eur",
+            "status": "paid",
+            "hosted_invoice_url": "https://invoice.stripe.com/hosted",
+            "invoice_pdf": "https://invoice.stripe.com/pdf",
+            "number": "INV-2024-001",
+            "billing_reason": "subscription_cycle",
+            "created": 1704067200,
+            "status_transitions": {
+                "paid_at": 1704067400
+            }
+        });
+
+        let result = use_cases
+            .sync_invoice_from_webhook(domain.id, PaymentMode::Test, &invoice_json)
+            .await;
+
+        assert!(result.is_ok());
+        let payment = result.unwrap();
+
+        assert_eq!(payment.stripe_invoice_id, "in_fields123");
+        assert_eq!(
+            payment.stripe_payment_intent_id,
+            Some("pi_intent123".to_string())
+        );
+        assert_eq!(payment.stripe_customer_id, "cus_fields123");
+        assert_eq!(payment.amount_cents, 4999);
+        assert_eq!(payment.amount_paid_cents, 4999);
+        assert_eq!(payment.currency, "EUR");
+        assert_eq!(payment.status, PaymentStatus::Paid);
+        assert_eq!(
+            payment.hosted_invoice_url,
+            Some("https://invoice.stripe.com/hosted".to_string())
+        );
+        assert_eq!(
+            payment.invoice_pdf_url,
+            Some("https://invoice.stripe.com/pdf".to_string())
+        );
+        assert_eq!(payment.invoice_number, Some("INV-2024-001".to_string()));
+        assert_eq!(
+            payment.billing_reason,
+            Some("subscription_cycle".to_string())
+        );
+        assert_eq!(payment.plan_code, Some("premium".to_string()));
+        assert_eq!(payment.plan_name, Some("Premium Plan".to_string()));
+        assert!(payment.payment_date.is_some()); // paid status should have payment_date
+    }
+
+    #[tokio::test]
+    async fn test_sync_invoice_pending_status_no_payment_date() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _, _) =
+            create_test_use_cases_with_payments();
+
+        let owner_id = Uuid::new_v4();
+        let end_user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.stripe_customer_id = "cus_pending123".to_string();
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let invoice_json = serde_json::json!({
+            "id": "in_pending123",
+            "customer": "cus_pending123",
+            "amount_due": 1999,
+            "amount_paid": 0,
+            "currency": "usd",
+            "status": "open",
+            "created": 1704067200
+        });
+
+        let result = use_cases
+            .sync_invoice_from_webhook(domain.id, PaymentMode::Test, &invoice_json)
+            .await;
+
+        assert!(result.is_ok());
+        let payment = result.unwrap();
+        assert_eq!(payment.status, PaymentStatus::Pending);
+        assert!(payment.payment_date.is_none()); // pending status should not have payment_date
+    }
+
+    // ========================================================================
+    // Step 6: Plan Change Validation Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn test_preview_plan_change_no_subscription_fails() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("No active subscription")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_manually_granted_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.manually_granted = true;
+            s.stripe_subscription_id = None;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("manually granted")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_missing_stripe_subscription_id_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.manually_granted = false;
+            s.stripe_subscription_id = None; // No stripe subscription
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("not linked to Stripe")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_past_due_status_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::PastDue;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("past due")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_incomplete_status_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Incomplete;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("complete the current payment")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_paused_status_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Paused;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("paused")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_canceled_status_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Canceled;
+            s.cancel_at_period_end = false; // Fully canceled, not just scheduled to cancel
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("canceled subscription")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_same_plan_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.is_public = true;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        // Try to "change" to the same plan
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "basic")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Already subscribed")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_archived_plan_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.is_public = true;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        let archived_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+            p.is_public = true;
+            p.is_archived = true; // Archived!
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(archived_plan.id, archived_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("no longer available")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_private_plan_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.is_public = true;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        let private_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "enterprise".to_string();
+            p.is_public = false; // Private!
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(private_plan.id, private_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "enterprise")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("not available")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_interval_mismatch_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let monthly_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic_monthly".to_string();
+            p.interval = "month".to_string();
+            p.is_public = true;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(monthly_plan.id, monthly_plan.clone());
+
+        let yearly_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic_yearly".to_string();
+            p.interval = "year".to_string(); // Different interval!
+            p.is_public = true;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(yearly_plan.id, yearly_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, monthly_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "basic_yearly")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Cannot switch between")));
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_plan_not_found_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "nonexistent_plan")
+            .await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("not found")));
+    }
+
+    // change_plan validation tests - these should have the same validation as preview_plan_change
+
+    #[tokio::test]
+    async fn test_change_plan_no_subscription_fails() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let result = use_cases.change_plan(domain.id, user_id, "premium").await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("No active subscription")));
+    }
+
+    #[tokio::test]
+    async fn test_change_plan_manually_granted_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.manually_granted = true;
+            s.stripe_subscription_id = None;
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases.change_plan(domain.id, user_id, "premium").await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("manually granted")));
+    }
+
+    #[tokio::test]
+    async fn test_change_plan_same_plan_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.is_public = true;
+        });
+        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases.change_plan(domain.id, user_id, "basic").await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Already subscribed")));
+    }
+
+    #[tokio::test]
+    async fn test_change_plan_past_due_status_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+            p.is_public = true;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::PastDue;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases.change_plan(domain.id, user_id, "premium").await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("past due")));
+    }
+
+    #[tokio::test]
+    async fn test_change_plan_archived_plan_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        let archived_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "legacy".to_string();
+            p.is_public = true;
+            p.is_archived = true;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(archived_plan.id, archived_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases.change_plan(domain.id, user_id, "legacy").await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("no longer available")));
+    }
+
+    #[tokio::test]
+    async fn test_change_plan_interval_mismatch_fails() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let monthly_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "monthly".to_string();
+            p.interval = "month".to_string();
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(monthly_plan.id, monthly_plan.clone());
+
+        let yearly_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "yearly".to_string();
+            p.interval = "year".to_string();
+            p.is_public = true;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(yearly_plan.id, yearly_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, monthly_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases.change_plan(domain.id, user_id, "yearly").await;
+
+        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Cannot switch between")));
     }
 }
