@@ -33,7 +33,8 @@ use crate::{
         InMemoryDomainAuthConfigRepo, InMemoryDomainEndUserRepo, InMemoryDomainRepo,
         InMemoryEnabledPaymentProvidersRepo, InMemoryRateLimiter, InMemorySubscriptionEventRepo,
         InMemorySubscriptionPlanRepo, InMemoryUserSubscriptionRepo, StubEmailSender,
-        StubGoogleOAuthConfigRepo, StubMagicLinkConfigRepo, StubMagicLinkStore, StubOAuthStateStore,
+        StubGoogleOAuthConfigRepo, StubMagicLinkConfigRepo, StubMagicLinkStore,
+        StubOAuthStateStore,
     },
 };
 
@@ -123,8 +124,8 @@ impl TestAppStateBuilder {
     pub fn new() -> Self {
         // Use a fixed test key for reproducible tests (base64-encoded 32 bytes)
         let test_key_b64 = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI="; // 32 'B' bytes
-        let cipher = ProcessCipher::new_from_base64(test_key_b64)
-            .expect("Test cipher key should be valid");
+        let cipher =
+            ProcessCipher::new_from_base64(test_key_b64).expect("Test cipher key should be valid");
 
         Self {
             domains: vec![],
@@ -156,8 +157,12 @@ impl TestAppStateBuilder {
     /// Add an API key for a domain.
     pub fn with_api_key(mut self, domain_id: Uuid, domain_name: &str, raw_key: &str) -> Self {
         let key_id = Uuid::new_v4();
-        self.api_keys
-            .push((domain_id, key_id, raw_key.to_string(), domain_name.to_string()));
+        self.api_keys.push((
+            domain_id,
+            key_id,
+            raw_key.to_string(),
+            domain_name.to_string(),
+        ));
         self
     }
 
@@ -271,8 +276,7 @@ impl TestAppStateBuilder {
             fallback_google_client_secret: "fallback_client_secret".to_string(),
         });
 
-        let rate_limiter: Arc<dyn RateLimiterTrait> =
-            Arc::new(InMemoryRateLimiter::permissive());
+        let rate_limiter: Arc<dyn RateLimiterTrait> = Arc::new(InMemoryRateLimiter::permissive());
 
         AppState {
             config,

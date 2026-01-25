@@ -563,8 +563,7 @@ async fn unlink_google(
             None
         }
     } else if let Some(refresh_token) = cookies.get("end_user_refresh_token") {
-        if let Ok(claims) = verify_token_with_domain_keys(&app_state, refresh_token.value()).await
-        {
+        if let Ok(claims) = verify_token_with_domain_keys(&app_state, refresh_token.value()).await {
             if claims.domain == root_domain {
                 Some(Uuid::parse_str(&claims.sub).ok())
             } else {

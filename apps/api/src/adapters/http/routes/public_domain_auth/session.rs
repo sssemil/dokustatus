@@ -185,10 +185,8 @@ async fn get_token(
     }
 
     // Parse end_user_id from claims
-    let end_user_id =
-        Uuid::parse_str(&claims.sub).map_err(|_| AppError::InvalidCredentials)?;
-    let domain_id = Uuid::parse_str(&claims.domain_id)
-        .map_err(|_| AppError::InvalidCredentials)?;
+    let end_user_id = Uuid::parse_str(&claims.sub).map_err(|_| AppError::InvalidCredentials)?;
+    let domain_id = Uuid::parse_str(&claims.domain_id).map_err(|_| AppError::InvalidCredentials)?;
 
     // Check user's current status from database before issuing new token
     if let Ok(Some(user)) = app_state
@@ -374,8 +372,7 @@ async fn delete_account(
             None
         }
     } else if let Some(refresh_token) = cookies.get("end_user_refresh_token") {
-        if let Ok(claims) = verify_token_with_domain_keys(&app_state, refresh_token.value()).await
-        {
+        if let Ok(claims) = verify_token_with_domain_keys(&app_state, refresh_token.value()).await {
             if claims.domain == root_domain {
                 Some(Uuid::parse_str(&claims.sub).ok())
             } else {
@@ -425,7 +422,7 @@ mod tests {
             use_cases::{api_key::ApiKeyWithRaw, domain_billing::SubscriptionClaims},
         },
         test_utils::{
-            create_test_auth_config, create_test_domain, create_test_end_user, TestAppStateBuilder,
+            TestAppStateBuilder, create_test_auth_config, create_test_domain, create_test_end_user,
         },
     };
 
@@ -510,9 +507,7 @@ mod tests {
         let app = router().with_state(app_state);
         let server = TestServer::new(app).unwrap();
 
-        let response = server
-            .get("/reauth.example.com/auth/token")
-            .await;
+        let response = server.get("/reauth.example.com/auth/token").await;
 
         assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
     }
@@ -540,12 +535,10 @@ mod tests {
         // Send access token as end_user_access_token cookie, but NO refresh token
         let response = server
             .get("/reauth.example.com/auth/token")
-            .add_cookie(
-                axum_extra::extract::cookie::Cookie::new(
-                    "end_user_access_token",
-                    access_token,
-                ),
-            )
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_access_token",
+                access_token,
+            ))
             .await;
 
         // Should be rejected because only refresh token can mint new tokens
@@ -573,12 +566,10 @@ mod tests {
 
         let response = server
             .get("/reauth.example.com/auth/token")
-            .add_cookie(
-                axum_extra::extract::cookie::Cookie::new(
-                    "end_user_refresh_token",
-                    refresh_token,
-                ),
-            )
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_refresh_token",
+                refresh_token,
+            ))
             .await;
 
         // Should be rejected because user is frozen (ACCOUNT_SUSPENDED)
@@ -609,12 +600,10 @@ mod tests {
 
         let response = server
             .get("/reauth.example.com/auth/token")
-            .add_cookie(
-                axum_extra::extract::cookie::Cookie::new(
-                    "end_user_refresh_token",
-                    refresh_token,
-                ),
-            )
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_refresh_token",
+                refresh_token,
+            ))
             .await;
 
         // Should be rejected because domain doesn't match
@@ -642,12 +631,10 @@ mod tests {
 
         let response = server
             .get("/reauth.example.com/auth/token")
-            .add_cookie(
-                axum_extra::extract::cookie::Cookie::new(
-                    "end_user_refresh_token",
-                    refresh_token,
-                ),
-            )
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_refresh_token",
+                refresh_token,
+            ))
             .await;
 
         assert_eq!(response.status_code(), StatusCode::OK);

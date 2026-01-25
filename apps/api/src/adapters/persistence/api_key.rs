@@ -5,7 +5,9 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    application::use_cases::api_key::{ApiKeyProfile, ApiKeyRepoTrait, ApiKeyWithDomain, ApiKeyWithRaw},
+    application::use_cases::api_key::{
+        ApiKeyProfile, ApiKeyRepoTrait, ApiKeyWithDomain, ApiKeyWithRaw,
+    },
     infra::crypto::ProcessCipher,
 };
 

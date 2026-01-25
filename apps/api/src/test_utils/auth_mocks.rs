@@ -81,7 +81,9 @@ impl DomainEndUserRepoTrait for InMemoryDomainEndUserRepo {
         let mut users = self.users.lock().unwrap();
 
         // Check if user exists
-        if let Some(existing) = users.values().find(|u| u.domain_id == domain_id && u.email == email)
+        if let Some(existing) = users
+            .values()
+            .find(|u| u.domain_id == domain_id && u.email == email)
         {
             return Ok(existing.clone());
         }
@@ -295,10 +297,8 @@ impl InMemoryDomainAuthConfigRepo {
     }
 
     pub fn with_configs(configs: Vec<DomainAuthConfigProfile>) -> Self {
-        let map: HashMap<Uuid, DomainAuthConfigProfile> = configs
-            .into_iter()
-            .map(|c| (c.domain_id, c))
-            .collect();
+        let map: HashMap<Uuid, DomainAuthConfigProfile> =
+            configs.into_iter().map(|c| (c.domain_id, c)).collect();
         Self {
             configs: Mutex::new(map),
         }
@@ -785,7 +785,8 @@ impl crate::application::use_cases::domain_auth::OAuthStateStoreTrait for StubOA
     async fn consume_link_confirmation(
         &self,
         _token: &str,
-    ) -> AppResult<Option<crate::application::use_cases::domain_auth::OAuthLinkConfirmationData>> {
+    ) -> AppResult<Option<crate::application::use_cases::domain_auth::OAuthLinkConfirmationData>>
+    {
         unimplemented!("not needed for token tests")
     }
 }
