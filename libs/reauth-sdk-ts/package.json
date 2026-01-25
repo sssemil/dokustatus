@@ -28,7 +28,8 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write src"
   },
   "peerDependencies": {
     "react": ">=18.0.0"
@@ -40,6 +41,7 @@
   },
   "devDependencies": {
     "@types/react": "^18.0.0",
+    "prettier": "^3.8.1",
     "react": "^18.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.0.0"

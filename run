@@ -265,6 +265,30 @@ cmd_dns_add() {
 }
 
 # ============================================================================
+# Formatting commands
+# ============================================================================
+
+cmd_fmt() {
+    echo "Formatting all code..."
+    cmd_fmt_rust
+    cmd_fmt_ts
+    echo "Done!"
+}
+
+cmd_fmt_rust() {
+    echo "Formatting Rust code..."
+    (cd apps/api && cargo clippy --fix --allow-dirty --allow-staged && cargo fmt)
+}
+
+cmd_fmt_ts() {
+    echo "Formatting TypeScript code..."
+    (cd apps/ui && npm run format)
+    (cd apps/demo_ui && npm run format)
+    (cd apps/demo_api && npm run format)
+    (cd libs/reauth-sdk-ts && npm run format)
+}
+
+# ============================================================================
 # Help
 # ============================================================================
 
@@ -308,6 +332,11 @@ Demo app:
 
 Docker:
   build          Build Docker images via build-images.sh
+
+Formatting:
+  fmt            Format all code (Rust + TypeScript)
+  fmt:rust       Format Rust code only (clippy --fix + fmt)
+  fmt:ts         Format TypeScript code only (prettier)
 
 Local TLS/DNS:
   certs          Generate local TLS certificates with mkcert
@@ -354,6 +383,9 @@ case "${1:-help}" in
     demo:install) cmd_demo_install ;;
     demo:setup)   cmd_demo_setup ;;
     build)        shift; cmd_build "$@" ;;
+    fmt)          cmd_fmt ;;
+    fmt:rust)     cmd_fmt_rust ;;
+    fmt:ts)       cmd_fmt_ts ;;
     certs)        cmd_certs ;;
     dns:add)      shift; cmd_dns_add "$@" ;;
     help)         cmd_help ;;

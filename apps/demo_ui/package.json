@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev -p 3002",
     "build": "next build",
-    "start": "next start -p 3002"
+    "start": "next start -p 3002",
+    "format": "prettier --write ."
   },
   "dependencies": {
     "@reauth/sdk": "file:../../libs/reauth-sdk-ts",
@@ -17,6 +18,7 @@
     "@types/node": "^22.10.5",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "prettier": "^3.8.1",
     "typescript": "^5.7.2"
   }
 }
