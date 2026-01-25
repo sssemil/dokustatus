@@ -12,8 +12,7 @@ use crate::{
         PaginatedPayments, PaymentListFilters, PaymentSummary,
     },
     domain::entities::{
-        payment_mode::PaymentMode, payment_provider::PaymentProvider,
-        payment_status::PaymentStatus, stripe_mode::StripeMode,
+        payment_mode::PaymentMode, payment_provider::PaymentProvider, payment_status::PaymentStatus,
     },
 };
 
@@ -21,9 +20,8 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> BillingPaymentProfile {
     BillingPaymentProfile {
         id: row.get("id"),
         domain_id: row.get("domain_id"),
-        stripe_mode: row.get("stripe_mode"),
         payment_provider: row.get::<Option<PaymentProvider>, _>("payment_provider"),
-        payment_mode: row.get::<Option<PaymentMode>, _>("payment_mode"),
+        payment_mode: row.get("payment_mode"),
         end_user_id: row.get("end_user_id"),
         subscription_id: row.get("subscription_id"),
         stripe_invoice_id: row.get("stripe_invoice_id"),
@@ -56,9 +54,8 @@ fn row_to_payment_with_user(row: sqlx::postgres::PgRow) -> BillingPaymentWithUse
         payment: BillingPaymentProfile {
             id: row.get("id"),
             domain_id: row.get("domain_id"),
-            stripe_mode: row.get("stripe_mode"),
             payment_provider: row.get::<Option<PaymentProvider>, _>("payment_provider"),
-            payment_mode: row.get::<Option<PaymentMode>, _>("payment_mode"),
+            payment_mode: row.get("payment_mode"),
             end_user_id: row.get("end_user_id"),
             subscription_id: row.get("subscription_id"),
             stripe_invoice_id: row.get("stripe_invoice_id"),
@@ -88,7 +85,7 @@ fn row_to_payment_with_user(row: sqlx::postgres::PgRow) -> BillingPaymentWithUse
 }
 
 const SELECT_COLS: &str = r#"
-    bp.id, bp.domain_id, bp.stripe_mode, bp.payment_provider, bp.payment_mode,
+    bp.id, bp.domain_id, bp.payment_provider, bp.payment_mode,
     bp.end_user_id, bp.subscription_id,
     bp.stripe_invoice_id, bp.stripe_payment_intent_id, bp.stripe_customer_id,
     bp.amount_cents, bp.amount_paid_cents, bp.amount_refunded_cents, bp.currency, bp.status,
@@ -141,7 +138,7 @@ impl BillingPaymentRepo for PostgresPersistence {
         let row = sqlx::query(&format!(
             r#"
             INSERT INTO billing_payments (
-                id, domain_id, stripe_mode, end_user_id, subscription_id,
+                id, domain_id, payment_mode, end_user_id, subscription_id,
                 stripe_invoice_id, stripe_payment_intent_id, stripe_customer_id,
                 amount_cents, amount_paid_cents, currency, status,
                 plan_id, plan_code, plan_name,
@@ -149,7 +146,7 @@ impl BillingPaymentRepo for PostgresPersistence {
                 failure_message, invoice_created_at, payment_date
             )
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
-            ON CONFLICT (domain_id, stripe_mode, stripe_invoice_id) DO UPDATE SET
+            ON CONFLICT (domain_id, payment_mode, stripe_invoice_id) DO UPDATE SET
                 stripe_payment_intent_id = COALESCE(EXCLUDED.stripe_payment_intent_id, billing_payments.stripe_payment_intent_id),
                 amount_cents = EXCLUDED.amount_cents,
                 amount_paid_cents = EXCLUDED.amount_paid_cents,
@@ -171,7 +168,7 @@ impl BillingPaymentRepo for PostgresPersistence {
         ))
         .bind(id)
         .bind(input.domain_id)
-        .bind(input.stripe_mode)
+        .bind(input.payment_mode)
         .bind(input.end_user_id)
         .bind(input.subscription_id)
         .bind(&input.stripe_invoice_id)
@@ -217,7 +214,7 @@ impl BillingPaymentRepo for PostgresPersistence {
     async fn list_by_user(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         end_user_id: Uuid,
         page: i32,
         per_page: i32,
@@ -226,7 +223,7 @@ impl BillingPaymentRepo for PostgresPersistence {
 
         // Get total count
         let total: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM billing_payments WHERE domain_id = $1 AND stripe_mode = $2 AND end_user_id = $3",
+            "SELECT COUNT(*) FROM billing_payments WHERE domain_id = $1 AND payment_mode = $2 AND end_user_id = $3",
         )
         .bind(domain_id)
         .bind(mode)
@@ -241,7 +238,7 @@ impl BillingPaymentRepo for PostgresPersistence {
             SELECT {}, deu.email as user_email
             FROM billing_payments bp
             JOIN domain_end_users deu ON bp.end_user_id = deu.id
-            WHERE bp.domain_id = $1 AND bp.stripe_mode = $2 AND bp.end_user_id = $3
+            WHERE bp.domain_id = $1 AND bp.payment_mode = $2 AND bp.end_user_id = $3
             ORDER BY bp.payment_date DESC NULLS LAST, bp.created_at DESC
             LIMIT $4 OFFSET $5
             "#,
@@ -272,7 +269,7 @@ impl BillingPaymentRepo for PostgresPersistence {
     async fn list_by_domain(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         filters: &PaymentListFilters,
         page: i32,
         per_page: i32,
@@ -286,7 +283,9 @@ impl BillingPaymentRepo for PostgresPersistence {
              WHERE bp.domain_id = ",
         );
         count_builder.push_bind(domain_id);
-        count_builder.push(" AND bp.stripe_mode = ").push_bind(mode);
+        count_builder
+            .push(" AND bp.payment_mode = ")
+            .push_bind(mode);
         push_payment_filters(&mut count_builder, filters);
 
         let total: i64 = count_builder
@@ -304,7 +303,7 @@ impl BillingPaymentRepo for PostgresPersistence {
             SELECT_COLS
         ));
         data_builder.push_bind(domain_id);
-        data_builder.push(" AND bp.stripe_mode = ").push_bind(mode);
+        data_builder.push(" AND bp.payment_mode = ").push_bind(mode);
         push_payment_filters(&mut data_builder, filters);
         data_builder.push(" ORDER BY bp.payment_date DESC NULLS LAST, bp.created_at DESC");
         data_builder.push(" LIMIT ").push_bind(per_page);
@@ -404,7 +403,7 @@ impl BillingPaymentRepo for PostgresPersistence {
     async fn get_payment_summary(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         date_from: Option<NaiveDateTime>,
         date_to: Option<NaiveDateTime>,
     ) -> AppResult<PaymentSummary> {
@@ -420,7 +419,7 @@ impl BillingPaymentRepo for PostgresPersistence {
         );
 
         builder.push_bind(domain_id);
-        builder.push(" AND stripe_mode = ").push_bind(mode);
+        builder.push(" AND payment_mode = ").push_bind(mode);
 
         if let Some(df) = &date_from {
             builder.push(" AND (payment_date >= ").push_bind(*df);
@@ -451,7 +450,7 @@ impl BillingPaymentRepo for PostgresPersistence {
     async fn list_all_for_export(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         filters: &PaymentListFilters,
     ) -> AppResult<Vec<BillingPaymentWithUser>> {
         let mut builder: QueryBuilder<Postgres> = QueryBuilder::new(format!(
@@ -463,7 +462,7 @@ impl BillingPaymentRepo for PostgresPersistence {
         ));
 
         builder.push_bind(domain_id);
-        builder.push(" AND bp.stripe_mode = ").push_bind(mode);
+        builder.push(" AND bp.payment_mode = ").push_bind(mode);
         push_payment_filters(&mut builder, filters);
         builder.push(" ORDER BY bp.payment_date DESC NULLS LAST, bp.created_at DESC");
 

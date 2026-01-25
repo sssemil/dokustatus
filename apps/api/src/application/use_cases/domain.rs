@@ -8,9 +8,8 @@ use uuid::Uuid;
 use crate::app_error::{AppError, AppResult};
 use crate::application::helpers::domain_parsing::is_root_domain;
 use crate::domain::entities::domain::DomainStatus;
-use crate::domain::entities::stripe_mode::StripeMode;
+use crate::domain::entities::payment_mode::PaymentMode;
 
-// Re-export for backwards compatibility with existing code that imports from here
 pub use crate::application::helpers::domain_parsing::extract_root_from_reauth_hostname;
 
 #[async_trait]
@@ -25,11 +24,11 @@ pub trait DomainRepo: Send + Sync {
     async fn set_failed(&self, domain_id: Uuid) -> AppResult<DomainProfile>;
     async fn delete(&self, domain_id: Uuid) -> AppResult<()>;
     async fn get_verifying_domains(&self) -> AppResult<Vec<DomainProfile>>;
-    /// Set the active Stripe billing mode for a domain
-    async fn set_billing_stripe_mode(
+    /// Set the active payment mode for a domain
+    async fn set_active_payment_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<DomainProfile>;
 }
 
@@ -205,7 +204,7 @@ pub struct DomainProfile {
     pub owner_end_user_id: Option<Uuid>, // NULL for system domains like reauth.dev
     pub domain: String,
     pub status: DomainStatus,
-    pub billing_stripe_mode: StripeMode, // Active Stripe mode for billing (test or live)
+    pub active_payment_mode: PaymentMode,
     pub verification_started_at: Option<NaiveDateTime>,
     pub verified_at: Option<NaiveDateTime>,
     pub created_at: Option<NaiveDateTime>,

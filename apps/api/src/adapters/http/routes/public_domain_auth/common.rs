@@ -20,7 +20,7 @@ pub use crate::app_error::{AppError, AppResult};
 pub use crate::application::jwt;
 pub use crate::application::use_cases::domain::extract_root_from_reauth_hostname;
 pub use crate::application::use_cases::domain_billing::SubscriptionClaims;
-pub use crate::domain::entities::stripe_mode::StripeMode;
+pub use crate::domain::entities::payment_mode::PaymentMode;
 
 /// Appends a cookie to the headers, handling parse errors gracefully
 pub(crate) fn append_cookie(headers: &mut HeaderMap, cookie: Cookie<'_>) -> Result<(), AppError> {

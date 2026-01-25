@@ -141,7 +141,7 @@ async fn create_dummy_checkout(
                 .billing_use_cases
                 .create_or_update_subscription(&CreateSubscriptionInput {
                     domain_id,
-                    stripe_mode: StripeMode::Test,
+                    payment_mode: PaymentMode::Test,
                     end_user_id: user_id,
                     plan_id: plan.id,
                     stripe_customer_id: format!("dummy_cus_{}", user_id),
@@ -271,7 +271,7 @@ async fn confirm_dummy_checkout(
         .billing_use_cases
         .create_or_update_subscription(&CreateSubscriptionInput {
             domain_id,
-            stripe_mode: StripeMode::Test,
+            payment_mode: PaymentMode::Test,
             end_user_id: user_id,
             plan_id: plan.id,
             stripe_customer_id: format!("dummy_cus_{}", user_id),

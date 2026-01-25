@@ -6,14 +6,14 @@ use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
     application::use_cases::domain_billing::{BillingStripeConfigProfile, BillingStripeConfigRepo},
-    domain::entities::stripe_mode::StripeMode,
+    domain::entities::payment_mode::PaymentMode,
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> BillingStripeConfigProfile {
     BillingStripeConfigProfile {
         id: row.get("id"),
         domain_id: row.get("domain_id"),
-        stripe_mode: row.get("stripe_mode"),
+        payment_mode: row.get("payment_mode"),
         stripe_secret_key_encrypted: row.get("stripe_secret_key_encrypted"),
         stripe_publishable_key: row.get("stripe_publishable_key"),
         stripe_webhook_secret_encrypted: row.get("stripe_webhook_secret_encrypted"),
@@ -27,14 +27,14 @@ impl BillingStripeConfigRepo for PostgresPersistence {
     async fn get_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<Option<BillingStripeConfigProfile>> {
         let row = sqlx::query(
             r#"
-            SELECT id, domain_id, stripe_mode, stripe_secret_key_encrypted, stripe_publishable_key,
+            SELECT id, domain_id, payment_mode, stripe_secret_key_encrypted, stripe_publishable_key,
                    stripe_webhook_secret_encrypted, created_at, updated_at
             FROM domain_billing_stripe_config
-            WHERE domain_id = $1 AND stripe_mode = $2
+            WHERE domain_id = $1 AND payment_mode = $2
             "#,
         )
         .bind(domain_id)
@@ -48,11 +48,11 @@ impl BillingStripeConfigRepo for PostgresPersistence {
     async fn list_by_domain(&self, domain_id: Uuid) -> AppResult<Vec<BillingStripeConfigProfile>> {
         let rows = sqlx::query(
             r#"
-            SELECT id, domain_id, stripe_mode, stripe_secret_key_encrypted, stripe_publishable_key,
+            SELECT id, domain_id, payment_mode, stripe_secret_key_encrypted, stripe_publishable_key,
                    stripe_webhook_secret_encrypted, created_at, updated_at
             FROM domain_billing_stripe_config
             WHERE domain_id = $1
-            ORDER BY stripe_mode
+            ORDER BY payment_mode
             "#,
         )
         .bind(domain_id)
@@ -65,7 +65,7 @@ impl BillingStripeConfigRepo for PostgresPersistence {
     async fn upsert(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         stripe_secret_key_encrypted: &str,
         stripe_publishable_key: &str,
         stripe_webhook_secret_encrypted: &str,
@@ -74,14 +74,14 @@ impl BillingStripeConfigRepo for PostgresPersistence {
         let row = sqlx::query(
             r#"
             INSERT INTO domain_billing_stripe_config
-                (id, domain_id, stripe_mode, stripe_secret_key_encrypted, stripe_publishable_key, stripe_webhook_secret_encrypted)
+                (id, domain_id, payment_mode, stripe_secret_key_encrypted, stripe_publishable_key, stripe_webhook_secret_encrypted)
             VALUES ($1, $2, $3, $4, $5, $6)
-            ON CONFLICT (domain_id, stripe_mode) DO UPDATE SET
+            ON CONFLICT (domain_id, payment_mode) DO UPDATE SET
                 stripe_secret_key_encrypted = EXCLUDED.stripe_secret_key_encrypted,
                 stripe_publishable_key = EXCLUDED.stripe_publishable_key,
                 stripe_webhook_secret_encrypted = EXCLUDED.stripe_webhook_secret_encrypted,
                 updated_at = CURRENT_TIMESTAMP
-            RETURNING id, domain_id, stripe_mode, stripe_secret_key_encrypted, stripe_publishable_key,
+            RETURNING id, domain_id, payment_mode, stripe_secret_key_encrypted, stripe_publishable_key,
                       stripe_webhook_secret_encrypted, created_at, updated_at
             "#,
         )
@@ -97,9 +97,9 @@ impl BillingStripeConfigRepo for PostgresPersistence {
         Ok(row_to_profile(row))
     }
 
-    async fn delete(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<()> {
+    async fn delete(&self, domain_id: Uuid, mode: PaymentMode) -> AppResult<()> {
         sqlx::query(
-            "DELETE FROM domain_billing_stripe_config WHERE domain_id = $1 AND stripe_mode = $2",
+            "DELETE FROM domain_billing_stripe_config WHERE domain_id = $1 AND payment_mode = $2",
         )
         .bind(domain_id)
         .bind(mode)

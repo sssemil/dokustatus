@@ -10,7 +10,6 @@ use crate::{
     },
     domain::entities::payment_mode::PaymentMode,
     domain::entities::payment_provider::PaymentProvider,
-    domain::entities::stripe_mode::StripeMode,
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> SubscriptionPlanProfile {
@@ -26,9 +25,8 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> SubscriptionPlanProfile {
     SubscriptionPlanProfile {
         id,
         domain_id: row.get("domain_id"),
-        stripe_mode: row.get("stripe_mode"),
         payment_provider: row.get::<Option<PaymentProvider>, _>("payment_provider"),
-        payment_mode: row.get::<Option<PaymentMode>, _>("payment_mode"),
+        payment_mode: row.get("payment_mode"),
         code: row.get("code"),
         name: row.get("name"),
         description: row.get("description"),
@@ -50,7 +48,7 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> SubscriptionPlanProfile {
 }
 
 const SELECT_COLS: &str = r#"
-    id, domain_id, stripe_mode, payment_provider, payment_mode,
+    id, domain_id, payment_provider, payment_mode,
     code, name, description, price_cents, currency,
     interval, interval_count, trial_days, features, is_public, display_order,
     stripe_product_id, stripe_price_id, is_archived, archived_at, created_at, updated_at
@@ -73,11 +71,11 @@ impl SubscriptionPlanRepo for PostgresPersistence {
     async fn get_by_domain_and_code(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         code: &str,
     ) -> AppResult<Option<SubscriptionPlanProfile>> {
         let row = sqlx::query(&format!(
-            "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND stripe_mode = $2 AND code = $3",
+            "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND payment_mode = $2 AND code = $3",
             SELECT_COLS
         ))
         .bind(domain_id)
@@ -92,17 +90,17 @@ impl SubscriptionPlanRepo for PostgresPersistence {
     async fn list_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         include_archived: bool,
     ) -> AppResult<Vec<SubscriptionPlanProfile>> {
         let query = if include_archived {
             format!(
-                "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND stripe_mode = $2 ORDER BY display_order, created_at",
+                "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND payment_mode = $2 ORDER BY display_order, created_at",
                 SELECT_COLS
             )
         } else {
             format!(
-                "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND stripe_mode = $2 AND is_archived = false ORDER BY display_order, created_at",
+                "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND payment_mode = $2 AND is_archived = false ORDER BY display_order, created_at",
                 SELECT_COLS
             )
         };
@@ -118,10 +116,10 @@ impl SubscriptionPlanRepo for PostgresPersistence {
     async fn list_public_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<Vec<SubscriptionPlanProfile>> {
         let rows = sqlx::query(&format!(
-            "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND stripe_mode = $2 AND is_public = true AND is_archived = false ORDER BY display_order, created_at",
+            "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND payment_mode = $2 AND is_public = true AND is_archived = false ORDER BY display_order, created_at",
             SELECT_COLS
         ))
         .bind(domain_id)
@@ -135,7 +133,7 @@ impl SubscriptionPlanRepo for PostgresPersistence {
     async fn create(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         input: &CreatePlanInput,
     ) -> AppResult<SubscriptionPlanProfile> {
         let id = Uuid::new_v4();
@@ -146,7 +144,7 @@ impl SubscriptionPlanRepo for PostgresPersistence {
 
         // Get max display_order for this domain and mode
         let max_order: Option<i32> = sqlx::query_scalar(
-            "SELECT MAX(display_order) FROM subscription_plans WHERE domain_id = $1 AND stripe_mode = $2"
+            "SELECT MAX(display_order) FROM subscription_plans WHERE domain_id = $1 AND payment_mode = $2"
         )
         .bind(domain_id)
         .bind(mode)
@@ -158,7 +156,7 @@ impl SubscriptionPlanRepo for PostgresPersistence {
         let row = sqlx::query(&format!(
             r#"
             INSERT INTO subscription_plans
-                (id, domain_id, stripe_mode, code, name, description, price_cents, currency,
+                (id, domain_id, payment_mode, code, name, description, price_cents, currency,
                  interval, interval_count, trial_days, features, is_public, display_order)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
             RETURNING {}
@@ -289,9 +287,9 @@ impl SubscriptionPlanRepo for PostgresPersistence {
         Ok(count)
     }
 
-    async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<i64> {
+    async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: PaymentMode) -> AppResult<i64> {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM subscription_plans WHERE domain_id = $1 AND stripe_mode = $2",
+            "SELECT COUNT(*) FROM subscription_plans WHERE domain_id = $1 AND payment_mode = $2",
         )
         .bind(domain_id)
         .bind(mode)
@@ -304,12 +302,12 @@ impl SubscriptionPlanRepo for PostgresPersistence {
     async fn get_by_stripe_price_id(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         stripe_price_id: &str,
     ) -> AppResult<Option<SubscriptionPlanProfile>> {
         // Search ALL plans in the mode (including archived) to handle plans whose visibility changed after purchase
         let row = sqlx::query(&format!(
-            "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND stripe_mode = $2 AND stripe_price_id = $3",
+            "SELECT {} FROM subscription_plans WHERE domain_id = $1 AND payment_mode = $2 AND stripe_price_id = $3",
             SELECT_COLS
         ))
         .bind(domain_id)

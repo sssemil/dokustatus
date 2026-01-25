@@ -77,7 +77,7 @@ async fn handle_webhook_test(
     headers: HeaderMap,
     body: String,
 ) -> AppResult<impl IntoResponse> {
-    handle_webhook_for_mode(state, path, headers, body, StripeMode::Test).await
+    handle_webhook_for_mode(state, path, headers, body, PaymentMode::Test).await
 }
 
 /// POST /api/public/domain/{domain}/billing/webhook/live
@@ -88,7 +88,7 @@ async fn handle_webhook_live(
     headers: HeaderMap,
     body: String,
 ) -> AppResult<impl IntoResponse> {
-    handle_webhook_for_mode(state, path, headers, body, StripeMode::Live).await
+    handle_webhook_for_mode(state, path, headers, body, PaymentMode::Live).await
 }
 
 /// Internal webhook handler that processes events for a specific mode
@@ -97,7 +97,7 @@ async fn handle_webhook_for_mode(
     Path(hostname): Path<String>,
     headers: HeaderMap,
     body: String,
-    stripe_mode: StripeMode,
+    payment_mode: PaymentMode,
 ) -> AppResult<impl IntoResponse> {
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
@@ -111,7 +111,7 @@ async fn handle_webhook_for_mode(
     // Get webhook secret for the specific mode
     let webhook_secret = app_state
         .billing_use_cases
-        .get_stripe_webhook_secret_for_mode(domain.id, stripe_mode)
+        .get_stripe_webhook_secret_for_mode(domain.id, payment_mode)
         .await?;
 
     // Get Stripe signature
@@ -146,7 +146,7 @@ async fn handle_webhook_for_mode(
                 &app_state,
                 &event,
                 &domain,
-                stripe_mode,
+                payment_mode,
                 event_type,
                 event_id,
             )
@@ -157,7 +157,7 @@ async fn handle_webhook_for_mode(
                 &app_state,
                 &event,
                 &domain,
-                stripe_mode,
+                payment_mode,
                 event_type,
                 event_id,
             )
@@ -174,7 +174,7 @@ async fn handle_webhook_for_mode(
                 &app_state,
                 &event,
                 &domain,
-                stripe_mode,
+                payment_mode,
                 event_type,
                 event_id,
             )
@@ -185,7 +185,7 @@ async fn handle_webhook_for_mode(
                 &app_state,
                 &event,
                 &domain,
-                stripe_mode,
+                payment_mode,
                 event_type,
                 event_id,
             )
@@ -270,7 +270,7 @@ async fn handle_checkout_session_completed(
     app_state: &AppState,
     event: &serde_json::Value,
     domain: &crate::application::use_cases::domain::DomainProfile,
-    stripe_mode: StripeMode,
+    payment_mode: PaymentMode,
     event_type: &str,
     event_id: &str,
 ) -> AppResult<()> {
@@ -335,7 +335,7 @@ async fn handle_checkout_session_completed(
     // because plan visibility can change after purchase
     let plan = match app_state
         .billing_use_cases
-        .get_plan_by_stripe_price_id(domain.id, stripe_mode, &stripe_sub.price_id())
+        .get_plan_by_stripe_price_id(domain.id, payment_mode, &stripe_sub.price_id())
         .await
     {
         Ok(Some(p)) => p,
@@ -381,7 +381,7 @@ async fn handle_checkout_session_completed(
 
     let input = CreateSubscriptionInput {
         domain_id: domain.id,
-        stripe_mode,
+        payment_mode,
         end_user_id: user_id,
         plan_id: plan.id,
         stripe_customer_id: customer_id.to_string(),
@@ -452,7 +452,7 @@ async fn handle_subscription_update(
     app_state: &AppState,
     event: &serde_json::Value,
     domain: &crate::application::use_cases::domain::DomainProfile,
-    stripe_mode: StripeMode,
+    payment_mode: PaymentMode,
     event_type: &str,
     event_id: &str,
 ) -> AppResult<()> {
@@ -484,7 +484,7 @@ async fn handle_subscription_update(
     let plan_id = if let Some(price_id) = stripe_price_id {
         app_state
             .billing_use_cases
-            .get_plan_by_stripe_price_id(domain.id, stripe_mode, price_id)
+            .get_plan_by_stripe_price_id(domain.id, payment_mode, price_id)
             .await
             .ok()
             .flatten()
@@ -564,7 +564,7 @@ async fn handle_invoice_sync(
     app_state: &AppState,
     event: &serde_json::Value,
     domain: &crate::application::use_cases::domain::DomainProfile,
-    stripe_mode: StripeMode,
+    payment_mode: PaymentMode,
     event_type: &str,
     event_id: &str,
 ) -> AppResult<()> {
@@ -573,7 +573,7 @@ async fn handle_invoice_sync(
     // Try to sync the invoice to our payments table
     match app_state
         .billing_use_cases
-        .sync_invoice_from_webhook(domain.id, stripe_mode, invoice)
+        .sync_invoice_from_webhook(domain.id, payment_mode, invoice)
         .await
     {
         Ok(_payment) => {
@@ -604,7 +604,7 @@ async fn handle_invoice_payment_failed(
     app_state: &AppState,
     event: &serde_json::Value,
     domain: &crate::application::use_cases::domain::DomainProfile,
-    stripe_mode: StripeMode,
+    payment_mode: PaymentMode,
     event_type: &str,
     event_id: &str,
 ) -> AppResult<()> {
@@ -614,7 +614,7 @@ async fn handle_invoice_payment_failed(
     // First try to sync/create the invoice
     let _ = app_state
         .billing_use_cases
-        .sync_invoice_from_webhook(domain.id, stripe_mode, invoice)
+        .sync_invoice_from_webhook(domain.id, payment_mode, invoice)
         .await;
 
     // Extract failure message from the invoice

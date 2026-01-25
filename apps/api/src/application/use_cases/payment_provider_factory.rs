@@ -80,17 +80,10 @@ impl PaymentProviderFactory {
         domain_id: Uuid,
         mode: PaymentMode,
     ) -> AppResult<Arc<dyn PaymentProviderPort>> {
-        // Convert PaymentMode to StripeMode for the existing repo
-        // This is temporary until we migrate the repo to use PaymentMode
-        let stripe_mode = match mode {
-            PaymentMode::Test => crate::domain::entities::stripe_mode::StripeMode::Test,
-            PaymentMode::Live => crate::domain::entities::stripe_mode::StripeMode::Live,
-        };
-
         // Fetch the Stripe configuration
         let config = self
             .config_repo
-            .get_by_domain_and_mode(domain_id, stripe_mode)
+            .get_by_domain_and_mode(domain_id, mode)
             .await?
             .ok_or(AppError::ProviderNotConfigured)?;
 
@@ -115,13 +108,9 @@ impl PaymentProviderFactory {
                 Ok(provider.supports_mode(mode))
             }
             PaymentProvider::Stripe => {
-                let stripe_mode = match mode {
-                    PaymentMode::Test => crate::domain::entities::stripe_mode::StripeMode::Test,
-                    PaymentMode::Live => crate::domain::entities::stripe_mode::StripeMode::Live,
-                };
                 let config = self
                     .config_repo
-                    .get_by_domain_and_mode(domain_id, stripe_mode)
+                    .get_by_domain_and_mode(domain_id, mode)
                     .await?;
                 Ok(config.is_some())
             }

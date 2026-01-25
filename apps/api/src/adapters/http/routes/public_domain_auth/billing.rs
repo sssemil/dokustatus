@@ -81,7 +81,7 @@ struct PaymentResponse {
     currency: String,
     status: String,
     payment_provider: Option<PaymentProvider>,
-    payment_mode: Option<PaymentMode>,
+    payment_mode: PaymentMode,
     plan_name: Option<String>,
     plan_code: Option<String>,
     invoice_url: Option<String>,

@@ -1036,12 +1036,10 @@ async fn set_user_roles(
 // Billing Endpoints
 // ============================================================================
 
-use crate::domain::entities::stripe_mode::StripeMode;
-
 /// Response for GET /billing/config - returns status of both modes
 #[derive(Serialize)]
 struct BillingConfigStatusResponse {
-    active_mode: StripeMode,
+    active_mode: PaymentMode,
     test: Option<ModeConfigStatusResponse>,
     live: Option<ModeConfigStatusResponse>,
 }
@@ -1079,7 +1077,7 @@ async fn get_billing_config(
 
 #[derive(Deserialize)]
 struct UpdateBillingConfigPayload {
-    mode: StripeMode,
+    mode: PaymentMode,
     secret_key: String,
     publishable_key: String,
     webhook_secret: String,
@@ -1113,7 +1111,7 @@ async fn update_billing_config(
 
 #[derive(Deserialize)]
 struct DeleteBillingConfigPayload {
-    mode: StripeMode,
+    mode: PaymentMode,
 }
 
 async fn delete_billing_config(
@@ -1132,15 +1130,15 @@ async fn delete_billing_config(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// Set the active Stripe mode for a domain
+/// Set the active payment mode for a domain
 #[derive(Deserialize)]
 struct SetBillingModePayload {
-    mode: StripeMode,
+    mode: PaymentMode,
 }
 
 #[derive(Serialize)]
 struct SetBillingModeResponse {
-    active_mode: StripeMode,
+    active_mode: PaymentMode,
 }
 
 async fn set_billing_mode(

@@ -12,7 +12,6 @@ use crate::{
     domain::entities::billing_state::BillingState,
     domain::entities::payment_mode::PaymentMode,
     domain::entities::payment_provider::PaymentProvider,
-    domain::entities::stripe_mode::StripeMode,
     domain::entities::user_subscription::SubscriptionStatus,
 };
 
@@ -20,9 +19,8 @@ fn row_to_profile(row: &sqlx::postgres::PgRow) -> UserSubscriptionProfile {
     UserSubscriptionProfile {
         id: row.get("id"),
         domain_id: row.get("domain_id"),
-        stripe_mode: row.get("stripe_mode"),
         payment_provider: row.get::<Option<PaymentProvider>, _>("payment_provider"),
-        payment_mode: row.get::<Option<PaymentMode>, _>("payment_mode"),
+        payment_mode: row.get("payment_mode"),
         billing_state: row.get::<Option<BillingState>, _>("billing_state"),
         end_user_id: row.get("end_user_id"),
         plan_id: row.get("plan_id"),
@@ -44,7 +42,7 @@ fn row_to_profile(row: &sqlx::postgres::PgRow) -> UserSubscriptionProfile {
 }
 
 const SELECT_COLS: &str = r#"
-    id, domain_id, stripe_mode, payment_provider, payment_mode, billing_state,
+    id, domain_id, payment_provider, payment_mode, billing_state,
     end_user_id, plan_id, status, stripe_customer_id, stripe_subscription_id,
     current_period_start, current_period_end, trial_start, trial_end,
     cancel_at_period_end, canceled_at, manually_granted, granted_by, granted_at,
@@ -68,11 +66,11 @@ impl UserSubscriptionRepo for PostgresPersistence {
     async fn get_by_user_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         end_user_id: Uuid,
     ) -> AppResult<Option<UserSubscriptionProfile>> {
         let row = sqlx::query(&format!(
-            "SELECT {} FROM user_subscriptions WHERE domain_id = $1 AND stripe_mode = $2 AND end_user_id = $3",
+            "SELECT {} FROM user_subscriptions WHERE domain_id = $1 AND payment_mode = $2 AND end_user_id = $3",
             SELECT_COLS
         ))
         .bind(domain_id)
@@ -102,11 +100,11 @@ impl UserSubscriptionRepo for PostgresPersistence {
     async fn get_by_stripe_customer_id(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         stripe_customer_id: &str,
     ) -> AppResult<Option<UserSubscriptionProfile>> {
         let row = sqlx::query(&format!(
-            "SELECT {} FROM user_subscriptions WHERE domain_id = $1 AND stripe_mode = $2 AND stripe_customer_id = $3",
+            "SELECT {} FROM user_subscriptions WHERE domain_id = $1 AND payment_mode = $2 AND stripe_customer_id = $3",
             SELECT_COLS
         ))
         .bind(domain_id)
@@ -121,17 +119,17 @@ impl UserSubscriptionRepo for PostgresPersistence {
     async fn list_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<Vec<UserSubscriptionWithPlan>> {
         let rows = sqlx::query(
             r#"
             SELECT
-                s.id, s.domain_id, s.stripe_mode, s.payment_provider, s.payment_mode, s.billing_state,
+                s.id, s.domain_id, s.payment_provider, s.payment_mode, s.billing_state,
                 s.end_user_id, s.plan_id, s.status, s.stripe_customer_id, s.stripe_subscription_id,
                 s.current_period_start, s.current_period_end, s.trial_start, s.trial_end,
                 s.cancel_at_period_end, s.canceled_at, s.manually_granted, s.granted_by, s.granted_at,
                 s.created_at, s.updated_at,
-                p.id as p_id, p.domain_id as p_domain_id, p.stripe_mode as p_stripe_mode,
+                p.id as p_id, p.domain_id as p_domain_id,
                 p.payment_provider as p_payment_provider, p.payment_mode as p_payment_mode,
                 p.code as p_code, p.name as p_name,
                 p.description as p_description, p.price_cents as p_price_cents, p.currency as p_currency,
@@ -144,7 +142,7 @@ impl UserSubscriptionRepo for PostgresPersistence {
             FROM user_subscriptions s
             JOIN subscription_plans p ON s.plan_id = p.id
             JOIN domain_end_users u ON s.end_user_id = u.id
-            WHERE s.domain_id = $1 AND s.stripe_mode = $2
+            WHERE s.domain_id = $1 AND s.payment_mode = $2
             ORDER BY s.created_at DESC
             "#
         )
@@ -171,10 +169,9 @@ impl UserSubscriptionRepo for PostgresPersistence {
                     plan: SubscriptionPlanProfile {
                         id: plan_id,
                         domain_id: row.get("p_domain_id"),
-                        stripe_mode: row.get("p_stripe_mode"),
                         payment_provider: row
                             .get::<Option<PaymentProvider>, _>("p_payment_provider"),
-                        payment_mode: row.get::<Option<PaymentMode>, _>("p_payment_mode"),
+                        payment_mode: row.get("p_payment_mode"),
                         code: row.get("p_code"),
                         name: row.get("p_name"),
                         description: row.get("p_description"),
@@ -216,7 +213,7 @@ impl UserSubscriptionRepo for PostgresPersistence {
         let row = sqlx::query(&format!(
             r#"
             INSERT INTO user_subscriptions
-                (id, domain_id, stripe_mode, end_user_id, plan_id, status, stripe_customer_id, stripe_subscription_id,
+                (id, domain_id, payment_mode, end_user_id, plan_id, status, stripe_customer_id, stripe_subscription_id,
                  current_period_start, current_period_end, trial_start, trial_end)
             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
             RETURNING {}
@@ -225,7 +222,7 @@ impl UserSubscriptionRepo for PostgresPersistence {
         ))
         .bind(id)
         .bind(input.domain_id)
-        .bind(input.stripe_mode)
+        .bind(input.payment_mode)
         .bind(input.end_user_id)
         .bind(input.plan_id)
         .bind(input.status)
@@ -295,7 +292,7 @@ impl UserSubscriptionRepo for PostgresPersistence {
     async fn grant_manually(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         end_user_id: Uuid,
         plan_id: Uuid,
         granted_by: Uuid,
@@ -305,10 +302,10 @@ impl UserSubscriptionRepo for PostgresPersistence {
         let row = sqlx::query(&format!(
             r#"
             INSERT INTO user_subscriptions
-                (id, domain_id, stripe_mode, end_user_id, plan_id, status, stripe_customer_id,
+                (id, domain_id, payment_mode, end_user_id, plan_id, status, stripe_customer_id,
                  manually_granted, granted_by, granted_at)
             VALUES ($1, $2, $3, $4, $5, 'active', $6, true, $7, CURRENT_TIMESTAMP)
-            ON CONFLICT (domain_id, stripe_mode, end_user_id) DO UPDATE SET
+            ON CONFLICT (domain_id, payment_mode, end_user_id) DO UPDATE SET
                 plan_id = EXCLUDED.plan_id,
                 status = 'active',
                 manually_granted = true,
@@ -363,10 +360,10 @@ impl UserSubscriptionRepo for PostgresPersistence {
     async fn count_active_by_domain_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
     ) -> AppResult<i64> {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM user_subscriptions WHERE domain_id = $1 AND stripe_mode = $2 AND status IN ('active', 'trialing')"
+            "SELECT COUNT(*) FROM user_subscriptions WHERE domain_id = $1 AND payment_mode = $2 AND status IN ('active', 'trialing')"
         )
         .bind(domain_id)
         .bind(mode)
@@ -379,11 +376,11 @@ impl UserSubscriptionRepo for PostgresPersistence {
     async fn count_by_status_and_mode(
         &self,
         domain_id: Uuid,
-        mode: StripeMode,
+        mode: PaymentMode,
         status: SubscriptionStatus,
     ) -> AppResult<i64> {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM user_subscriptions WHERE domain_id = $1 AND stripe_mode = $2 AND status = $3"
+            "SELECT COUNT(*) FROM user_subscriptions WHERE domain_id = $1 AND payment_mode = $2 AND status = $3"
         )
         .bind(domain_id)
         .bind(mode)
@@ -394,9 +391,9 @@ impl UserSubscriptionRepo for PostgresPersistence {
         Ok(count)
     }
 
-    async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: StripeMode) -> AppResult<i64> {
+    async fn count_by_domain_and_mode(&self, domain_id: Uuid, mode: PaymentMode) -> AppResult<i64> {
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM user_subscriptions WHERE domain_id = $1 AND stripe_mode = $2",
+            "SELECT COUNT(*) FROM user_subscriptions WHERE domain_id = $1 AND payment_mode = $2",
         )
         .bind(domain_id)
         .bind(mode)

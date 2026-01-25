@@ -11,6 +11,5 @@ pub mod payment_mode;
 pub mod payment_provider;
 pub mod payment_scenario;
 pub mod payment_status;
-pub mod stripe_mode;
 pub mod subscription_plan;
 pub mod user_subscription;
