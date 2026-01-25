@@ -650,4 +650,410 @@ mod tests {
         let parts: Vec<&str> = access_token.split('.').collect();
         assert_eq!(parts.len(), 3, "Token should be a valid JWT with 3 parts");
     }
+
+    // ========================================================================
+    // GET /auth/session Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn check_session_returns_invalid_without_tokens() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.get("/reauth.example.com/auth/session").await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let body: serde_json::Value = response.json();
+        assert_eq!(body.get("valid").unwrap(), false);
+        assert!(body.get("end_user_id").unwrap().is_null());
+        assert!(body.get("email").unwrap().is_null());
+    }
+
+    #[tokio::test]
+    async fn check_session_returns_valid_with_access_token() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.email = "alice@example.com".to_string();
+            u.is_frozen = false;
+            u.is_whitelisted = true;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let access_token = create_access_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/auth/session")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_access_token",
+                access_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let body: serde_json::Value = response.json();
+        assert_eq!(body.get("valid").unwrap(), true);
+        assert_eq!(
+            body.get("end_user_id").unwrap().as_str().unwrap(),
+            user_id.to_string()
+        );
+        assert_eq!(
+            body.get("email").unwrap().as_str().unwrap(),
+            "alice@example.com"
+        );
+    }
+
+    #[tokio::test]
+    async fn check_session_returns_suspended_for_frozen_user() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.email = "alice@example.com".to_string();
+            u.is_frozen = true;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let access_token = create_access_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/auth/session")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_access_token",
+                access_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let body: serde_json::Value = response.json();
+        assert_eq!(body.get("valid").unwrap(), false);
+        assert_eq!(body.get("error_code").unwrap(), "ACCOUNT_SUSPENDED");
+    }
+
+    #[tokio::test]
+    async fn check_session_returns_invalid_for_wrong_domain_token() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = false;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        // Create token for different domain
+        let wrong_domain_id = Uuid::new_v4();
+        let access_token = create_access_token(user_id, wrong_domain_id, "other.com", api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/auth/session")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_access_token",
+                access_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let body: serde_json::Value = response.json();
+        assert_eq!(body.get("valid").unwrap(), false);
+    }
+
+    // ========================================================================
+    // POST /auth/refresh Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn refresh_token_rejects_request_without_refresh_cookie() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.post("/reauth.example.com/auth/refresh").await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_rejects_frozen_user() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = true;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let refresh_token = create_refresh_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/auth/refresh")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_refresh_token",
+                refresh_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_rejects_wrong_domain_token() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = false;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let wrong_domain_id = Uuid::new_v4();
+        let refresh_token =
+            create_refresh_token(user_id, wrong_domain_id, "other.com", api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/auth/refresh")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_refresh_token",
+                refresh_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn refresh_token_sets_new_access_cookie() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = false;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let refresh_token = create_refresh_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/auth/refresh")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_refresh_token",
+                refresh_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        // Check that a set-cookie header was returned
+        let set_cookie = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        let has_access_token_cookie = set_cookie
+            .iter()
+            .any(|c| c.starts_with("end_user_access_token="));
+        assert!(
+            has_access_token_cookie,
+            "Response should set end_user_access_token cookie"
+        );
+    }
+
+    // ========================================================================
+    // POST /auth/logout Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn logout_clears_auth_cookies() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.post("/reauth.example.com/auth/logout").await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        // Verify cookies are cleared (max-age=0)
+        let set_cookies = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        let has_cleared_access = set_cookies.iter().any(|c| {
+            c.starts_with("end_user_access_token=")
+                && (c.contains("Max-Age=0") || c.contains("max-age=0"))
+        });
+        let has_cleared_refresh = set_cookies.iter().any(|c| {
+            c.starts_with("end_user_refresh_token=")
+                && (c.contains("Max-Age=0") || c.contains("max-age=0"))
+        });
+
+        assert!(has_cleared_access, "Access token cookie should be cleared");
+        assert!(
+            has_cleared_refresh,
+            "Refresh token cookie should be cleared"
+        );
+    }
+
+    // ========================================================================
+    // DELETE /auth/account Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn delete_account_rejects_unauthenticated_request() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.delete("/reauth.example.com/auth/account").await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_account_rejects_wrong_domain_token() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = false;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let wrong_domain_id = Uuid::new_v4();
+        let access_token = create_access_token(user_id, wrong_domain_id, "other.com", api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .delete("/reauth.example.com/auth/account")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_access_token",
+                access_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_account_succeeds_with_valid_token() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = false;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let access_token = create_access_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .delete("/reauth.example.com/auth/account")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_access_token",
+                access_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        // Verify cookies are cleared
+        let set_cookies = response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .map(|v| v.to_str().unwrap_or(""))
+            .collect::<Vec<_>>();
+
+        let has_cleared_access = set_cookies.iter().any(|c| {
+            c.starts_with("end_user_access_token=")
+                && (c.contains("Max-Age=0") || c.contains("max-age=0"))
+        });
+        assert!(
+            has_cleared_access,
+            "Access token cookie should be cleared after account deletion"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_account_works_with_refresh_token() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = false;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let refresh_token = create_refresh_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .delete("/reauth.example.com/auth/account")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_refresh_token",
+                refresh_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+    }
 }
