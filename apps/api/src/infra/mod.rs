@@ -18,6 +18,7 @@ pub mod stripe_client;
 pub mod stripe_payment_adapter;
 
 pub use error::InfraError;
+pub use rate_limit::RateLimiterTrait;
 
 pub async fn postgres_persistence(database_url: &str) -> Result<PostgresPersistence, InfraError> {
     let pool = init_db(database_url).await?;

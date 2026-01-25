@@ -16,9 +16,9 @@ use crate::{
     application::use_cases::domain_roles::DomainRolesUseCases,
     application::use_cases::payment_provider_factory::PaymentProviderFactory,
     infra::{
-        InfraError, config::AppConfig, crypto::ProcessCipher, domain_email::DomainEmailSender,
-        domain_magic_links::DomainMagicLinkStore, oauth_state::OAuthStateStore,
-        postgres_persistence, rate_limit::RateLimiter,
+        InfraError, RateLimiterTrait, config::AppConfig, crypto::ProcessCipher,
+        domain_email::DomainEmailSender, domain_magic_links::DomainMagicLinkStore,
+        oauth_state::OAuthStateStore, postgres_persistence, rate_limit::RedisRateLimiter,
     },
     use_cases::domain::{DomainRepoTrait, DomainUseCases},
 };
@@ -31,8 +31,8 @@ pub async fn init_app_state() -> Result<AppState, InfraError> {
 
     let postgres_arc = Arc::new(postgres_persistence(&config.database_url).await?);
 
-    let rate_limiter = Arc::new(
-        RateLimiter::new(
+    let rate_limiter: Arc<dyn RateLimiterTrait> = Arc::new(
+        RedisRateLimiter::new(
             &config.redis_url,
             config.rate_limit_window_secs,
             config.rate_limit_per_ip,

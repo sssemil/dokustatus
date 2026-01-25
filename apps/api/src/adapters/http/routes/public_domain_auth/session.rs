@@ -413,3 +413,254 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/{domain}/auth/logout", post(logout))
         .route("/{domain}/auth/account", delete(delete_account))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum_test::TestServer;
+    use uuid::Uuid;
+
+    use crate::{
+        application::{
+            jwt,
+            use_cases::{api_key::ApiKeyWithRaw, domain_billing::SubscriptionClaims},
+        },
+        test_utils::{
+            create_test_auth_config, create_test_domain, create_test_end_user, TestAppStateBuilder,
+        },
+    };
+
+    use super::*;
+
+    fn create_test_app_state(
+        domain: crate::application::use_cases::domain::DomainProfile,
+        user: crate::application::use_cases::domain_auth::DomainEndUserProfile,
+        api_key_raw: &str,
+    ) -> crate::adapters::http::app_state::AppState {
+        let auth_config = create_test_auth_config(domain.id, |c| {
+            c.access_token_ttl_secs = 86400;
+            c.refresh_token_ttl_days = 30;
+        });
+
+        TestAppStateBuilder::new()
+            .with_domain(domain.clone())
+            .with_user(user)
+            .with_auth_config(auth_config)
+            .with_api_key(domain.id, &domain.domain, api_key_raw)
+            .build()
+    }
+
+    fn create_refresh_token(
+        user_id: Uuid,
+        domain_id: Uuid,
+        domain_name: &str,
+        api_key_raw: &str,
+    ) -> String {
+        let api_key = ApiKeyWithRaw {
+            id: Uuid::new_v4(),
+            domain_id,
+            raw_key: api_key_raw.to_string(),
+        };
+
+        jwt::issue_domain_end_user_derived(
+            user_id,
+            domain_id,
+            domain_name,
+            vec![],
+            SubscriptionClaims::none(),
+            &api_key,
+            time::Duration::days(30), // Refresh token TTL
+        )
+        .expect("Failed to issue test token")
+    }
+
+    fn create_access_token(
+        user_id: Uuid,
+        domain_id: Uuid,
+        domain_name: &str,
+        api_key_raw: &str,
+    ) -> String {
+        let api_key = ApiKeyWithRaw {
+            id: Uuid::new_v4(),
+            domain_id,
+            raw_key: api_key_raw.to_string(),
+        };
+
+        jwt::issue_domain_end_user_derived(
+            user_id,
+            domain_id,
+            domain_name,
+            vec![],
+            SubscriptionClaims::none(),
+            &api_key,
+            time::Duration::hours(24), // Access token TTL
+        )
+        .expect("Failed to issue test token")
+    }
+
+    // ========================================================================
+    // Test: Request without refresh cookie is rejected
+    // ========================================================================
+    #[tokio::test]
+    async fn get_token_rejects_request_without_refresh_cookie() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/auth/token")
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ========================================================================
+    // Test: Request with only access token (no refresh) is rejected
+    // SECURITY: Access tokens should NOT be able to mint new tokens
+    // ========================================================================
+    #[tokio::test]
+    async fn get_token_rejects_access_token_only() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = false;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let access_token = create_access_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        // Send access token as end_user_access_token cookie, but NO refresh token
+        let response = server
+            .get("/reauth.example.com/auth/token")
+            .add_cookie(
+                axum_extra::extract::cookie::Cookie::new(
+                    "end_user_access_token",
+                    access_token,
+                ),
+            )
+            .await;
+
+        // Should be rejected because only refresh token can mint new tokens
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ========================================================================
+    // Test: Frozen user is rejected
+    // ========================================================================
+    #[tokio::test]
+    async fn get_token_rejects_frozen_user() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = true; // User is frozen
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let refresh_token = create_refresh_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/auth/token")
+            .add_cookie(
+                axum_extra::extract::cookie::Cookie::new(
+                    "end_user_refresh_token",
+                    refresh_token,
+                ),
+            )
+            .await;
+
+        // Should be rejected because user is frozen (ACCOUNT_SUSPENDED)
+        assert_eq!(response.status_code(), StatusCode::FORBIDDEN);
+    }
+
+    // ========================================================================
+    // Test: Token for wrong domain is rejected
+    // ========================================================================
+    #[tokio::test]
+    async fn get_token_rejects_wrong_domain_token() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = false;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        // Create a token for a DIFFERENT domain
+        let wrong_domain_id = Uuid::new_v4();
+        let refresh_token =
+            create_refresh_token(user_id, wrong_domain_id, "other.com", api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/auth/token")
+            .add_cookie(
+                axum_extra::extract::cookie::Cookie::new(
+                    "end_user_refresh_token",
+                    refresh_token,
+                ),
+            )
+            .await;
+
+        // Should be rejected because domain doesn't match
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ========================================================================
+    // Test: Valid request returns Bearer token
+    // ========================================================================
+    #[tokio::test]
+    async fn get_token_returns_valid_bearer_token() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+            u.is_frozen = false;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let refresh_token = create_refresh_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/auth/token")
+            .add_cookie(
+                axum_extra::extract::cookie::Cookie::new(
+                    "end_user_refresh_token",
+                    refresh_token,
+                ),
+            )
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        // Parse response body
+        let body: serde_json::Value = response.json();
+        assert!(body.get("access_token").is_some());
+        assert_eq!(body.get("token_type").unwrap(), "Bearer");
+        assert!(body.get("expires_in").is_some());
+
+        // Verify the token is a valid JWT (basic structure check)
+        let access_token = body.get("access_token").unwrap().as_str().unwrap();
+        let parts: Vec<&str> = access_token.split('.').collect();
+        assert_eq!(parts.len(), 3, "Token should be a valid JWT with 3 parts");
+    }
+}
