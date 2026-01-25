@@ -57,7 +57,7 @@ impl PaymentProviderFactory {
             return Err(AppError::InvalidInput(format!(
                 "{} does not support {} mode",
                 provider.display_name(),
-                mode.as_str()
+                mode.as_ref()
             )));
         }
 

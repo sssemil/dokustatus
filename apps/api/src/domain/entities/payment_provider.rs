@@ -1,11 +1,16 @@
 use serde::{Deserialize, Serialize};
+use strum::{AsRefStr, Display, EnumString};
 
 use super::payment_mode::PaymentMode;
 
 /// Payment provider type - the payment processor used for billing
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, AsRefStr, Display,
+    EnumString,
+)]
 #[sqlx(type_name = "payment_provider", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 #[derive(Default)]
 pub enum PaymentProvider {
     #[default]
@@ -15,14 +20,6 @@ pub enum PaymentProvider {
 }
 
 impl PaymentProvider {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PaymentProvider::Stripe => "stripe",
-            PaymentProvider::Dummy => "dummy",
-            PaymentProvider::Coinbase => "coinbase",
-        }
-    }
-
     /// Human-readable display name for the provider
     pub fn display_name(&self) -> &'static str {
         match self {
@@ -85,28 +82,6 @@ impl PaymentProvider {
     }
 }
 
-impl std::fmt::Display for PaymentProvider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl std::str::FromStr for PaymentProvider {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "stripe" => Ok(PaymentProvider::Stripe),
-            "dummy" => Ok(PaymentProvider::Dummy),
-            "coinbase" => Ok(PaymentProvider::Coinbase),
-            _ => Err(format!(
-                "Invalid payment provider: {}. Must be 'stripe', 'dummy', or 'coinbase'",
-                s
-            )),
-        }
-    }
-}
-
 /// Represents a specific provider configuration (provider + mode combination)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -120,7 +95,7 @@ impl ProviderConfig {
             return Err(format!(
                 "Provider {} does not support {} mode",
                 provider.display_name(),
-                mode.as_str()
+                mode.as_ref()
             ));
         }
         Ok(Self { provider, mode })
@@ -172,7 +147,7 @@ impl ProviderConfig {
 
 impl std::fmt::Display for ProviderConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}_{}", self.provider.as_str(), self.mode.as_str())
+        write!(f, "{}_{}", self.provider.as_ref(), self.mode.as_ref())
     }
 }
 
@@ -226,20 +201,20 @@ mod tests {
     }
 
     #[test]
-    fn test_as_str_all_variants() {
-        assert_eq!(PaymentProvider::Stripe.as_str(), "stripe");
-        assert_eq!(PaymentProvider::Dummy.as_str(), "dummy");
-        assert_eq!(PaymentProvider::Coinbase.as_str(), "coinbase");
+    fn test_as_ref_all_variants() {
+        assert_eq!(PaymentProvider::Stripe.as_ref(), "stripe");
+        assert_eq!(PaymentProvider::Dummy.as_ref(), "dummy");
+        assert_eq!(PaymentProvider::Coinbase.as_ref(), "coinbase");
     }
 
     #[test]
-    fn test_display_matches_as_str() {
+    fn test_display_matches_as_ref() {
         for variant in [
             PaymentProvider::Stripe,
             PaymentProvider::Dummy,
             PaymentProvider::Coinbase,
         ] {
-            assert_eq!(format!("{}", variant), variant.as_str());
+            assert_eq!(format!("{}", variant), variant.as_ref());
         }
     }
 

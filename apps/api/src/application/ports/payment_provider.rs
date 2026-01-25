@@ -140,23 +140,17 @@ pub struct PlanChangeResult {
     pub schedule_id: Option<String>,
 }
 
+use strum::{AsRefStr, Display, EnumString};
+
 /// Type of plan change
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, AsRefStr, Display, EnumString)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum PlanChangeType {
     /// Immediate change with proration
     Upgrade,
     /// Scheduled change at period end
     Downgrade,
-}
-
-impl PlanChangeType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PlanChangeType::Upgrade => "upgrade",
-            PlanChangeType::Downgrade => "downgrade",
-        }
-    }
 }
 
 /// Preview of a plan change (proration info)
@@ -397,8 +391,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_plan_change_type_as_str_all_variants() {
-        assert_eq!(PlanChangeType::Upgrade.as_str(), "upgrade");
-        assert_eq!(PlanChangeType::Downgrade.as_str(), "downgrade");
+    fn test_plan_change_type_as_ref_all_variants() {
+        assert_eq!(PlanChangeType::Upgrade.as_ref(), "upgrade");
+        assert_eq!(PlanChangeType::Downgrade.as_ref(), "downgrade");
     }
 }

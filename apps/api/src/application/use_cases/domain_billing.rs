@@ -323,20 +323,14 @@ pub struct PlanDistribution {
 // Plan Change Types (Upgrade/Downgrade)
 // ============================================================================
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+use strum::{AsRefStr, Display, EnumString};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, AsRefStr, Display, EnumString)]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 pub enum PlanChangeType {
     Upgrade,   // Immediate with proration
     Downgrade, // Scheduled for period end
-}
-
-impl PlanChangeType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PlanChangeType::Upgrade => "upgrade",
-            PlanChangeType::Downgrade => "downgrade",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -795,7 +789,7 @@ impl DomainBillingUseCases {
             if plan_count > 0 || sub_count > 0 {
                 return Err(AppError::InvalidInput(format!(
                     "Cannot delete {} mode config while plans or subscriptions exist. Delete or migrate them first.",
-                    mode.as_str()
+                    mode.as_ref()
                 )));
             }
         }
@@ -820,7 +814,7 @@ impl DomainBillingUseCases {
         if config.is_none() {
             return Err(AppError::InvalidInput(format!(
                 "Cannot switch to {} mode without configuring Stripe keys first",
-                mode.as_str()
+                mode.as_ref()
             )));
         }
 
@@ -857,7 +851,7 @@ impl DomainBillingUseCases {
             .await?
             .ok_or(AppError::InvalidInput(format!(
                 "Stripe {} mode not configured for this domain.",
-                mode.as_str()
+                mode.as_ref()
             )))?;
         self.cipher.decrypt(&config.stripe_secret_key_encrypted)
     }
@@ -875,7 +869,7 @@ impl DomainBillingUseCases {
             .await?
             .ok_or(AppError::InvalidInput(format!(
                 "Stripe {} mode not configured for this domain.",
-                mode.as_str()
+                mode.as_ref()
             )))?;
         self.cipher.decrypt(&config.stripe_webhook_secret_encrypted)
     }
@@ -937,7 +931,7 @@ impl DomainBillingUseCases {
             return Err(AppError::InvalidInput(format!(
                 "{} does not support {} mode",
                 provider.display_name(),
-                mode.as_str()
+                mode.as_ref()
             )));
         }
 
@@ -947,7 +941,7 @@ impl DomainBillingUseCases {
         {
             return Err(AppError::InvalidInput(format!(
                 "Stripe {} mode must be configured before enabling",
-                mode.as_str()
+                mode.as_ref()
             )));
         }
 
@@ -1354,8 +1348,8 @@ impl DomainBillingUseCases {
         if plan.payment_mode != domain.active_payment_mode {
             return Err(AppError::InvalidInput(format!(
                 "Cannot grant subscription to a plan in {} mode when active mode is {}",
-                plan.payment_mode.as_str(),
-                domain.active_payment_mode.as_str()
+                plan.payment_mode.as_ref(),
+                domain.active_payment_mode.as_ref()
             )));
         }
 
@@ -1574,7 +1568,7 @@ impl DomainBillingUseCases {
                 new_status: Some(sub.status),
                 stripe_event_id: None,
                 metadata: serde_json::json!({
-                    "change_type": change_type.as_str(),
+                    "change_type": change_type.as_ref(),
                     "from_plan": current_plan.code,
                     "to_plan": new_plan.code,
                     "amount_charged_cents": result.amount_charged_cents,
@@ -2122,7 +2116,7 @@ impl DomainBillingUseCases {
                 email,
                 plan,
                 amount,
-                p.payment.status.as_str(),
+                p.payment.status.as_ref(),
                 invoice,
                 reason
             ));
@@ -2334,8 +2328,8 @@ mod plan_change_type_tests {
     use super::*;
 
     #[test]
-    fn test_as_str_all_variants() {
-        assert_eq!(PlanChangeType::Upgrade.as_str(), "upgrade");
-        assert_eq!(PlanChangeType::Downgrade.as_str(), "downgrade");
+    fn test_as_ref_all_variants() {
+        assert_eq!(PlanChangeType::Upgrade.as_ref(), "upgrade");
+        assert_eq!(PlanChangeType::Downgrade.as_ref(), "downgrade");
     }
 }

@@ -1594,7 +1594,7 @@ async fn list_billing_payments(
             amount_paid_cents: p.payment.amount_paid_cents,
             amount_refunded_cents: p.payment.amount_refunded_cents,
             currency: p.payment.currency,
-            status: p.payment.status.as_str().to_string(),
+            status: p.payment.status.as_ref().to_string(),
             plan_code: p.payment.plan_code,
             plan_name: p.payment.plan_name,
             invoice_url: p.payment.hosted_invoice_url,

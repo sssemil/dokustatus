@@ -1,9 +1,14 @@
 use serde::{Deserialize, Serialize};
+use strum::{AsRefStr, Display, EnumString};
 
 /// Payment mode - test (sandbox) or live (production) environment
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, AsRefStr, Display,
+    EnumString,
+)]
 #[sqlx(type_name = "payment_mode", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase", ascii_case_insensitive)]
 #[derive(Default)]
 pub enum PaymentMode {
     #[default]
@@ -12,13 +17,6 @@ pub enum PaymentMode {
 }
 
 impl PaymentMode {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PaymentMode::Test => "test",
-            PaymentMode::Live => "live",
-        }
-    }
-
     /// Whether this mode is production (live)
     pub fn is_production(&self) -> bool {
         matches!(self, PaymentMode::Live)
@@ -50,8 +48,8 @@ impl PaymentMode {
             Err(format!(
                 "{} has {} prefix but {} mode was expected",
                 key_name,
-                detected.as_str(),
-                self.as_str()
+                detected.as_ref(),
+                self.as_ref()
             ))
         } else {
             Ok(())
@@ -59,26 +57,6 @@ impl PaymentMode {
     }
 }
 
-impl std::fmt::Display for PaymentMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl std::str::FromStr for PaymentMode {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "test" => Ok(PaymentMode::Test),
-            "live" => Ok(PaymentMode::Live),
-            _ => Err(format!(
-                "Invalid payment mode: {}. Must be 'test' or 'live'",
-                s
-            )),
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -173,15 +151,15 @@ mod tests {
     }
 
     #[test]
-    fn test_as_str_all_variants() {
-        assert_eq!(PaymentMode::Test.as_str(), "test");
-        assert_eq!(PaymentMode::Live.as_str(), "live");
+    fn test_as_ref_all_variants() {
+        assert_eq!(PaymentMode::Test.as_ref(), "test");
+        assert_eq!(PaymentMode::Live.as_ref(), "live");
     }
 
     #[test]
-    fn test_display_matches_as_str() {
+    fn test_display_matches_as_ref() {
         for variant in [PaymentMode::Test, PaymentMode::Live] {
-            assert_eq!(format!("{}", variant), variant.as_str());
+            assert_eq!(format!("{}", variant), variant.as_ref());
         }
     }
 

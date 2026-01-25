@@ -469,7 +469,7 @@ async fn get_user_payments(
             amount_paid_cents: p.payment.amount_paid_cents,
             amount_refunded_cents: p.payment.amount_refunded_cents,
             currency: p.payment.currency,
-            status: p.payment.status.as_str().to_string(),
+            status: p.payment.status.as_ref().to_string(),
             payment_provider: p.payment.payment_provider,
             payment_mode: p.payment.payment_mode,
             plan_name: p.payment.plan_name,
@@ -516,7 +516,7 @@ async fn preview_plan_change(
         period_end: preview.period_end,
         new_plan_name: preview.new_plan_name,
         new_plan_price_cents: preview.new_plan_price_cents,
-        change_type: preview.change_type.as_str().to_string(),
+        change_type: preview.change_type.as_ref().to_string(),
         effective_at: preview.effective_at,
     }))
 }
@@ -543,7 +543,7 @@ async fn change_plan(
 
     Ok(Json(PlanChangeResponse {
         success: result.success,
-        change_type: result.change_type.as_str().to_string(),
+        change_type: result.change_type.as_ref().to_string(),
         invoice_id: result.invoice_id,
         amount_charged_cents: result.amount_charged_cents,
         currency: result.currency,

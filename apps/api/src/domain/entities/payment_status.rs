@@ -1,9 +1,14 @@
 use serde::{Deserialize, Serialize};
+use strum::{AsRefStr, Display, EnumString};
 
 /// Payment status for billing payments
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, AsRefStr, Display,
+    EnumString,
+)]
 #[sqlx(type_name = "payment_status", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 #[derive(Default)]
 pub enum PaymentStatus {
     #[default]
@@ -17,18 +22,6 @@ pub enum PaymentStatus {
 }
 
 impl PaymentStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PaymentStatus::Pending => "pending",
-            PaymentStatus::Paid => "paid",
-            PaymentStatus::Failed => "failed",
-            PaymentStatus::Refunded => "refunded",
-            PaymentStatus::PartialRefund => "partial_refund",
-            PaymentStatus::Uncollectible => "uncollectible",
-            PaymentStatus::Void => "void",
-        }
-    }
-
     /// Convert from Stripe invoice status string
     pub fn from_stripe_invoice_status(s: &str) -> Self {
         match s {
@@ -69,29 +62,6 @@ impl PaymentStatus {
                 | PaymentStatus::PartialRefund
                 | PaymentStatus::Void
         )
-    }
-}
-
-impl std::fmt::Display for PaymentStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl std::str::FromStr for PaymentStatus {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "pending" => Ok(PaymentStatus::Pending),
-            "paid" => Ok(PaymentStatus::Paid),
-            "failed" => Ok(PaymentStatus::Failed),
-            "refunded" => Ok(PaymentStatus::Refunded),
-            "partial_refund" => Ok(PaymentStatus::PartialRefund),
-            "uncollectible" => Ok(PaymentStatus::Uncollectible),
-            "void" => Ok(PaymentStatus::Void),
-            _ => Err(format!("Invalid payment status: {}", s)),
-        }
     }
 }
 
@@ -156,18 +126,18 @@ mod tests {
     }
 
     #[test]
-    fn test_as_str_all_variants() {
-        assert_eq!(PaymentStatus::Pending.as_str(), "pending");
-        assert_eq!(PaymentStatus::Paid.as_str(), "paid");
-        assert_eq!(PaymentStatus::Failed.as_str(), "failed");
-        assert_eq!(PaymentStatus::Refunded.as_str(), "refunded");
-        assert_eq!(PaymentStatus::PartialRefund.as_str(), "partial_refund");
-        assert_eq!(PaymentStatus::Uncollectible.as_str(), "uncollectible");
-        assert_eq!(PaymentStatus::Void.as_str(), "void");
+    fn test_as_ref_all_variants() {
+        assert_eq!(PaymentStatus::Pending.as_ref(), "pending");
+        assert_eq!(PaymentStatus::Paid.as_ref(), "paid");
+        assert_eq!(PaymentStatus::Failed.as_ref(), "failed");
+        assert_eq!(PaymentStatus::Refunded.as_ref(), "refunded");
+        assert_eq!(PaymentStatus::PartialRefund.as_ref(), "partial_refund");
+        assert_eq!(PaymentStatus::Uncollectible.as_ref(), "uncollectible");
+        assert_eq!(PaymentStatus::Void.as_ref(), "void");
     }
 
     #[test]
-    fn test_display_matches_as_str() {
+    fn test_display_matches_as_ref() {
         for variant in [
             PaymentStatus::Pending,
             PaymentStatus::Paid,
@@ -177,7 +147,7 @@ mod tests {
             PaymentStatus::Uncollectible,
             PaymentStatus::Void,
         ] {
-            assert_eq!(format!("{}", variant), variant.as_str());
+            assert_eq!(format!("{}", variant), variant.as_ref());
         }
     }
 

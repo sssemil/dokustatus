@@ -1,10 +1,15 @@
 use serde::{Deserialize, Serialize};
+use strum::{AsRefStr, Display, EnumString};
 
 /// Billing state for tracking provider switching operations.
 /// Used as a state machine to handle partial failures during provider switches.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, AsRefStr, Display,
+    EnumString,
+)]
 #[sqlx(type_name = "billing_state", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 #[derive(Default)]
 pub enum BillingState {
     /// Normal active state - subscription is functioning normally
@@ -17,14 +22,6 @@ pub enum BillingState {
 }
 
 impl BillingState {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            BillingState::Active => "active",
-            BillingState::PendingSwitch => "pending_switch",
-            BillingState::SwitchFailed => "switch_failed",
-        }
-    }
-
     /// Human-readable description of the state
     pub fn description(&self) -> &'static str {
         match self {
@@ -61,25 +58,6 @@ impl BillingState {
     /// Check if transition to the given state is valid
     pub fn can_transition_to(&self, new_state: BillingState) -> bool {
         self.valid_transitions().contains(&new_state)
-    }
-}
-
-impl std::fmt::Display for BillingState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl std::str::FromStr for BillingState {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "active" => Ok(BillingState::Active),
-            "pending_switch" => Ok(BillingState::PendingSwitch),
-            "switch_failed" => Ok(BillingState::SwitchFailed),
-            _ => Err(format!("Invalid billing state: {}", s)),
-        }
     }
 }
 
@@ -132,20 +110,20 @@ mod tests {
     }
 
     #[test]
-    fn test_as_str_all_variants() {
-        assert_eq!(BillingState::Active.as_str(), "active");
-        assert_eq!(BillingState::PendingSwitch.as_str(), "pending_switch");
-        assert_eq!(BillingState::SwitchFailed.as_str(), "switch_failed");
+    fn test_as_ref_all_variants() {
+        assert_eq!(BillingState::Active.as_ref(), "active");
+        assert_eq!(BillingState::PendingSwitch.as_ref(), "pending_switch");
+        assert_eq!(BillingState::SwitchFailed.as_ref(), "switch_failed");
     }
 
     #[test]
-    fn test_display_matches_as_str() {
+    fn test_display_matches_as_ref() {
         for variant in [
             BillingState::Active,
             BillingState::PendingSwitch,
             BillingState::SwitchFailed,
         ] {
-            assert_eq!(format!("{}", variant), variant.as_str());
+            assert_eq!(format!("{}", variant), variant.as_ref());
         }
     }
 

@@ -1,10 +1,12 @@
 use serde::{Deserialize, Serialize};
+use strum::{AsRefStr, Display, EnumString};
 
 /// Payment scenario for the dummy provider.
 /// Simulates different payment outcomes for testing purposes.
 /// Matches a subset of Stripe's test card behaviors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, Display, EnumString)]
 #[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 #[derive(Default)]
 pub enum PaymentScenario {
     /// Payment succeeds immediately (Stripe test card: 4242424242424242)
@@ -23,17 +25,6 @@ pub enum PaymentScenario {
 }
 
 impl PaymentScenario {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            PaymentScenario::Success => "success",
-            PaymentScenario::Decline => "decline",
-            PaymentScenario::InsufficientFunds => "insufficient_funds",
-            PaymentScenario::ThreeDSecure => "three_d_secure",
-            PaymentScenario::ExpiredCard => "expired_card",
-            PaymentScenario::ProcessingError => "processing_error",
-        }
-    }
-
     /// Human-readable description of the scenario
     pub fn description(&self) -> &'static str {
         match self {
@@ -126,28 +117,6 @@ impl PaymentScenario {
     }
 }
 
-impl std::fmt::Display for PaymentScenario {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
-}
-
-impl std::str::FromStr for PaymentScenario {
-    type Err = String;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s.to_lowercase().as_str() {
-            "success" => Ok(PaymentScenario::Success),
-            "decline" => Ok(PaymentScenario::Decline),
-            "insufficient_funds" => Ok(PaymentScenario::InsufficientFunds),
-            "three_d_secure" => Ok(PaymentScenario::ThreeDSecure),
-            "expired_card" => Ok(PaymentScenario::ExpiredCard),
-            "processing_error" => Ok(PaymentScenario::ProcessingError),
-            _ => Err(format!("Invalid payment scenario: {}", s)),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,19 +180,19 @@ mod tests {
     }
 
     #[test]
-    fn test_as_str_all_variants() {
-        assert_eq!(PaymentScenario::Success.as_str(), "success");
-        assert_eq!(PaymentScenario::Decline.as_str(), "decline");
-        assert_eq!(PaymentScenario::InsufficientFunds.as_str(), "insufficient_funds");
-        assert_eq!(PaymentScenario::ThreeDSecure.as_str(), "three_d_secure");
-        assert_eq!(PaymentScenario::ExpiredCard.as_str(), "expired_card");
-        assert_eq!(PaymentScenario::ProcessingError.as_str(), "processing_error");
+    fn test_as_ref_all_variants() {
+        assert_eq!(PaymentScenario::Success.as_ref(), "success");
+        assert_eq!(PaymentScenario::Decline.as_ref(), "decline");
+        assert_eq!(PaymentScenario::InsufficientFunds.as_ref(), "insufficient_funds");
+        assert_eq!(PaymentScenario::ThreeDSecure.as_ref(), "three_d_secure");
+        assert_eq!(PaymentScenario::ExpiredCard.as_ref(), "expired_card");
+        assert_eq!(PaymentScenario::ProcessingError.as_ref(), "processing_error");
     }
 
     #[test]
-    fn test_display_matches_as_str() {
+    fn test_display_matches_as_ref() {
         for variant in PaymentScenario::all() {
-            assert_eq!(format!("{}", variant), variant.as_str());
+            assert_eq!(format!("{}", variant), variant.as_ref());
         }
     }
 
