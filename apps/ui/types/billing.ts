@@ -31,31 +31,27 @@ export interface ProviderConfig {
   mode: PaymentMode;
 }
 
-// Legacy type alias for backwards compatibility
-export type StripeMode = 'test' | 'live';
-
 export interface ModeConfigStatus {
   publishable_key_last4: string;
   is_connected: boolean;
 }
 
 export interface StripeConfigStatus {
-  active_mode: StripeMode;
+  active_mode: PaymentMode;
   test: ModeConfigStatus | null;
   live: ModeConfigStatus | null;
 }
 
 export interface SubscriptionPlan {
   id: string;
-  stripe_mode: StripeMode;
   payment_provider: PaymentProvider | null;
-  payment_mode: PaymentMode | null;
+  payment_mode: PaymentMode;
   code: string;
   name: string;
   description: string | null;
   price_cents: number;
   currency: string;
-  interval: 'monthly' | 'yearly' | 'custom' | string;
+  interval: 'monthly' | 'yearly' | 'custom';
   interval_count: number;
   trial_days: number;
   features: string[];
@@ -76,7 +72,7 @@ export interface UserSubscription {
   plan_code: string;
   status: SubscriptionStatus;
   payment_provider: PaymentProvider | null;
-  payment_mode: PaymentMode | null;
+  payment_mode: PaymentMode;
   billing_state: BillingState | null;
   current_period_start: string | null;
   current_period_end: string | null;
@@ -138,18 +134,18 @@ export interface UpdatePlanInput {
 }
 
 export interface UpdateStripeConfigInput {
-  mode: StripeMode;
+  mode: PaymentMode;
   secret_key: string;
   publishable_key: string;
   webhook_secret: string;
 }
 
 export interface DeleteStripeConfigInput {
-  mode: StripeMode;
+  mode: PaymentMode;
 }
 
 export interface SetBillingModeInput {
-  mode: StripeMode;
+  mode: PaymentMode;
 }
 
 // Helper functions
@@ -213,11 +209,11 @@ export function getStatusLabel(status: SubscriptionStatus): string {
   }
 }
 
-export function getModeLabel(mode: StripeMode): string {
+export function getModeLabel(mode: PaymentMode): string {
   return mode === 'test' ? 'Test Mode' : 'Live Mode';
 }
 
-export function getModeBadgeColor(mode: StripeMode): 'yellow' | 'green' {
+export function getModeBadgeColor(mode: PaymentMode): 'yellow' | 'green' {
   return mode === 'test' ? 'yellow' : 'green';
 }
 
@@ -244,7 +240,7 @@ export interface BillingPayment {
   currency: string;
   status: PaymentStatus;
   payment_provider: PaymentProvider | null;
-  payment_mode: PaymentMode | null;
+  payment_mode: PaymentMode;
   plan_code: string | null;
   plan_name: string | null;
   invoice_url: string | null;

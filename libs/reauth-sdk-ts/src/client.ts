@@ -96,7 +96,19 @@ export function createReauthClient(config: ReauthConfig) {
       });
       if (!res.ok) return [];
       const data = await res.json();
-      return data.map((p: any) => ({
+      return data.map((p: {
+        id: string;
+        code: string;
+        name: string;
+        description: string | null;
+        price_cents: number;
+        currency: string;
+        interval: string;
+        interval_count: number;
+        trial_days: number;
+        features: string[];
+        display_order: number;
+      }) => ({
         id: p.id,
         code: p.code,
         name: p.name,

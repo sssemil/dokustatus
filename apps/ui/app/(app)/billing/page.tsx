@@ -18,6 +18,7 @@ import {
   getPaymentStatusBadgeColor,
   formatPaymentDate,
   EnabledPaymentProvider,
+  SubscriptionStatus,
   PaymentProvider,
   getProviderLabel,
   getProviderBadgeColor,
@@ -42,7 +43,7 @@ type UserSubscription = {
   id: string | null;
   plan_code: string | null;
   plan_name: string | null;
-  status: string;
+  status: SubscriptionStatus;
   current_period_end: number | null;
   trial_end: number | null;
   cancel_at_period_end: boolean | null;
@@ -288,7 +289,7 @@ export default function BillingPage() {
                   subscription.status === 'trialing' ? 'info' :
                   subscription.status === 'past_due' ? 'warning' : 'default'
                 }>
-                  {getStatusLabel(subscription.status as any)}
+                  {getStatusLabel(subscription.status)}
                 </Badge>
               </div>
               <div className="text-sm text-zinc-400">

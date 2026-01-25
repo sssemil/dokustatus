@@ -76,10 +76,9 @@ function MagicLinkHandler() {
         } else {
           // Try to get error message from response
           try {
-            const errorData = await res.json();
+            const errorData: { error_code?: string; message?: string } = await res.json();
             setStatus('error');
-            // Check if this is a suspended account error
-            if (errorData.code === 'ACCOUNT_SUSPENDED' || errorData.error_code === 'ACCOUNT_SUSPENDED' || errorData.message?.toLowerCase().includes('suspended')) {
+            if (errorData.error_code === 'ACCOUNT_SUSPENDED') {
               setErrorType('suspended');
               setErrorMessage('Your account has been suspended. Please contact support if you believe this is an error.');
             } else {

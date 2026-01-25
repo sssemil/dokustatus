@@ -107,7 +107,7 @@ export function PlanChangeModal({
       const data: PlanChangeResult = await res.json();
 
       if (!res.ok) {
-        setError((data as any).message || 'Failed to change plan');
+        setError((data as { message?: string }).message || 'Failed to change plan');
         setState('error');
         return;
       }

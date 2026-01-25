@@ -95,7 +95,7 @@ export type SubscriptionPlan = {
   description: string | null;
   priceCents: number;
   currency: string;
-  interval: 'monthly' | 'yearly' | string;
+  interval: 'monthly' | 'yearly' | 'custom';
   intervalCount: number;
   trialDays: number;
   features: string[];

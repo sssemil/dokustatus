@@ -89,7 +89,7 @@ export function DummyCheckoutModal({
       const data: DummyCheckoutResponse = await res.json();
 
       if (!res.ok) {
-        setError((data as any).message || 'Failed to process payment');
+        setError((data as { message?: string }).message || 'Failed to process payment');
         setState('error');
         return;
       }
@@ -129,7 +129,7 @@ export function DummyCheckoutModal({
       const data: DummyCheckoutResponse = await res.json();
 
       if (!res.ok) {
-        setError((data as any).message || 'Failed to confirm payment');
+        setError((data as { message?: string }).message || 'Failed to confirm payment');
         setState('error');
         return;
       }

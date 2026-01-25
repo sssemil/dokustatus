@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { ArrowLeft, Mail, Calendar, Clock, Shield, Snowflake, CheckCircle, CreditCard, DollarSign } from 'lucide-react';
 import { Card, Button, Badge, HoldButton, Modal, Input } from '@/components/ui';
 import { useToast } from '@/contexts/ToastContext';
-import { SubscriptionPlan, formatPrice, formatInterval, getStatusLabel } from '@/types/billing';
+import { SubscriptionPlan, formatPrice, formatInterval, getStatusLabel, SubscriptionStatus } from '@/types/billing';
 
 type EndUser = {
   id: string;
@@ -32,7 +32,7 @@ type UserSubscriptionData = {
   plan_id: string;
   plan_name: string;
   plan_code: string;
-  status: string;
+  status: SubscriptionStatus;
   current_period_start: string | null;
   current_period_end: string | null;
   trial_start: string | null;
@@ -406,7 +406,7 @@ export default function UserDetailPage() {
                   <span className="font-medium text-white">{subscription.plan_name}</span>
                   <code className="text-xs bg-zinc-700 px-2 py-0.5 rounded border border-zinc-600 text-zinc-300">{subscription.plan_code}</code>
                   <Badge variant={subscription.status === 'active' ? 'success' : subscription.status === 'trialing' ? 'info' : subscription.status === 'past_due' ? 'warning' : 'error'}>
-                    {getStatusLabel(subscription.status as any)}
+                    {getStatusLabel(subscription.status)}
                   </Badge>
                   {subscription.manually_granted && <Badge variant="default">Manual</Badge>}
                 </div>
