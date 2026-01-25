@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useRef } from 'react';
-import { User, LogOut, Sun, Moon, Monitor, ChevronDown } from 'lucide-react';
-import { useTheme } from '@/app/components/ThemeContext';
-import { zIndex } from '@/lib/design-tokens';
+import { useState, useEffect, useRef } from "react";
+import { User, LogOut, Sun, Moon, Monitor, ChevronDown } from "lucide-react";
+import { useTheme } from "@/app/components/ThemeContext";
+import { zIndex } from "@/lib/design-tokens";
 
 interface UserMenuProps {
   email: string;
@@ -12,7 +12,12 @@ interface UserMenuProps {
   onProfileClick: () => void;
 }
 
-export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }: UserMenuProps) {
+export function UserMenu({
+  email,
+  collapsed = false,
+  onLogout,
+  onProfileClick,
+}: UserMenuProps) {
   const [open, setOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const { theme, setTheme } = useTheme();
@@ -25,24 +30,24 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
     };
 
     if (open) {
-      document.addEventListener('mousedown', handleClickOutside);
+      document.addEventListener("mousedown", handleClickOutside);
     }
 
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [open]);
 
   // Get initials from email
   const initials = email.charAt(0).toUpperCase();
 
   const themes = [
-    { id: 'light' as const, icon: Sun, label: 'Light' },
-    { id: 'dark' as const, icon: Moon, label: 'Dark' },
-    { id: 'system' as const, icon: Monitor, label: 'System' },
+    { id: "light" as const, icon: Sun, label: "Light" },
+    { id: "dark" as const, icon: Moon, label: "Dark" },
+    { id: "system" as const, icon: Monitor, label: "System" },
   ];
 
   const calculatePillLeft = (activeIndex: number): string => {
     // flex-[2] for active (50%), flex-1 for inactive (25% each)
-    const positions = ['0%', '25%', '50%'];
+    const positions = ["0%", "25%", "50%"];
     return positions[activeIndex];
   };
 
@@ -53,7 +58,7 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
         className={`
           w-full flex items-center gap-2 px-3 py-2 text-sm text-zinc-400
           hover:text-white hover:bg-zinc-800 rounded-md transition-all duration-200
-          ${collapsed ? 'justify-center' : 'justify-between'}
+          ${collapsed ? "justify-center" : "justify-between"}
         `}
       >
         <div className="flex items-center gap-2">
@@ -67,7 +72,7 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
         {!collapsed && (
           <ChevronDown
             size={14}
-            className={`transition-transform duration-200 ${open ? 'rotate-180' : ''}`}
+            className={`transition-transform duration-200 ${open ? "rotate-180" : ""}`}
           />
         )}
       </button>
@@ -77,7 +82,7 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
           className={`
             absolute bottom-full mb-1 bg-zinc-800 border border-zinc-700
             rounded-lg shadow-xl overflow-hidden animate-scale-in
-            ${collapsed ? 'left-0 min-w-[180px]' : 'left-0 right-0'}
+            ${collapsed ? "left-0 min-w-[180px]" : "left-0 right-0"}
           `}
           style={{ zIndex: zIndex.dropdown }}
         >
@@ -100,8 +105,10 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
               <div
                 className="absolute top-1 bottom-1 bg-zinc-700 rounded-md pointer-events-none transition-[left] duration-300 ease-out"
                 style={{
-                  width: '50%',
-                  left: calculatePillLeft(themes.findIndex(t => t.id === theme)),
+                  width: "50%",
+                  left: calculatePillLeft(
+                    themes.findIndex((t) => t.id === theme),
+                  ),
                 }}
               />
               {themes.map((t) => {
@@ -114,16 +121,18 @@ export function UserMenu({ email, collapsed = false, onLogout, onProfileClick }:
                     className={`
                       relative z-10 flex items-center justify-center py-1.5 rounded-md
                       transition-[flex-grow,color] duration-300 ease-out
-                      ${isActive ? 'flex-[2] text-white' : 'flex-1 text-zinc-500 hover:text-zinc-300'}
+                      ${isActive ? "flex-[2] text-white" : "flex-1 text-zinc-500 hover:text-zinc-300"}
                     `}
                   >
                     <t.icon size={14} />
                     {/* Label with margin instead of gap - avoids gap on 0-width element */}
-                    <span className={`
+                    <span
+                      className={`
                       text-xs font-medium overflow-hidden whitespace-nowrap
                       transition-[opacity,max-width,margin] duration-300 ease-out
-                      ${isActive ? 'opacity-100 max-w-[60px] ml-1.5' : 'opacity-0 max-w-0 ml-0'}
-                    `}>
+                      ${isActive ? "opacity-100 max-w-[60px] ml-1.5" : "opacity-0 max-w-0 ml-0"}
+                    `}
+                    >
                       {t.label}
                     </span>
                   </button>

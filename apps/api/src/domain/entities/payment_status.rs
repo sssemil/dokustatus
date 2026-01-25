@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "payment_status", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PaymentStatus {
+    #[default]
     Pending,
     Paid,
     Failed,
@@ -67,12 +69,6 @@ impl PaymentStatus {
                 | PaymentStatus::PartialRefund
                 | PaymentStatus::Void
         )
-    }
-}
-
-impl Default for PaymentStatus {
-    fn default() -> Self {
-        PaymentStatus::Pending
     }
 }
 

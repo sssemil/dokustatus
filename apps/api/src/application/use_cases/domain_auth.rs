@@ -529,18 +529,17 @@ impl DomainAuthUseCases {
             let end_user = self.end_user_repo.mark_verified(data.end_user_id).await?;
 
             // Send welcome email on first login
-            if is_first_login {
-                if let Ok((api_key, from_email, _)) =
+            if is_first_login
+                && let Ok((api_key, from_email, _)) =
                     self.get_email_config(data.domain_id, domain_name).await
-                {
-                    let app_origin = format!("https://reauth.{}", domain_name);
-                    let (subject, html) = account_created_email(&app_origin, domain_name);
-                    // Fire and forget - don't fail login if email fails
-                    let _ = self
-                        .email_sender
-                        .send(&api_key, &from_email, &end_user.email, &subject, &html)
-                        .await;
-                }
+            {
+                let app_origin = format!("https://reauth.{}", domain_name);
+                let (subject, html) = account_created_email(&app_origin, domain_name);
+                // Fire and forget - don't fail login if email fails
+                let _ = self
+                    .email_sender
+                    .send(&api_key, &from_email, &end_user.email, &subject, &html)
+                    .await;
             }
 
             return Ok(Some(end_user));
@@ -665,13 +664,13 @@ impl DomainAuthUseCases {
         }
 
         // Validate redirect URL is on the domain or a subdomain
-        if let Some(url) = redirect_url {
-            if !is_valid_redirect_url(url, &domain.domain) {
-                return Err(AppError::InvalidInput(format!(
-                    "Redirect URL must be on {} or a subdomain",
-                    domain.domain
-                )));
-            }
+        if let Some(url) = redirect_url
+            && !is_valid_redirect_url(url, &domain.domain)
+        {
+            return Err(AppError::InvalidInput(format!(
+                "Redirect URL must be on {} or a subdomain",
+                domain.domain
+            )));
         }
 
         // If enabling whitelist and requested, whitelist all existing users
@@ -824,17 +823,16 @@ impl DomainAuthUseCases {
         self.end_user_repo.set_frozen(user_id, true).await?;
 
         // Send suspension email
-        if was_not_frozen {
-            if let Ok((api_key, from_email, _)) =
+        if was_not_frozen
+            && let Ok((api_key, from_email, _)) =
                 self.get_email_config(domain_id, &domain.domain).await
-            {
-                let app_origin = format!("https://reauth.{}", domain.domain);
-                let (subject, html) = account_frozen_email(&app_origin, &domain.domain);
-                let _ = self
-                    .email_sender
-                    .send(&api_key, &from_email, &user.email, &subject, &html)
-                    .await;
-            }
+        {
+            let app_origin = format!("https://reauth.{}", domain.domain);
+            let (subject, html) = account_frozen_email(&app_origin, &domain.domain);
+            let _ = self
+                .email_sender
+                .send(&api_key, &from_email, &user.email, &subject, &html)
+                .await;
         }
 
         Ok(())
@@ -869,19 +867,17 @@ impl DomainAuthUseCases {
         self.end_user_repo.set_frozen(user_id, false).await?;
 
         // Send restoration email
-        if was_frozen {
-            if let Ok((api_key, from_email, _)) =
+        if was_frozen
+            && let Ok((api_key, from_email, _)) =
                 self.get_email_config(domain_id, &domain.domain).await
-            {
-                let app_origin = format!("https://reauth.{}", domain.domain);
-                let login_url = format!("https://reauth.{}/", domain.domain);
-                let (subject, html) =
-                    account_unfrozen_email(&app_origin, &domain.domain, &login_url);
-                let _ = self
-                    .email_sender
-                    .send(&api_key, &from_email, &user.email, &subject, &html)
-                    .await;
-            }
+        {
+            let app_origin = format!("https://reauth.{}", domain.domain);
+            let login_url = format!("https://reauth.{}/", domain.domain);
+            let (subject, html) = account_unfrozen_email(&app_origin, &domain.domain, &login_url);
+            let _ = self
+                .email_sender
+                .send(&api_key, &from_email, &user.email, &subject, &html)
+                .await;
         }
 
         Ok(())
@@ -916,19 +912,18 @@ impl DomainAuthUseCases {
         self.end_user_repo.set_whitelisted(user_id, true).await?;
 
         // Send approval email
-        if was_not_whitelisted {
-            if let Ok((api_key, from_email, _)) =
+        if was_not_whitelisted
+            && let Ok((api_key, from_email, _)) =
                 self.get_email_config(domain_id, &domain.domain).await
-            {
-                let app_origin = format!("https://reauth.{}", domain.domain);
-                let login_url = format!("https://reauth.{}/", domain.domain);
-                let (subject, html) =
-                    account_whitelisted_email(&app_origin, &domain.domain, &login_url);
-                let _ = self
-                    .email_sender
-                    .send(&api_key, &from_email, &user.email, &subject, &html)
-                    .await;
-            }
+        {
+            let app_origin = format!("https://reauth.{}", domain.domain);
+            let login_url = format!("https://reauth.{}/", domain.domain);
+            let (subject, html) =
+                account_whitelisted_email(&app_origin, &domain.domain, &login_url);
+            let _ = self
+                .email_sender
+                .send(&api_key, &from_email, &user.email, &subject, &html)
+                .await;
         }
 
         Ok(())
@@ -1313,12 +1308,11 @@ impl DomainAuthUseCases {
             .end_user_repo
             .get_by_domain_and_google_id(user.domain_id, google_id)
             .await?
+            && existing.id != existing_user_id
         {
-            if existing.id != existing_user_id {
-                return Err(AppError::InvalidInput(
-                    "This Google account is already linked to a different user".into(),
-                ));
-            }
+            return Err(AppError::InvalidInput(
+                "This Google account is already linked to a different user".into(),
+            ));
         }
 
         // Link the Google account

@@ -1,13 +1,19 @@
-import { InputHTMLAttributes, forwardRef } from 'react';
-import { Search } from 'lucide-react';
+import { InputHTMLAttributes, forwardRef } from "react";
+import { Search } from "lucide-react";
 
-interface SearchInputProps extends Omit<InputHTMLAttributes<HTMLInputElement>, 'type'> {
+interface SearchInputProps extends Omit<
+  InputHTMLAttributes<HTMLInputElement>,
+  "type"
+> {
   value: string;
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
 export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
-  ({ value, onChange, placeholder = 'Search...', className = '', ...props }, ref) => {
+  (
+    { value, onChange, placeholder = "Search...", className = "", ...props },
+    ref,
+  ) => {
     return (
       <div className={`relative ${className}`}>
         <Search
@@ -32,7 +38,7 @@ export const SearchInput = forwardRef<HTMLInputElement, SearchInputProps>(
         />
       </div>
     );
-  }
+  },
 );
 
-SearchInput.displayName = 'SearchInput';
+SearchInput.displayName = "SearchInput";

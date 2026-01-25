@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
-import { createReauthClient } from '../client';
-import type { User, ReauthConfig } from '../types';
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { createReauthClient } from "../client";
+import type { User, ReauthConfig } from "../types";
 
 type AuthState = {
   user: User | null;
@@ -56,11 +56,11 @@ export function useAuth(config: ReauthConfig) {
       }
 
       // Account suspended
-      if (session.error_code === 'ACCOUNT_SUSPENDED') {
+      if (session.error_code === "ACCOUNT_SUSPENDED") {
         setState({
           user: null,
           loading: false,
-          error: 'Account suspended',
+          error: "Account suspended",
           isOnWaitlist: false,
           waitlistPosition: null,
         });
@@ -111,7 +111,7 @@ export function useAuth(config: ReauthConfig) {
       setState({
         user: null,
         loading: false,
-        error: 'Auth check failed',
+        error: "Auth check failed",
         isOnWaitlist: false,
         waitlistPosition: null,
       });

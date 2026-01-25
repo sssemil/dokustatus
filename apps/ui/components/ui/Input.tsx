@@ -1,4 +1,4 @@
-import { InputHTMLAttributes, forwardRef } from 'react';
+import { InputHTMLAttributes, forwardRef } from "react";
 
 interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
   label?: string;
@@ -7,8 +7,8 @@ interface InputProps extends InputHTMLAttributes<HTMLInputElement> {
 }
 
 export const Input = forwardRef<HTMLInputElement, InputProps>(
-  ({ label, error, helpText, className = '', id, ...props }, ref) => {
-    const inputId = id || label?.toLowerCase().replace(/\s+/g, '-');
+  ({ label, error, helpText, className = "", id, ...props }, ref) => {
+    const inputId = id || label?.toLowerCase().replace(/\s+/g, "-");
 
     return (
       <div className="w-full">
@@ -28,20 +28,18 @@ export const Input = forwardRef<HTMLInputElement, InputProps>(
             placeholder-zinc-500 text-white
             transition-all duration-200
             focus:outline-none focus:ring-2 focus:ring-blue-500/50
-            ${error ? 'border-red-500' : 'border-zinc-700 hover:border-zinc-600 focus:border-blue-500'}
+            ${error ? "border-red-500" : "border-zinc-700 hover:border-zinc-600 focus:border-blue-500"}
             ${className}
           `}
           {...props}
         />
-        {error && (
-          <p className="mt-1 text-sm text-red-400">{error}</p>
-        )}
+        {error && <p className="mt-1 text-sm text-red-400">{error}</p>}
         {helpText && !error && (
           <p className="mt-1 text-xs text-zinc-500">{helpText}</p>
         )}
       </div>
     );
-  }
+  },
 );
 
-Input.displayName = 'Input';
+Input.displayName = "Input";

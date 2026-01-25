@@ -4,17 +4,17 @@
 // Payment Provider Types
 // ============================================================================
 
-export type PaymentProvider = 'stripe' | 'dummy' | 'coinbase';
-export type PaymentMode = 'test' | 'live';
-export type BillingState = 'active' | 'pending_switch' | 'switch_failed';
+export type PaymentProvider = "stripe" | "dummy" | "coinbase";
+export type PaymentMode = "test" | "live";
+export type BillingState = "active" | "pending_switch" | "switch_failed";
 
 export type PaymentScenario =
-  | 'success'
-  | 'decline'
-  | 'insufficient_funds'
-  | 'three_d_secure'
-  | 'expired_card'
-  | 'processing_error';
+  | "success"
+  | "decline"
+  | "insufficient_funds"
+  | "three_d_secure"
+  | "expired_card"
+  | "processing_error";
 
 export interface EnabledPaymentProvider {
   id: string;
@@ -51,7 +51,7 @@ export interface SubscriptionPlan {
   description: string | null;
   price_cents: number;
   currency: string;
-  interval: 'monthly' | 'yearly' | 'custom';
+  interval: "monthly" | "yearly" | "custom";
   interval_count: number;
   trial_days: number;
   features: string[];
@@ -84,15 +84,15 @@ export interface UserSubscription {
 }
 
 export type SubscriptionStatus =
-  | 'active'
-  | 'past_due'
-  | 'canceled'
-  | 'trialing'
-  | 'incomplete'
-  | 'incomplete_expired'
-  | 'unpaid'
-  | 'paused'
-  | 'none';
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "trialing"
+  | "incomplete"
+  | "incomplete_expired"
+  | "unpaid"
+  | "paused"
+  | "none";
 
 export interface BillingAnalytics {
   mrr_cents: number;
@@ -149,72 +149,76 @@ export interface SetBillingModeInput {
 }
 
 // Helper functions
-export function formatPrice(cents: number, currency: string = 'USD'): string {
+export function formatPrice(cents: number, currency: string = "USD"): string {
   const dollars = cents / 100;
-  return new Intl.NumberFormat('en-US', {
-    style: 'currency',
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
     currency,
   }).format(dollars);
 }
 
 export function formatInterval(interval: string, count: number): string {
   if (count === 1) {
-    return interval === 'monthly' ? 'per month' : interval === 'yearly' ? 'per year' : `per ${interval}`;
+    return interval === "monthly"
+      ? "per month"
+      : interval === "yearly"
+        ? "per year"
+        : `per ${interval}`;
   }
-  return `every ${count} ${interval === 'monthly' ? 'months' : interval === 'yearly' ? 'years' : interval}`;
+  return `every ${count} ${interval === "monthly" ? "months" : interval === "yearly" ? "years" : interval}`;
 }
 
 export function getStatusBadgeColor(status: SubscriptionStatus): string {
   switch (status) {
-    case 'active':
-      return 'green';
-    case 'trialing':
-      return 'blue';
-    case 'past_due':
-      return 'yellow';
-    case 'canceled':
-    case 'incomplete_expired':
-    case 'unpaid':
-      return 'red';
-    case 'incomplete':
-    case 'paused':
-      return 'gray';
+    case "active":
+      return "green";
+    case "trialing":
+      return "blue";
+    case "past_due":
+      return "yellow";
+    case "canceled":
+    case "incomplete_expired":
+    case "unpaid":
+      return "red";
+    case "incomplete":
+    case "paused":
+      return "gray";
     default:
-      return 'gray';
+      return "gray";
   }
 }
 
 export function getStatusLabel(status: SubscriptionStatus): string {
   switch (status) {
-    case 'active':
-      return 'Active';
-    case 'trialing':
-      return 'Trial';
-    case 'past_due':
-      return 'Past Due';
-    case 'canceled':
-      return 'Canceled';
-    case 'incomplete':
-      return 'Incomplete';
-    case 'incomplete_expired':
-      return 'Expired';
-    case 'unpaid':
-      return 'Unpaid';
-    case 'paused':
-      return 'Paused';
-    case 'none':
-      return 'No Subscription';
+    case "active":
+      return "Active";
+    case "trialing":
+      return "Trial";
+    case "past_due":
+      return "Past Due";
+    case "canceled":
+      return "Canceled";
+    case "incomplete":
+      return "Incomplete";
+    case "incomplete_expired":
+      return "Expired";
+    case "unpaid":
+      return "Unpaid";
+    case "paused":
+      return "Paused";
+    case "none":
+      return "No Subscription";
     default:
       return status;
   }
 }
 
 export function getModeLabel(mode: PaymentMode): string {
-  return mode === 'test' ? 'Test Mode' : 'Live Mode';
+  return mode === "test" ? "Test Mode" : "Live Mode";
 }
 
-export function getModeBadgeColor(mode: PaymentMode): 'yellow' | 'green' {
-  return mode === 'test' ? 'yellow' : 'green';
+export function getModeBadgeColor(mode: PaymentMode): "yellow" | "green" {
+  return mode === "test" ? "yellow" : "green";
 }
 
 // ============================================================================
@@ -222,13 +226,13 @@ export function getModeBadgeColor(mode: PaymentMode): 'yellow' | 'green' {
 // ============================================================================
 
 export type PaymentStatus =
-  | 'pending'
-  | 'paid'
-  | 'failed'
-  | 'refunded'
-  | 'partial_refund'
-  | 'uncollectible'
-  | 'void';
+  | "pending"
+  | "paid"
+  | "failed"
+  | "refunded"
+  | "partial_refund"
+  | "uncollectible"
+  | "void";
 
 export interface BillingPayment {
   id: string;
@@ -283,20 +287,20 @@ export interface PaymentListFilters {
 // Payment helper functions
 export function getPaymentStatusLabel(status: PaymentStatus): string {
   switch (status) {
-    case 'pending':
-      return 'Pending';
-    case 'paid':
-      return 'Paid';
-    case 'failed':
-      return 'Failed';
-    case 'refunded':
-      return 'Refunded';
-    case 'partial_refund':
-      return 'Partially Refunded';
-    case 'uncollectible':
-      return 'Uncollectible';
-    case 'void':
-      return 'Voided';
+    case "pending":
+      return "Pending";
+    case "paid":
+      return "Paid";
+    case "failed":
+      return "Failed";
+    case "refunded":
+      return "Refunded";
+    case "partial_refund":
+      return "Partially Refunded";
+    case "uncollectible":
+      return "Uncollectible";
+    case "void":
+      return "Voided";
     default:
       return status;
   }
@@ -304,39 +308,39 @@ export function getPaymentStatusLabel(status: PaymentStatus): string {
 
 export function getPaymentStatusBadgeColor(status: PaymentStatus): string {
   switch (status) {
-    case 'paid':
-      return 'green';
-    case 'pending':
-      return 'yellow';
-    case 'failed':
-    case 'uncollectible':
-    case 'void':
-      return 'red';
-    case 'refunded':
-    case 'partial_refund':
-      return 'blue';
+    case "paid":
+      return "green";
+    case "pending":
+      return "yellow";
+    case "failed":
+    case "uncollectible":
+    case "void":
+      return "red";
+    case "refunded":
+    case "partial_refund":
+      return "blue";
     default:
-      return 'gray';
+      return "gray";
   }
 }
 
 export function formatPaymentDate(timestamp: number | null): string {
-  if (!timestamp) return '-';
-  return new Date(timestamp * 1000).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
+  if (!timestamp) return "-";
+  return new Date(timestamp * 1000).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
   });
 }
 
 export function formatPaymentDateTime(timestamp: number | null): string {
-  if (!timestamp) return '-';
-  return new Date(timestamp * 1000).toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
+  if (!timestamp) return "-";
+  return new Date(timestamp * 1000).toLocaleString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
   });
 }
 
@@ -344,7 +348,7 @@ export function formatPaymentDateTime(timestamp: number | null): string {
 // Plan Change Types (Upgrade/Downgrade)
 // ============================================================================
 
-export type PlanChangeType = 'upgrade' | 'downgrade';
+export type PlanChangeType = "upgrade" | "downgrade";
 
 export interface PlanChangePreview {
   prorated_amount_cents: number;
@@ -372,9 +376,13 @@ export interface PlanChangeResult {
   invoice_id: string | null;
   amount_charged_cents: number | null;
   currency: string | null;
-  client_secret: string | null;  // For Stripe.js confirmCardPayment()
-  hosted_invoice_url: string | null;  // Fallback for redirect flow
-  payment_intent_status: 'succeeded' | 'requires_action' | 'requires_payment_method' | null;
+  client_secret: string | null; // For Stripe.js confirmCardPayment()
+  hosted_invoice_url: string | null; // Fallback for redirect flow
+  payment_intent_status:
+    | "succeeded"
+    | "requires_action"
+    | "requires_payment_method"
+    | null;
   new_plan: PlanChangeNewPlan;
   effective_at: number; // Unix timestamp
   schedule_id: string | null; // For downgrades - can be canceled later
@@ -382,14 +390,14 @@ export interface PlanChangeResult {
 
 // Plan change helper functions
 export function getPlanChangeTypeLabel(changeType: PlanChangeType): string {
-  return changeType === 'upgrade' ? 'Upgrade' : 'Downgrade';
+  return changeType === "upgrade" ? "Upgrade" : "Downgrade";
 }
 
 export function formatEffectiveDate(timestamp: number): string {
-  return new Date(timestamp * 1000).toLocaleDateString('en-US', {
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
+  return new Date(timestamp * 1000).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
   });
 }
 
@@ -399,12 +407,12 @@ export function formatEffectiveDate(timestamp: number): string {
 
 export function getProviderLabel(provider: PaymentProvider): string {
   switch (provider) {
-    case 'stripe':
-      return 'Stripe';
-    case 'dummy':
-      return 'Test Provider';
-    case 'coinbase':
-      return 'Coinbase Commerce';
+    case "stripe":
+      return "Stripe";
+    case "dummy":
+      return "Test Provider";
+    case "coinbase":
+      return "Coinbase Commerce";
     default:
       return provider;
   }
@@ -412,44 +420,49 @@ export function getProviderLabel(provider: PaymentProvider): string {
 
 export function getProviderBadgeColor(provider: PaymentProvider): string {
   switch (provider) {
-    case 'stripe':
-      return 'purple';
-    case 'dummy':
-      return 'gray';
-    case 'coinbase':
-      return 'blue';
+    case "stripe":
+      return "purple";
+    case "dummy":
+      return "gray";
+    case "coinbase":
+      return "blue";
     default:
-      return 'gray';
+      return "gray";
   }
 }
 
 export function getPaymentModeLabel(mode: PaymentMode): string {
-  return mode === 'test' ? 'Test' : 'Live';
+  return mode === "test" ? "Test" : "Live";
 }
 
-export function getPaymentModeBadgeColor(mode: PaymentMode): 'yellow' | 'green' {
-  return mode === 'test' ? 'yellow' : 'green';
+export function getPaymentModeBadgeColor(
+  mode: PaymentMode,
+): "yellow" | "green" {
+  return mode === "test" ? "yellow" : "green";
 }
 
-export function formatProviderConfig(provider: PaymentProvider, mode: PaymentMode): string {
+export function formatProviderConfig(
+  provider: PaymentProvider,
+  mode: PaymentMode,
+): string {
   const providerLabel = getProviderLabel(provider);
-  return mode === 'live' ? providerLabel : `${providerLabel} (Test)`;
+  return mode === "live" ? providerLabel : `${providerLabel} (Test)`;
 }
 
 export function getScenarioLabel(scenario: PaymentScenario): string {
   switch (scenario) {
-    case 'success':
-      return 'Success';
-    case 'decline':
-      return 'Card Declined';
-    case 'insufficient_funds':
-      return 'Insufficient Funds';
-    case 'three_d_secure':
-      return '3D Secure Required';
-    case 'expired_card':
-      return 'Expired Card';
-    case 'processing_error':
-      return 'Processing Error';
+    case "success":
+      return "Success";
+    case "decline":
+      return "Card Declined";
+    case "insufficient_funds":
+      return "Insufficient Funds";
+    case "three_d_secure":
+      return "3D Secure Required";
+    case "expired_card":
+      return "Expired Card";
+    case "processing_error":
+      return "Processing Error";
     default:
       return scenario;
   }
@@ -457,31 +470,31 @@ export function getScenarioLabel(scenario: PaymentScenario): string {
 
 export function getScenarioDescription(scenario: PaymentScenario): string {
   switch (scenario) {
-    case 'success':
-      return 'Payment will succeed immediately';
-    case 'decline':
-      return 'Card will be declined by the issuer';
-    case 'insufficient_funds':
-      return 'Card will fail due to insufficient funds';
-    case 'three_d_secure':
-      return 'Payment requires 3D Secure authentication';
-    case 'expired_card':
-      return 'Card is expired and will be rejected';
-    case 'processing_error':
-      return 'A processing error will occur';
+    case "success":
+      return "Payment will succeed immediately";
+    case "decline":
+      return "Card will be declined by the issuer";
+    case "insufficient_funds":
+      return "Card will fail due to insufficient funds";
+    case "three_d_secure":
+      return "Payment requires 3D Secure authentication";
+    case "expired_card":
+      return "Card is expired and will be rejected";
+    case "processing_error":
+      return "A processing error will occur";
     default:
-      return '';
+      return "";
   }
 }
 
 export function getBillingStateLabel(state: BillingState): string {
   switch (state) {
-    case 'active':
-      return 'Active';
-    case 'pending_switch':
-      return 'Switching Provider';
-    case 'switch_failed':
-      return 'Switch Failed';
+    case "active":
+      return "Active";
+    case "pending_switch":
+      return "Switching Provider";
+    case "switch_failed":
+      return "Switch Failed";
     default:
       return state;
   }
@@ -489,14 +502,14 @@ export function getBillingStateLabel(state: BillingState): string {
 
 export function getBillingStateBadgeColor(state: BillingState): string {
   switch (state) {
-    case 'active':
-      return 'green';
-    case 'pending_switch':
-      return 'yellow';
-    case 'switch_failed':
-      return 'red';
+    case "active":
+      return "green";
+    case "pending_switch":
+      return "yellow";
+    case "switch_failed":
+      return "red";
     default:
-      return 'gray';
+      return "gray";
   }
 }
 

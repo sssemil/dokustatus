@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useState } from 'react';
-import { Copy, Check } from 'lucide-react';
+import { useState } from "react";
+import { Copy, Check } from "lucide-react";
 
 interface CopyButtonProps {
   text: string;
@@ -9,7 +9,7 @@ interface CopyButtonProps {
   onCopy?: () => void;
 }
 
-export function CopyButton({ text, className = '', onCopy }: CopyButtonProps) {
+export function CopyButton({ text, className = "", onCopy }: CopyButtonProps) {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async (e: React.MouseEvent) => {
@@ -19,11 +19,11 @@ export function CopyButton({ text, className = '', onCopy }: CopyButtonProps) {
       await navigator.clipboard.writeText(text);
     } catch {
       // Fallback for older browsers
-      const textArea = document.createElement('textarea');
+      const textArea = document.createElement("textarea");
       textArea.value = text;
       document.body.appendChild(textArea);
       textArea.select();
-      document.execCommand('copy');
+      document.execCommand("copy");
       document.body.removeChild(textArea);
     }
 
@@ -40,7 +40,7 @@ export function CopyButton({ text, className = '', onCopy }: CopyButtonProps) {
         focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500
         ${className}
       `}
-      title={copied ? 'Copied!' : 'Copy'}
+      title={copied ? "Copied!" : "Copy"}
     >
       {copied ? (
         <Check size={14} className="text-emerald-400" />

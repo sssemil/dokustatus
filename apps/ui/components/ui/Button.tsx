@@ -1,8 +1,8 @@
-import { ButtonHTMLAttributes, forwardRef, ReactNode } from 'react';
-import { RefreshCw } from 'lucide-react';
+import { ButtonHTMLAttributes, forwardRef, ReactNode } from "react";
+import { RefreshCw } from "lucide-react";
 
-type ButtonVariant = 'default' | 'primary' | 'danger' | 'ghost' | 'outline';
-type ButtonSize = 'sm' | 'md' | 'lg';
+type ButtonVariant = "default" | "primary" | "danger" | "ghost" | "outline";
+type ButtonSize = "sm" | "md" | "lg";
 
 interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   variant?: ButtonVariant;
@@ -12,21 +12,33 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const variantStyles: Record<ButtonVariant, string> = {
-  default: 'bg-zinc-700 hover:bg-zinc-600 text-white border-zinc-600',
-  primary: 'bg-blue-600 hover:bg-blue-500 text-white border-blue-600',
-  danger: 'bg-red-600/20 hover:bg-red-600/30 text-red-400 border-red-600/50',
-  ghost: 'bg-transparent hover:bg-zinc-800 text-zinc-400 hover:text-white border-transparent',
-  outline: 'bg-transparent hover:bg-zinc-800 text-zinc-300 border-zinc-600',
+  default: "bg-zinc-700 hover:bg-zinc-600 text-white border-zinc-600",
+  primary: "bg-blue-600 hover:bg-blue-500 text-white border-blue-600",
+  danger: "bg-red-600/20 hover:bg-red-600/30 text-red-400 border-red-600/50",
+  ghost:
+    "bg-transparent hover:bg-zinc-800 text-zinc-400 hover:text-white border-transparent",
+  outline: "bg-transparent hover:bg-zinc-800 text-zinc-300 border-zinc-600",
 };
 
 const sizeStyles: Record<ButtonSize, string> = {
-  sm: 'px-2 py-1 text-xs gap-1',
-  md: 'px-3 py-1.5 text-sm gap-2',
-  lg: 'px-4 py-2 text-base gap-2',
+  sm: "px-2 py-1 text-xs gap-1",
+  md: "px-3 py-1.5 text-sm gap-2",
+  lg: "px-4 py-2 text-base gap-2",
 };
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
-  ({ variant = 'default', size = 'md', loading = false, disabled, children, className = '', ...props }, ref) => {
+  (
+    {
+      variant = "default",
+      size = "md",
+      loading = false,
+      disabled,
+      children,
+      className = "",
+      ...props
+    },
+    ref,
+  ) => {
     return (
       <button
         ref={ref}
@@ -46,7 +58,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         {children}
       </button>
     );
-  }
+  },
 );
 
-Button.displayName = 'Button';
+Button.displayName = "Button";

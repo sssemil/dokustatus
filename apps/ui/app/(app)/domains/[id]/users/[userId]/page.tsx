@@ -1,12 +1,28 @@
-'use client';
+"use client";
 
-import { useState, useEffect, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
-import { ArrowLeft, Mail, Calendar, Clock, Shield, Snowflake, CheckCircle, CreditCard, DollarSign } from 'lucide-react';
-import { Card, Button, Badge, HoldButton, Modal, Input } from '@/components/ui';
-import { useToast } from '@/contexts/ToastContext';
-import { SubscriptionPlan, formatPrice, formatInterval, getStatusLabel, SubscriptionStatus } from '@/types/billing';
+import { useState, useEffect, useCallback } from "react";
+import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
+import {
+  ArrowLeft,
+  Mail,
+  Calendar,
+  Clock,
+  Shield,
+  Snowflake,
+  CheckCircle,
+  CreditCard,
+  DollarSign,
+} from "lucide-react";
+import { Card, Button, Badge, HoldButton, Modal, Input } from "@/components/ui";
+import { useToast } from "@/contexts/ToastContext";
+import {
+  SubscriptionPlan,
+  formatPrice,
+  formatInterval,
+  getStatusLabel,
+  SubscriptionStatus,
+} from "@/types/billing";
 
 type EndUser = {
   id: string;
@@ -59,25 +75,29 @@ export default function UserDetailPage() {
   const [savingRoles, setSavingRoles] = useState(false);
 
   // Subscription state
-  const [subscription, setSubscription] = useState<UserSubscriptionData | null>(null);
+  const [subscription, setSubscription] = useState<UserSubscriptionData | null>(
+    null,
+  );
   const [availablePlans, setAvailablePlans] = useState<SubscriptionPlan[]>([]);
   const [loadingSubscription, setLoadingSubscription] = useState(false);
   const [showGrantModal, setShowGrantModal] = useState(false);
-  const [selectedPlanId, setSelectedPlanId] = useState('');
+  const [selectedPlanId, setSelectedPlanId] = useState("");
   const [grantingSubscription, setGrantingSubscription] = useState(false);
 
   const fetchUser = useCallback(async () => {
     try {
-      const res = await fetch(`/api/domains/${domainId}/end-users/${userId}`, { credentials: 'include' });
+      const res = await fetch(`/api/domains/${domainId}/end-users/${userId}`, {
+        credentials: "include",
+      });
       if (res.ok) {
         const data = await res.json();
         setUser(data);
         setSelectedRoles(data.roles || []);
       } else {
-        addToast('User not found', 'error');
+        addToast("User not found", "error");
       }
     } catch {
-      addToast('Failed to load user', 'error');
+      addToast("Failed to load user", "error");
     } finally {
       setLoading(false);
     }
@@ -85,7 +105,9 @@ export default function UserDetailPage() {
 
   const fetchRoles = useCallback(async () => {
     try {
-      const res = await fetch(`/api/domains/${domainId}/roles`, { credentials: 'include' });
+      const res = await fetch(`/api/domains/${domainId}/roles`, {
+        credentials: "include",
+      });
       if (res.ok) {
         const data = await res.json();
         setAvailableRoles(data);
@@ -97,20 +119,31 @@ export default function UserDetailPage() {
     setLoadingSubscription(true);
     try {
       // Fetch user's subscription from subscribers list
-      const subscribersRes = await fetch(`/api/domains/${domainId}/billing/subscribers`, { credentials: 'include' });
+      const subscribersRes = await fetch(
+        `/api/domains/${domainId}/billing/subscribers`,
+        { credentials: "include" },
+      );
       if (subscribersRes.ok) {
         const subscribers = await subscribersRes.json();
-        const userSub = subscribers.find((s: UserSubscriptionData) => s.user_id === userId);
+        const userSub = subscribers.find(
+          (s: UserSubscriptionData) => s.user_id === userId,
+        );
         setSubscription(userSub || null);
       }
       // Fetch available plans
-      const plansRes = await fetch(`/api/domains/${domainId}/billing/plans`, { credentials: 'include' });
+      const plansRes = await fetch(`/api/domains/${domainId}/billing/plans`, {
+        credentials: "include",
+      });
       if (plansRes.ok) {
         const plans = await plansRes.json();
-        setAvailablePlans(plans.filter((p: SubscriptionPlan) => !p.is_archived));
+        setAvailablePlans(
+          plans.filter((p: SubscriptionPlan) => !p.is_archived),
+        );
       }
-    } catch {}
-    finally { setLoadingSubscription(false); }
+    } catch {
+    } finally {
+      setLoadingSubscription(false);
+    }
   }, [domainId, userId]);
 
   useEffect(() => {
@@ -119,14 +152,16 @@ export default function UserDetailPage() {
     fetchSubscription();
   }, [fetchUser, fetchRoles, fetchSubscription]);
 
-  const handleAction = async (action: 'freeze' | 'unfreeze' | 'whitelist' | 'unwhitelist' | 'delete') => {
+  const handleAction = async (
+    action: "freeze" | "unfreeze" | "whitelist" | "unwhitelist" | "delete",
+  ) => {
     setActionLoading(true);
     const methodMap = {
-      freeze: 'POST',
-      unfreeze: 'DELETE',
-      whitelist: 'POST',
-      unwhitelist: 'DELETE',
-      delete: 'DELETE',
+      freeze: "POST",
+      unfreeze: "DELETE",
+      whitelist: "POST",
+      unwhitelist: "DELETE",
+      delete: "DELETE",
     };
 
     const urlMap = {
@@ -140,22 +175,22 @@ export default function UserDetailPage() {
     try {
       const res = await fetch(urlMap[action], {
         method: methodMap[action],
-        credentials: 'include',
+        credentials: "include",
       });
 
       if (res.ok) {
-        if (action === 'delete') {
-          addToast('User deleted', 'success');
+        if (action === "delete") {
+          addToast("User deleted", "success");
           router.push(`/domains/${domainId}?tab=users`);
         } else {
-          addToast(`User ${action}ed successfully`, 'success');
+          addToast(`User ${action}ed successfully`, "success");
           fetchUser();
         }
       } else {
-        addToast(`Failed to ${action} user`, 'error');
+        addToast(`Failed to ${action} user`, "error");
       }
     } catch {
-      addToast('Network error', 'error');
+      addToast("Network error", "error");
     } finally {
       setActionLoading(false);
     }
@@ -163,7 +198,9 @@ export default function UserDetailPage() {
 
   const handleRoleToggle = (roleName: string) => {
     setSelectedRoles((prev) =>
-      prev.includes(roleName) ? prev.filter((r) => r !== roleName) : [...prev, roleName]
+      prev.includes(roleName)
+        ? prev.filter((r) => r !== roleName)
+        : [...prev, roleName],
     );
   };
 
@@ -171,53 +208,62 @@ export default function UserDetailPage() {
     setSavingRoles(true);
 
     try {
-      const res = await fetch(`/api/domains/${domainId}/end-users/${userId}/roles`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ roles: selectedRoles }),
-        credentials: 'include',
-      });
+      const res = await fetch(
+        `/api/domains/${domainId}/end-users/${userId}/roles`,
+        {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ roles: selectedRoles }),
+          credentials: "include",
+        },
+      );
 
       if (res.ok) {
-        addToast('Roles updated', 'success');
+        addToast("Roles updated", "success");
         fetchUser();
       } else {
         const errData = await res.json().catch(() => ({}));
-        addToast(errData.message || 'Failed to update roles', 'error');
+        addToast(errData.message || "Failed to update roles", "error");
       }
     } catch {
-      addToast('Network error', 'error');
+      addToast("Network error", "error");
     } finally {
       setSavingRoles(false);
     }
   };
 
-  const rolesChanged = user ? JSON.stringify([...selectedRoles].sort()) !== JSON.stringify([...(user.roles || [])].sort()) : false;
+  const rolesChanged = user
+    ? JSON.stringify([...selectedRoles].sort()) !==
+      JSON.stringify([...(user.roles || [])].sort())
+    : false;
 
   const handleGrantSubscription = async () => {
     if (!selectedPlanId) {
-      addToast('Please select a plan', 'error');
+      addToast("Please select a plan", "error");
       return;
     }
     setGrantingSubscription(true);
     try {
-      const res = await fetch(`/api/domains/${domainId}/billing/subscribers/${userId}/grant`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan_id: selectedPlanId }),
-        credentials: 'include',
-      });
+      const res = await fetch(
+        `/api/domains/${domainId}/billing/subscribers/${userId}/grant`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ plan_id: selectedPlanId }),
+          credentials: "include",
+        },
+      );
       if (res.ok) {
-        addToast('Subscription granted', 'success');
+        addToast("Subscription granted", "success");
         setShowGrantModal(false);
-        setSelectedPlanId('');
+        setSelectedPlanId("");
         fetchSubscription();
       } else {
         const err = await res.json().catch(() => ({}));
-        addToast(err.message || 'Failed to grant subscription', 'error');
+        addToast(err.message || "Failed to grant subscription", "error");
       }
     } catch {
-      addToast('Network error', 'error');
+      addToast("Network error", "error");
     } finally {
       setGrantingSubscription(false);
     }
@@ -225,29 +271,32 @@ export default function UserDetailPage() {
 
   const handleRevokeSubscription = async () => {
     try {
-      const res = await fetch(`/api/domains/${domainId}/billing/subscribers/${userId}/revoke`, {
-        method: 'DELETE',
-        credentials: 'include',
-      });
+      const res = await fetch(
+        `/api/domains/${domainId}/billing/subscribers/${userId}/revoke`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        },
+      );
       if (res.ok) {
-        addToast('Subscription revoked', 'success');
+        addToast("Subscription revoked", "success");
         fetchSubscription();
       } else {
-        addToast('Failed to revoke subscription', 'error');
+        addToast("Failed to revoke subscription", "error");
       }
     } catch {
-      addToast('Network error', 'error');
+      addToast("Network error", "error");
     }
   };
 
   const formatDate = (dateString: string | null) => {
-    if (!dateString) return 'Never';
-    return new Date(dateString).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+    if (!dateString) return "Never";
+    return new Date(dateString).toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
     });
   };
 
@@ -263,7 +312,9 @@ export default function UserDetailPage() {
     return (
       <Card className="p-8 text-center">
         <p className="text-zinc-400 mb-4">User not found</p>
-        <Button onClick={() => router.push(`/domains/${domainId}`)}>Back to domain</Button>
+        <Button onClick={() => router.push(`/domains/${domainId}`)}>
+          Back to domain
+        </Button>
       </Card>
     );
   }
@@ -271,7 +322,10 @@ export default function UserDetailPage() {
   return (
     <div className="space-y-6">
       {/* Back link */}
-      <Link href={`/domains/${domainId}?tab=users`} className="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-white transition-colors">
+      <Link
+        href={`/domains/${domainId}?tab=users`}
+        className="inline-flex items-center gap-1 text-sm text-zinc-400 hover:text-white transition-colors"
+      >
         <ArrowLeft size={16} />
         Back to users
       </Link>
@@ -282,13 +336,19 @@ export default function UserDetailPage() {
           <h1 className="text-2xl font-bold text-white">{user.email}</h1>
           <div className="flex items-center gap-2 mt-2">
             {user.is_frozen && <Badge variant="error">Frozen</Badge>}
-            {user.is_whitelisted && <Badge variant="success">Whitelisted</Badge>}
+            {user.is_whitelisted && (
+              <Badge variant="success">Whitelisted</Badge>
+            )}
             {user.email_verified_at && <Badge variant="info">Verified</Badge>}
-            {user.roles?.map((role) => <Badge key={role} variant="default">{role}</Badge>)}
+            {user.roles?.map((role) => (
+              <Badge key={role} variant="default">
+                {role}
+              </Badge>
+            ))}
           </div>
         </div>
         <HoldButton
-          onComplete={() => handleAction('delete')}
+          onComplete={() => handleAction("delete")}
           variant="danger"
           duration={3000}
           disabled={actionLoading}
@@ -316,7 +376,9 @@ export default function UserDetailPage() {
             </div>
             <div>
               <p className="text-xs text-zinc-500">Last Login</p>
-              <p className="text-sm text-white">{formatDate(user.last_login_at)}</p>
+              <p className="text-sm text-white">
+                {formatDate(user.last_login_at)}
+              </p>
             </div>
           </div>
           <div className="flex items-start gap-3">
@@ -325,7 +387,9 @@ export default function UserDetailPage() {
             </div>
             <div>
               <p className="text-xs text-zinc-500">Email Verified</p>
-              <p className="text-sm text-white">{formatDate(user.email_verified_at)}</p>
+              <p className="text-sm text-white">
+                {formatDate(user.email_verified_at)}
+              </p>
             </div>
           </div>
           <div className="flex items-start gap-3">
@@ -334,7 +398,9 @@ export default function UserDetailPage() {
             </div>
             <div>
               <p className="text-xs text-zinc-500">Created</p>
-              <p className="text-sm text-white">{formatDate(user.created_at)}</p>
+              <p className="text-sm text-white">
+                {formatDate(user.created_at)}
+              </p>
             </div>
           </div>
         </div>
@@ -345,7 +411,8 @@ export default function UserDetailPage() {
         <h2 className="text-lg font-semibold text-white mb-4">Roles</h2>
         {availableRoles.length === 0 ? (
           <p className="text-sm text-zinc-400">
-            No roles available. Create roles in the Roles tab of the domain page.
+            No roles available. Create roles in the Roles tab of the domain
+            page.
           </p>
         ) : (
           <div className="space-y-4">
@@ -358,9 +425,10 @@ export default function UserDetailPage() {
                     onClick={() => handleRoleToggle(role.name)}
                     className={`
                       px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200
-                      ${isSelected
-                        ? 'bg-blue-600 text-white border-2 border-blue-500'
-                        : 'bg-zinc-800 text-zinc-300 border-2 border-zinc-700 hover:border-zinc-600'
+                      ${
+                        isSelected
+                          ? "bg-blue-600 text-white border-2 border-blue-500"
+                          : "bg-zinc-800 text-zinc-300 border-2 border-zinc-700 hover:border-zinc-600"
                       }
                     `}
                   >
@@ -374,7 +442,7 @@ export default function UserDetailPage() {
               onClick={handleSaveRoles}
               disabled={!rolesChanged || savingRoles}
             >
-              {savingRoles ? 'Saving...' : 'Save Roles'}
+              {savingRoles ? "Saving..." : "Save Roles"}
             </Button>
           </div>
         )}
@@ -403,31 +471,60 @@ export default function UserDetailPage() {
             <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
               <div>
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="font-medium text-white">{subscription.plan_name}</span>
-                  <code className="text-xs bg-zinc-700 px-2 py-0.5 rounded border border-zinc-600 text-zinc-300">{subscription.plan_code}</code>
-                  <Badge variant={subscription.status === 'active' ? 'success' : subscription.status === 'trialing' ? 'info' : subscription.status === 'past_due' ? 'warning' : 'error'}>
+                  <span className="font-medium text-white">
+                    {subscription.plan_name}
+                  </span>
+                  <code className="text-xs bg-zinc-700 px-2 py-0.5 rounded border border-zinc-600 text-zinc-300">
+                    {subscription.plan_code}
+                  </code>
+                  <Badge
+                    variant={
+                      subscription.status === "active"
+                        ? "success"
+                        : subscription.status === "trialing"
+                          ? "info"
+                          : subscription.status === "past_due"
+                            ? "warning"
+                            : "error"
+                    }
+                  >
                     {getStatusLabel(subscription.status)}
                   </Badge>
-                  {subscription.manually_granted && <Badge variant="default">Manual</Badge>}
+                  {subscription.manually_granted && (
+                    <Badge variant="default">Manual</Badge>
+                  )}
                 </div>
                 <div className="text-sm text-zinc-400">
                   {subscription.current_period_end && (
-                    <span>Renews {formatDate(subscription.current_period_end)}</span>
+                    <span>
+                      Renews {formatDate(subscription.current_period_end)}
+                    </span>
                   )}
                   {subscription.cancel_at_period_end && (
-                    <span className="text-yellow-400 ml-2">Canceling at period end</span>
+                    <span className="text-yellow-400 ml-2">
+                      Canceling at period end
+                    </span>
                   )}
                 </div>
               </div>
-              <HoldButton onComplete={handleRevokeSubscription} variant="danger" duration={2000}>
+              <HoldButton
+                onComplete={handleRevokeSubscription}
+                variant="danger"
+                duration={2000}
+              >
                 Revoke
               </HoldButton>
             </div>
           </div>
         ) : availablePlans.length > 0 ? (
-          <p className="text-sm text-zinc-400">No active subscription. Grant a subscription to this user.</p>
+          <p className="text-sm text-zinc-400">
+            No active subscription. Grant a subscription to this user.
+          </p>
         ) : (
-          <p className="text-sm text-zinc-400">No plans configured. Create plans in the Billing tab of the domain page.</p>
+          <p className="text-sm text-zinc-400">
+            No plans configured. Create plans in the Billing tab of the domain
+            page.
+          </p>
         )}
       </Card>
 
@@ -443,17 +540,22 @@ export default function UserDetailPage() {
               </div>
               <div>
                 <p className="font-medium text-white">
-                  {user.is_frozen ? 'Unfreeze Account' : 'Freeze Account'}
+                  {user.is_frozen ? "Unfreeze Account" : "Freeze Account"}
                 </p>
                 <p className="text-xs text-zinc-500 mt-0.5">
                   {user.is_frozen
-                    ? 'Allow this user to sign in again.'
-                    : 'Prevent this user from signing in.'}
+                    ? "Allow this user to sign in again."
+                    : "Prevent this user from signing in."}
                 </p>
               </div>
             </div>
-            <Button onClick={() => handleAction(user.is_frozen ? 'unfreeze' : 'freeze')} disabled={actionLoading}>
-              {user.is_frozen ? 'Unfreeze' : 'Freeze'}
+            <Button
+              onClick={() =>
+                handleAction(user.is_frozen ? "unfreeze" : "freeze")
+              }
+              disabled={actionLoading}
+            >
+              {user.is_frozen ? "Unfreeze" : "Freeze"}
             </Button>
           </div>
 
@@ -465,30 +567,44 @@ export default function UserDetailPage() {
               </div>
               <div>
                 <p className="font-medium text-white">
-                  {user.is_whitelisted ? 'Remove from Whitelist' : 'Add to Whitelist'}
+                  {user.is_whitelisted
+                    ? "Remove from Whitelist"
+                    : "Add to Whitelist"}
                 </p>
                 <p className="text-xs text-zinc-500 mt-0.5">
                   {user.is_whitelisted
-                    ? 'Remove this user from the whitelist.'
-                    : 'Add this user to the whitelist.'}
+                    ? "Remove this user from the whitelist."
+                    : "Add this user to the whitelist."}
                 </p>
               </div>
             </div>
-            <Button onClick={() => handleAction(user.is_whitelisted ? 'unwhitelist' : 'whitelist')} disabled={actionLoading}>
-              {user.is_whitelisted ? 'Remove' : 'Whitelist'}
+            <Button
+              onClick={() =>
+                handleAction(user.is_whitelisted ? "unwhitelist" : "whitelist")
+              }
+              disabled={actionLoading}
+            >
+              {user.is_whitelisted ? "Remove" : "Whitelist"}
             </Button>
           </div>
         </div>
       </Card>
 
       {/* Grant Subscription Modal */}
-      <Modal open={showGrantModal} onClose={() => setShowGrantModal(false)} title="Grant Subscription">
+      <Modal
+        open={showGrantModal}
+        onClose={() => setShowGrantModal(false)}
+        title="Grant Subscription"
+      >
         <div className="space-y-4">
           <p className="text-sm text-zinc-400">
-            Manually grant a subscription to this user. They will have immediate access without payment.
+            Manually grant a subscription to this user. They will have immediate
+            access without payment.
           </p>
           <div className="space-y-2">
-            <label className="text-sm font-medium text-zinc-300">Select Plan</label>
+            <label className="text-sm font-medium text-zinc-300">
+              Select Plan
+            </label>
             <select
               value={selectedPlanId}
               onChange={(e) => setSelectedPlanId(e.target.value)}
@@ -497,15 +613,22 @@ export default function UserDetailPage() {
               <option value="">Choose a plan...</option>
               {availablePlans.map((plan) => (
                 <option key={plan.id} value={plan.id}>
-                  {plan.name} - {formatPrice(plan.price_cents)} {formatInterval(plan.interval, plan.interval_count)}
+                  {plan.name} - {formatPrice(plan.price_cents)}{" "}
+                  {formatInterval(plan.interval, plan.interval_count)}
                 </option>
               ))}
             </select>
           </div>
           <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => setShowGrantModal(false)}>Cancel</Button>
-            <Button variant="primary" onClick={handleGrantSubscription} disabled={grantingSubscription || !selectedPlanId}>
-              {grantingSubscription ? 'Granting...' : 'Grant Subscription'}
+            <Button variant="ghost" onClick={() => setShowGrantModal(false)}>
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={handleGrantSubscription}
+              disabled={grantingSubscription || !selectedPlanId}
+            >
+              {grantingSubscription ? "Granting..." : "Grant Subscription"}
             </Button>
           </div>
         </div>

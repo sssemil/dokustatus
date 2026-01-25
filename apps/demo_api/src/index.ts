@@ -1,8 +1,8 @@
-import express, { Request, Response, NextFunction } from 'express';
-import { createServerClient } from '@reauth/sdk/server';
-import type { User } from '@reauth/sdk';
-import { Redis } from 'ioredis';
-import { v4 as uuid } from 'uuid';
+import express, { Request, Response, NextFunction } from "express";
+import { createServerClient } from "@reauth/sdk/server";
+import type { User } from "@reauth/sdk";
+import { Redis } from "ioredis";
+import { v4 as uuid } from "uuid";
 
 // Extend Express Request to include user
 declare global {
@@ -23,8 +23,8 @@ interface Todo {
 
 // Config
 const PORT = process.env.PORT || 3003;
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const DOMAIN = process.env.DOMAIN || 'demo.test';
+const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
+const DOMAIN = process.env.DOMAIN || "demo.test";
 const REAUTH_API_KEY = process.env.REAUTH_API_KEY;
 
 // Clients
@@ -40,11 +40,11 @@ app.use(express.json());
 
 // Auth middleware - cookie-based authentication
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
-  const cookies = req.headers.cookie || '';
+  const cookies = req.headers.cookie || "";
   const user = await reauth.getUser(cookies);
 
   if (!user) {
-    res.status(401).json({ error: 'Unauthorized' });
+    res.status(401).json({ error: "Unauthorized" });
     return;
   }
 
@@ -70,32 +70,32 @@ async function setTodos(userId: string, todos: Todo[]): Promise<void> {
 // Routes
 
 // Health check (public)
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok' });
+app.get("/api/health", (_req, res) => {
+  res.json({ status: "ok" });
 });
 
 // Get current user's full profile (requires API key)
-app.get('/api/me', authMiddleware, async (req, res) => {
+app.get("/api/me", authMiddleware, async (req, res) => {
   const userDetails = await reauth.getUserById(req.user!.id);
   if (!userDetails) {
-    res.status(404).json({ error: 'User not found' });
+    res.status(404).json({ error: "User not found" });
     return;
   }
   res.json(userDetails);
 });
 
 // List todos
-app.get('/api/todos', authMiddleware, async (req, res) => {
+app.get("/api/todos", authMiddleware, async (req, res) => {
   const todos = await getTodos(req.user!.id);
   res.json(todos);
 });
 
 // Create todo
-app.post('/api/todos', authMiddleware, async (req, res) => {
+app.post("/api/todos", authMiddleware, async (req, res) => {
   const { text } = req.body;
 
-  if (!text || typeof text !== 'string') {
-    res.status(400).json({ error: 'text is required' });
+  if (!text || typeof text !== "string") {
+    res.status(400).json({ error: "text is required" });
     return;
   }
 
@@ -114,7 +114,7 @@ app.post('/api/todos', authMiddleware, async (req, res) => {
 });
 
 // Update todo
-app.put('/api/todos/:id', authMiddleware, async (req, res) => {
+app.put("/api/todos/:id", authMiddleware, async (req, res) => {
   const { id } = req.params;
   const { text, completed } = req.body;
 
@@ -122,7 +122,7 @@ app.put('/api/todos/:id', authMiddleware, async (req, res) => {
   const todoIndex = todos.findIndex((t) => t.id === id);
 
   if (todoIndex === -1) {
-    res.status(404).json({ error: 'Todo not found' });
+    res.status(404).json({ error: "Todo not found" });
     return;
   }
 
@@ -138,14 +138,14 @@ app.put('/api/todos/:id', authMiddleware, async (req, res) => {
 });
 
 // Delete todo
-app.delete('/api/todos/:id', authMiddleware, async (req, res) => {
+app.delete("/api/todos/:id", authMiddleware, async (req, res) => {
   const { id } = req.params;
 
   const todos = await getTodos(req.user!.id);
   const todoIndex = todos.findIndex((t) => t.id === id);
 
   if (todoIndex === -1) {
-    res.status(404).json({ error: 'Todo not found' });
+    res.status(404).json({ error: "Todo not found" });
     return;
   }
 

@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { BarChart3, CreditCard, Sparkles } from 'lucide-react';
-import { Card, Button, Tabs, ProgressBar } from '@/components/ui';
+import { useState, useEffect } from "react";
+import { BarChart3, CreditCard, Sparkles } from "lucide-react";
+import { Card, Button, Tabs, ProgressBar } from "@/components/ui";
 
-type Tab = 'usage' | 'billing';
+type Tab = "usage" | "billing";
 
 type UsageStats = {
   domains_count: number;
@@ -14,14 +14,16 @@ type UsageStats = {
 };
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('usage');
+  const [activeTab, setActiveTab] = useState<Tab>("usage");
   const [stats, setStats] = useState<UsageStats | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const fetchStats = async () => {
       try {
-        const res = await fetch('/api/domains/stats', { credentials: 'include' });
+        const res = await fetch("/api/domains/stats", {
+          credentials: "include",
+        });
         if (res.ok) {
           setStats(await res.json());
         }
@@ -35,15 +37,19 @@ export default function SettingsPage() {
   }, []);
 
   const tabs = [
-    { id: 'usage' as Tab, label: 'Usage' },
-    { id: 'billing' as Tab, label: 'Billing' },
+    { id: "usage" as Tab, label: "Usage" },
+    { id: "billing" as Tab, label: "Billing" },
   ];
 
   // Default limits for free tier
   const domainsLimit = stats?.domains_limit ?? 5;
   const usersLimit = stats?.users_limit ?? 100;
-  const domainsPercent = stats ? Math.round((stats.domains_count / domainsLimit) * 100) : 0;
-  const usersPercent = stats ? Math.round((stats.total_users / usersLimit) * 100) : 0;
+  const domainsPercent = stats
+    ? Math.round((stats.domains_count / domainsLimit) * 100)
+    : 0;
+  const usersPercent = stats
+    ? Math.round((stats.total_users / usersLimit) * 100)
+    : 0;
 
   return (
     <div className="space-y-6">
@@ -63,12 +69,14 @@ export default function SettingsPage() {
       />
 
       {/* Usage tab */}
-      {activeTab === 'usage' && (
+      {activeTab === "usage" && (
         <div className="space-y-4">
           <Card className="p-6">
             <div className="flex items-center gap-2 mb-4">
               <BarChart3 size={20} className="text-blue-400" />
-              <h2 className="text-lg font-semibold text-white">Usage Overview</h2>
+              <h2 className="text-lg font-semibold text-white">
+                Usage Overview
+              </h2>
             </div>
 
             {loading ? (
@@ -111,7 +119,7 @@ export default function SettingsPage() {
       )}
 
       {/* Billing tab */}
-      {activeTab === 'billing' && (
+      {activeTab === "billing" && (
         <div className="space-y-4">
           <Card className="p-6">
             <div className="flex items-center gap-2 mb-4">
@@ -122,7 +130,9 @@ export default function SettingsPage() {
             <div className="flex items-center justify-between p-4 bg-zinc-800/50 rounded-lg mb-6 border border-zinc-700">
               <div>
                 <p className="font-medium text-white">Free Tier</p>
-                <p className="text-sm text-zinc-400">Up to 5 domains, 100 users</p>
+                <p className="text-sm text-zinc-400">
+                  Up to 5 domains, 100 users
+                </p>
               </div>
               <span className="px-3 py-1 bg-blue-500/10 text-blue-400 text-sm rounded-full border border-blue-500/30">
                 Active
@@ -135,7 +145,8 @@ export default function SettingsPage() {
                 <h3 className="font-medium text-white">Need more?</h3>
               </div>
               <p className="text-sm text-zinc-400 mb-4">
-                Upgrade to Pro for unlimited domains, users, and premium features.
+                Upgrade to Pro for unlimited domains, users, and premium
+                features.
               </p>
               <Button variant="primary" disabled>
                 Coming Soon

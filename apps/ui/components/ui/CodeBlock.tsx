@@ -1,4 +1,4 @@
-import { CopyButton } from './CopyButton';
+import { CopyButton } from "./CopyButton";
 
 interface CodeBlockProps {
   value: string;
@@ -6,7 +6,7 @@ interface CodeBlockProps {
   onCopy?: () => void;
 }
 
-export function CodeBlock({ value, className = '', onCopy }: CodeBlockProps) {
+export function CodeBlock({ value, className = "", onCopy }: CodeBlockProps) {
   return (
     <div
       className={`

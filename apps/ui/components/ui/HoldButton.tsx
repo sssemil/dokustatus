@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback } from "react";
 
-type HoldButtonVariant = 'danger' | 'default';
+type HoldButtonVariant = "danger" | "default";
 
 interface HoldButtonProps {
   children: React.ReactNode;
@@ -14,17 +14,17 @@ interface HoldButtonProps {
 }
 
 const variantStyles: Record<HoldButtonVariant, string> = {
-  danger: 'bg-red-600 text-white border-red-600',
-  default: 'bg-zinc-700 text-white border-zinc-600',
+  danger: "bg-red-600 text-white border-red-600",
+  default: "bg-zinc-700 text-white border-zinc-600",
 };
 
 export function HoldButton({
   children,
   onComplete,
   duration = 3000,
-  variant = 'danger',
+  variant = "danger",
   disabled = false,
-  className = '',
+  className = "",
 }: HoldButtonProps) {
   const [holding, setHolding] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -57,7 +57,9 @@ export function HoldButton({
     }
   }, []);
 
-  const remainingSeconds = Math.ceil((duration - (progress / 100) * duration) / 1000);
+  const remainingSeconds = Math.ceil(
+    (duration - (progress / 100) * duration) / 1000,
+  );
 
   return (
     <button

@@ -10,17 +10,17 @@ interface TabsProps {
   className?: string;
 }
 
-export function Tabs({ tabs, activeTab, onChange, className = '' }: TabsProps) {
+export function Tabs({ tabs, activeTab, onChange, className = "" }: TabsProps) {
   const handleKeyDown = (e: React.KeyboardEvent, index: number) => {
     let newIndex = index;
 
-    if (e.key === 'ArrowRight') {
+    if (e.key === "ArrowRight") {
       newIndex = (index + 1) % tabs.length;
-    } else if (e.key === 'ArrowLeft') {
+    } else if (e.key === "ArrowLeft") {
       newIndex = (index - 1 + tabs.length) % tabs.length;
-    } else if (e.key === 'Home') {
+    } else if (e.key === "Home") {
       newIndex = 0;
-    } else if (e.key === 'End') {
+    } else if (e.key === "End") {
       newIndex = tabs.length - 1;
     } else {
       return;
@@ -49,8 +49,8 @@ export function Tabs({ tabs, activeTab, onChange, className = '' }: TabsProps) {
             focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset
             ${
               activeTab === tab.id
-                ? 'bg-zinc-700 text-white'
-                : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                ? "bg-zinc-700 text-white"
+                : "text-zinc-400 hover:text-white hover:bg-zinc-800"
             }
           `}
         >

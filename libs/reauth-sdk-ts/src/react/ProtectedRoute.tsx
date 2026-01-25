@@ -1,7 +1,7 @@
-'use client';
+"use client";
 
-import { useEffect, ReactNode } from 'react';
-import { useAuthContext } from './AuthProvider';
+import { useEffect, ReactNode } from "react";
+import { useAuthContext } from "./AuthProvider";
 
 type ProtectedRouteProps = {
   children: ReactNode;

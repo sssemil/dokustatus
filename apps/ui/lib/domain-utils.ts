@@ -4,7 +4,7 @@
  */
 
 /** Get the main domain from env or default to reauth.dev */
-const MAIN_DOMAIN = process.env.NEXT_PUBLIC_MAIN_DOMAIN || 'reauth.dev';
+const MAIN_DOMAIN = process.env.NEXT_PUBLIC_MAIN_DOMAIN || "reauth.dev";
 
 /** Main app domains that show the dashboard */
 export const MAIN_DOMAINS = [MAIN_DOMAIN, `www.${MAIN_DOMAIN}`];
@@ -33,7 +33,7 @@ export function isMainApp(hostname: string): boolean {
  * Check if hostname is an auth ingress (reauth.* subdomain)
  */
 export function isAuthIngress(hostname: string): boolean {
-  return hostname.startsWith('reauth.') && !isMainApp(hostname);
+  return hostname.startsWith("reauth.") && !isMainApp(hostname);
 }
 
 /**
@@ -42,8 +42,8 @@ export function isAuthIngress(hostname: string): boolean {
  * Special case: main domain stays as-is
  */
 export function getRootDomain(hostname: string): string {
-  if (hostname.startsWith('reauth.') && !isMainApp(hostname)) {
-    return hostname.slice('reauth.'.length);
+  if (hostname.startsWith("reauth.") && !isMainApp(hostname)) {
+    return hostname.slice("reauth.".length);
   }
   return hostname;
 }
@@ -64,7 +64,9 @@ export function getApiHostname(hostname: string): string {
  * Check if we're in a development environment
  */
 export function isDevelopment(): boolean {
-  return typeof window !== 'undefined' &&
-    (window.location.hostname === 'localhost' ||
-     window.location.hostname === '127.0.0.1');
+  return (
+    typeof window !== "undefined" &&
+    (window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1")
+  );
 }

@@ -1,11 +1,11 @@
-'use client';
+"use client";
 
-import { useState, useEffect } from 'react';
-import { AlertTriangle } from 'lucide-react';
-import { Modal } from './Modal';
-import { Button } from './Button';
-import { Input } from './Input';
-import { HoldButton } from './HoldButton';
+import { useState, useEffect } from "react";
+import { AlertTriangle } from "lucide-react";
+import { Modal } from "./Modal";
+import { Button } from "./Button";
+import { Input } from "./Input";
+import { HoldButton } from "./HoldButton";
 
 interface ConfirmModalProps {
   isOpen: boolean;
@@ -13,7 +13,7 @@ interface ConfirmModalProps {
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
-  variant?: 'danger' | 'default';
+  variant?: "danger" | "default";
   confirmText?: string;
   confirmPlaceholder?: string;
   useHoldToConfirm?: boolean;
@@ -25,21 +25,21 @@ export function ConfirmModal({
   isOpen,
   title,
   message,
-  confirmLabel = 'Confirm',
-  cancelLabel = 'Cancel',
-  variant = 'default',
+  confirmLabel = "Confirm",
+  cancelLabel = "Cancel",
+  variant = "default",
   confirmText,
   confirmPlaceholder,
   useHoldToConfirm = false,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
-  const [inputValue, setInputValue] = useState('');
+  const [inputValue, setInputValue] = useState("");
 
   // Reset input when modal opens/closes
   useEffect(() => {
     if (isOpen) {
-      setInputValue('');
+      setInputValue("");
     }
   }, [isOpen]);
 
@@ -52,10 +52,16 @@ export function ConfirmModal({
   };
 
   return (
-    <Modal open={isOpen} onClose={onCancel} title={title} size="sm" variant={variant}>
+    <Modal
+      open={isOpen}
+      onClose={onCancel}
+      title={title}
+      size="sm"
+      variant={variant}
+    >
       <div className="space-y-4">
         {/* Warning message */}
-        {variant === 'danger' ? (
+        {variant === "danger" ? (
           <div className="flex items-center gap-3">
             <AlertTriangle size={20} className="text-red-400 flex-shrink-0" />
             <p className="text-sm text-red-100">{message}</p>
@@ -67,8 +73,11 @@ export function ConfirmModal({
         {/* Type to confirm input */}
         {confirmText && (
           <div className="space-y-2">
-            <label className={`block text-sm ${variant === 'danger' ? 'text-red-200' : 'text-zinc-400'}`}>
-              Type <span className="font-medium text-white">{confirmText}</span> to confirm:
+            <label
+              className={`block text-sm ${variant === "danger" ? "text-red-200" : "text-zinc-400"}`}
+            >
+              Type <span className="font-medium text-white">{confirmText}</span>{" "}
+              to confirm:
             </label>
             <Input
               value={inputValue}
@@ -84,7 +93,7 @@ export function ConfirmModal({
           <Button variant="ghost" onClick={onCancel}>
             {cancelLabel}
           </Button>
-          {useHoldToConfirm && variant === 'danger' ? (
+          {useHoldToConfirm && variant === "danger" ? (
             <HoldButton
               onComplete={handleConfirm}
               disabled={isConfirmDisabled}
@@ -95,7 +104,7 @@ export function ConfirmModal({
             </HoldButton>
           ) : (
             <Button
-              variant={variant === 'danger' ? 'danger' : 'primary'}
+              variant={variant === "danger" ? "danger" : "primary"}
               onClick={handleConfirm}
               disabled={isConfirmDisabled}
             >

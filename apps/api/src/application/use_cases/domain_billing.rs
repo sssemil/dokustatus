@@ -748,9 +748,9 @@ impl DomainBillingUseCases {
 
         // Validate key prefixes match the declared mode
         mode.validate_stripe_key_prefix(secret_key, "Secret key")
-            .map_err(|e| AppError::InvalidInput(e))?;
+            .map_err(AppError::InvalidInput)?;
         mode.validate_stripe_key_prefix(publishable_key, "Publishable key")
-            .map_err(|e| AppError::InvalidInput(e))?;
+            .map_err(AppError::InvalidInput)?;
 
         // Encrypt secrets
         let secret_key_encrypted = self.cipher.encrypt(secret_key)?;
@@ -942,13 +942,13 @@ impl DomainBillingUseCases {
         }
 
         // For Stripe, ensure it's configured for the mode
-        if provider == PaymentProvider::Stripe {
-            if !self.is_stripe_configured_for_mode(domain_id, mode).await? {
-                return Err(AppError::InvalidInput(format!(
-                    "Stripe {} mode must be configured before enabling",
-                    mode.as_str()
-                )));
-            }
+        if provider == PaymentProvider::Stripe
+            && !self.is_stripe_configured_for_mode(domain_id, mode).await?
+        {
+            return Err(AppError::InvalidInput(format!(
+                "Stripe {} mode must be configured before enabling",
+                mode.as_str()
+            )));
         }
 
         // Coinbase is not yet implemented
@@ -1703,9 +1703,7 @@ impl DomainBillingUseCases {
 
         // Must have same interval count
         if current_plan.interval_count != new_plan.interval_count {
-            return Err(AppError::InvalidInput(format!(
-                "Cannot switch between different billing frequencies. Please cancel and resubscribe."
-            )));
+            return Err(AppError::InvalidInput("Cannot switch between different billing frequencies. Please cancel and resubscribe.".to_string()));
         }
 
         Ok(())

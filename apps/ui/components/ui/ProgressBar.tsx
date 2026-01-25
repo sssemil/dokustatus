@@ -5,7 +5,12 @@ interface ProgressBarProps {
   showLabel?: boolean;
 }
 
-export function ProgressBar({ value, max, className = '', showLabel = false }: ProgressBarProps) {
+export function ProgressBar({
+  value,
+  max,
+  className = "",
+  showLabel = false,
+}: ProgressBarProps) {
   const percentage = Math.min((value / max) * 100, 100);
   const isHigh = percentage > 80;
 
@@ -14,7 +19,7 @@ export function ProgressBar({ value, max, className = '', showLabel = false }: P
       <div className="h-2 bg-zinc-800 rounded-full overflow-hidden border border-zinc-700">
         <div
           className={`h-full transition-all duration-500 rounded-full ${
-            isHigh ? 'bg-amber-500' : 'bg-blue-500'
+            isHigh ? "bg-amber-500" : "bg-blue-500"
           }`}
           style={{ width: `${percentage}%` }}
           role="progressbar"

@@ -6,7 +6,7 @@ export type ReauthSession = {
   roles: string[] | null;
   waitlist_position: number | null;
   error: string | null;
-  error_code: 'ACCOUNT_SUSPENDED' | null;
+  error_code: "ACCOUNT_SUSPENDED" | null;
   /** Subscription information (if billing is configured) */
   subscription?: {
     status: string;
@@ -61,15 +61,15 @@ export type ReauthServerConfig = ReauthConfig & {
 
 /** Subscription status values */
 export type SubscriptionStatus =
-  | 'active'
-  | 'past_due'
-  | 'canceled'
-  | 'trialing'
-  | 'incomplete'
-  | 'incomplete_expired'
-  | 'unpaid'
-  | 'paused'
-  | 'none';
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "trialing"
+  | "incomplete"
+  | "incomplete_expired"
+  | "unpaid"
+  | "paused"
+  | "none";
 
 /** Subscription info included in JWT claims */
 export type SubscriptionInfo = {
@@ -95,7 +95,7 @@ export type SubscriptionPlan = {
   description: string | null;
   priceCents: number;
   currency: string;
-  interval: 'monthly' | 'yearly' | 'custom';
+  interval: "monthly" | "yearly" | "custom";
   intervalCount: number;
   trialDays: number;
   features: string[];

@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 /// Matches a subset of Stripe's test card behaviors.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PaymentScenario {
     /// Payment succeeds immediately (Stripe test card: 4242424242424242)
+    #[default]
     Success,
     /// Card is declined (Stripe test card: 4000000000000002)
     Decline,
@@ -121,12 +123,6 @@ impl PaymentScenario {
             PaymentScenario::ExpiredCard,
             PaymentScenario::ProcessingError,
         ]
-    }
-}
-
-impl Default for PaymentScenario {
-    fn default() -> Self {
-        PaymentScenario::Success
     }
 }
 

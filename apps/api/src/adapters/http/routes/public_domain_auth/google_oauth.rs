@@ -113,12 +113,12 @@ impl From<OAuthExchangeError> for AppError {
                 error_code,
                 message,
             } => {
-                if let Some(code) = error_code {
-                    if code == "invalid_grant" {
-                        return AppError::InvalidInput(
-                            "Authorization code expired or already used".into(),
-                        );
-                    }
+                if let Some(code) = error_code
+                    && code == "invalid_grant"
+                {
+                    return AppError::InvalidInput(
+                        "Authorization code expired or already used".into(),
+                    );
                 }
                 if status >= 500 {
                     AppError::Internal(format!("Google API error ({status}): {message}"))
@@ -420,18 +420,17 @@ async fn google_exchange(
         }
     };
 
-    if response.is_ok() {
-        if let Err(e) = app_state
+    if response.is_ok()
+        && let Err(e) = app_state
             .domain_auth_use_cases
             .complete_google_oauth_state(&payload.state)
             .await
-        {
-            tracing::warn!(
-                state = %payload.state,
-                error = %e,
-                "Failed to delete OAuth state after successful login (best-effort)"
-            );
-        }
+    {
+        tracing::warn!(
+            state = %payload.state,
+            error = %e,
+            "Failed to delete OAuth state after successful login (best-effort)"
+        );
     }
 
     response
@@ -459,7 +458,7 @@ async fn google_confirm_link(
         .domain_auth_use_cases
         .get_end_user_by_id(link_data.existing_user_id)
         .await?
-        .ok_or_else(|| AppError::NotFound)?;
+        .ok_or(AppError::NotFound)?;
 
     // 2. Check user belongs to correct domain (cross-tenant protection)
     if user.domain_id != link_data.domain_id {
@@ -821,10 +820,10 @@ async fn parse_google_id_token(
     let claims = token_data.claims;
 
     // Additional validation: check azp if present
-    if let Some(ref azp) = claims.azp {
-        if azp != expected_client_id {
-            return Err(AppError::InvalidInput("Invalid id_token azp claim".into()));
-        }
+    if let Some(ref azp) = claims.azp
+        && azp != expected_client_id
+    {
+        return Err(AppError::InvalidInput("Invalid id_token azp claim".into()));
     }
 
     Ok((claims.sub, claims.email, claims.email_verified))

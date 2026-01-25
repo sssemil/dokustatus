@@ -191,7 +191,7 @@ impl SubscriptionPlanRepo for PostgresPersistence {
         let features_json = input
             .features
             .as_ref()
-            .map(|f| serde_json::to_value(f))
+            .map(serde_json::to_value)
             .transpose()
             .map_err(|err| {
                 tracing::error!(error = %err, "Failed to serialize features to JSON");

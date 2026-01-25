@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode } from "react";
 
 interface Column<T> {
   key: string;
@@ -21,8 +21,8 @@ export function Table<T extends Record<string, unknown>>({
   data,
   keyExtractor,
   onRowClick,
-  emptyMessage = 'No data',
-  className = '',
+  emptyMessage = "No data",
+  className = "",
 }: TableProps<T>) {
   if (data.length === 0) {
     return (
@@ -40,7 +40,7 @@ export function Table<T extends Record<string, unknown>>({
             {columns.map((column) => (
               <th
                 key={column.key}
-                className={`px-4 py-3 font-medium ${column.className || ''}`}
+                className={`px-4 py-3 font-medium ${column.className || ""}`}
               >
                 {column.header}
               </th>
@@ -54,11 +54,14 @@ export function Table<T extends Record<string, unknown>>({
               onClick={() => onRowClick?.(item)}
               className={`
                 bg-zinc-900/50 transition-colors
-                ${onRowClick ? 'hover:bg-zinc-900 cursor-pointer' : ''}
+                ${onRowClick ? "hover:bg-zinc-900 cursor-pointer" : ""}
               `}
             >
               {columns.map((column) => (
-                <td key={column.key} className={`px-4 py-3 ${column.className || ''}`}>
+                <td
+                  key={column.key}
+                  className={`px-4 py-3 ${column.className || ""}`}
+                >
                   {column.render
                     ? column.render(item)
                     : (item[column.key] as ReactNode)}

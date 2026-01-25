@@ -4,7 +4,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "payment_mode", rename_all = "lowercase")]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum PaymentMode {
+    #[default]
     Test,
     Live,
 }
@@ -54,12 +56,6 @@ impl PaymentMode {
         } else {
             Ok(())
         }
-    }
-}
-
-impl Default for PaymentMode {
-    fn default() -> Self {
-        PaymentMode::Test
     }
 }
 

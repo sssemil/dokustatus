@@ -4,7 +4,7 @@ import type {
   User,
   UserDetails,
   TokenVerification,
-} from './types';
+} from "./types";
 
 /**
  * Create a reauth client for server-side session validation.
@@ -98,14 +98,14 @@ export function createServerClient(config: ReauthServerConfig) {
     async verifyToken(token: string): Promise<TokenVerification> {
       if (!apiKey) {
         throw new Error(
-          'API key is required for verifyToken. Configure it with createServerClient({ domain, apiKey }).'
+          "API key is required for verifyToken. Configure it with createServerClient({ domain, apiKey }).",
         );
       }
 
       const res = await fetch(`${developerBaseUrl}/auth/verify-token`, {
-        method: 'POST',
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
           Authorization: `Bearer ${apiKey}`,
         },
         body: JSON.stringify({ token }),
@@ -113,7 +113,7 @@ export function createServerClient(config: ReauthServerConfig) {
 
       if (!res.ok) {
         if (res.status === 401) {
-          throw new Error('Invalid API key');
+          throw new Error("Invalid API key");
         }
         throw new Error(`Failed to verify token: ${res.status}`);
       }
@@ -147,7 +147,7 @@ export function createServerClient(config: ReauthServerConfig) {
     async getUserById(userId: string): Promise<UserDetails | null> {
       if (!apiKey) {
         throw new Error(
-          'API key is required for getUserById. Configure it with createServerClient({ domain, apiKey }).'
+          "API key is required for getUserById. Configure it with createServerClient({ domain, apiKey }).",
         );
       }
 
@@ -159,7 +159,7 @@ export function createServerClient(config: ReauthServerConfig) {
 
       if (!res.ok) {
         if (res.status === 401) {
-          throw new Error('Invalid API key');
+          throw new Error("Invalid API key");
         }
         if (res.status === 404) {
           return null;

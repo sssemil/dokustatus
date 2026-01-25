@@ -1,7 +1,7 @@
-export { createReauthClient } from './client';
-export type { ReauthClient } from './client';
-export { ReauthErrorCode, requiresOAuthRestart } from './errors';
-export type { ReauthError } from './errors';
+export { createReauthClient } from "./client";
+export type { ReauthClient } from "./client";
+export { ReauthErrorCode, requiresOAuthRestart } from "./errors";
+export type { ReauthError } from "./errors";
 export type {
   ReauthSession,
   User,
@@ -9,4 +9,4 @@ export type {
   ReauthConfig,
   ReauthServerConfig,
   TokenVerification,
-} from './types';
+} from "./types";

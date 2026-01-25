@@ -6,7 +6,9 @@ use super::payment_mode::PaymentMode;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "payment_provider", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum PaymentProvider {
+    #[default]
     Stripe,
     Dummy,
     Coinbase,
@@ -80,12 +82,6 @@ impl PaymentProvider {
     /// Providers that are currently implemented
     pub fn implemented() -> &'static [PaymentProvider] {
         &[PaymentProvider::Stripe, PaymentProvider::Dummy]
-    }
-}
-
-impl Default for PaymentProvider {
-    fn default() -> Self {
-        PaymentProvider::Stripe
     }
 }
 

@@ -1,18 +1,22 @@
-import './globals.css';
-import { Inter } from 'next/font/google';
-import { ThemeProvider } from './components/ThemeContext';
+import "./globals.css";
+import { Inter } from "next/font/google";
+import { ThemeProvider } from "./components/ThemeContext";
 
 const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
+  subsets: ["latin"],
+  variable: "--font-inter",
 });
 
 export const metadata = {
-  title: 'reauth.dev',
-  description: 'Auth, billing, email. One DNS setup.'
+  title: "reauth.dev",
+  description: "Auth, billing, email. One DNS setup.",
 };
 
-export default function RootLayout({ children }: { children: React.ReactNode }) {
+export default function RootLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   return (
     <html lang="en" className={inter.variable} suppressHydrationWarning>
       <head>
@@ -39,9 +43,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         />
       </head>
       <body className="font-sans">
-        <ThemeProvider>
-          {children}
-        </ThemeProvider>
+        <ThemeProvider>{children}</ThemeProvider>
       </body>
     </html>
   );

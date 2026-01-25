@@ -1,10 +1,10 @@
-'use client';
+"use client";
 
-import { useEffect, useState } from 'react';
-import { usePathname } from 'next/navigation';
-import Link from 'next/link';
-import { Shield, LayoutDashboard, Globe, Settings, Menu } from 'lucide-react';
-import { UserMenu } from './UserMenu';
+import { useEffect, useState } from "react";
+import { usePathname } from "next/navigation";
+import Link from "next/link";
+import { Shield, LayoutDashboard, Globe, Settings, Menu } from "lucide-react";
+import { UserMenu } from "./UserMenu";
 
 interface SidebarProps {
   email: string;
@@ -13,9 +13,14 @@ interface SidebarProps {
 }
 
 const navItems = [
-  { id: 'dashboard', href: '/dashboard', icon: LayoutDashboard, label: 'Dashboard' },
-  { id: 'domains', href: '/domains', icon: Globe, label: 'Domains' },
-  { id: 'settings', href: '/settings', icon: Settings, label: 'Settings' },
+  {
+    id: "dashboard",
+    href: "/dashboard",
+    icon: LayoutDashboard,
+    label: "Dashboard",
+  },
+  { id: "domains", href: "/domains", icon: Globe, label: "Domains" },
+  { id: "settings", href: "/settings", icon: Settings, label: "Settings" },
 ];
 
 export function Sidebar({ email, onLogout, onProfileClick }: SidebarProps) {
@@ -31,13 +36,13 @@ export function Sidebar({ email, onLogout, onProfileClick }: SidebarProps) {
     };
 
     checkWidth();
-    window.addEventListener('resize', checkWidth);
-    return () => window.removeEventListener('resize', checkWidth);
+    window.addEventListener("resize", checkWidth);
+    return () => window.removeEventListener("resize", checkWidth);
   }, []);
 
   const isActive = (href: string) => {
-    if (href === '/dashboard') {
-      return pathname === '/dashboard';
+    if (href === "/dashboard") {
+      return pathname === "/dashboard";
     }
     return pathname.startsWith(href);
   };
@@ -47,11 +52,13 @@ export function Sidebar({ email, onLogout, onProfileClick }: SidebarProps) {
       className={`
         bg-zinc-900 border-r border-zinc-800 flex flex-col flex-shrink-0
         transition-all duration-300
-        ${collapsed ? 'w-16' : 'w-56'}
+        ${collapsed ? "w-16" : "w-56"}
       `}
     >
       {/* Logo */}
-      <div className={`flex items-center gap-2 p-4 ${collapsed ? 'justify-center' : ''}`}>
+      <div
+        className={`flex items-center gap-2 p-4 ${collapsed ? "justify-center" : ""}`}
+      >
         <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center flex-shrink-0">
           <Shield size={18} className="text-white" />
         </div>
@@ -62,7 +69,7 @@ export function Sidebar({ email, onLogout, onProfileClick }: SidebarProps) {
       <button
         onClick={() => setCollapsed(!collapsed)}
         className="mx-2 mb-4 p-2 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded-md transition-colors"
-        title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
       >
         <Menu size={18} />
       </button>
@@ -79,10 +86,10 @@ export function Sidebar({ email, onLogout, onProfileClick }: SidebarProps) {
               transition-all duration-200
               ${
                 isActive(item.href)
-                  ? 'bg-zinc-800 text-white'
-                  : 'text-zinc-400 hover:text-white hover:bg-zinc-800/50'
+                  ? "bg-zinc-800 text-white"
+                  : "text-zinc-400 hover:text-white hover:bg-zinc-800/50"
               }
-              ${collapsed ? 'justify-center' : ''}
+              ${collapsed ? "justify-center" : ""}
             `}
           >
             <item.icon size={18} />
@@ -92,7 +99,9 @@ export function Sidebar({ email, onLogout, onProfileClick }: SidebarProps) {
       </nav>
 
       {/* User menu */}
-      <div className={`p-2 border-t border-zinc-800 ${collapsed ? 'px-1' : ''}`}>
+      <div
+        className={`p-2 border-t border-zinc-800 ${collapsed ? "px-1" : ""}`}
+      >
         <UserMenu
           email={email}
           collapsed={collapsed}

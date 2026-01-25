@@ -1,8 +1,8 @@
-'use client';
+"use client";
 
-import { createContext, useContext, ReactNode } from 'react';
-import { useAuth } from './useAuth';
-import type { User, ReauthConfig } from '../types';
+import { createContext, useContext, ReactNode } from "react";
+import { useAuth } from "./useAuth";
+import type { User, ReauthConfig } from "../types";
 
 type AuthContextType = {
   user: User | null;
@@ -64,7 +64,7 @@ export function AuthProvider({ config, children }: AuthProviderProps) {
 export function useAuthContext() {
   const context = useContext(AuthContext);
   if (!context) {
-    throw new Error('useAuthContext must be used within AuthProvider');
+    throw new Error("useAuthContext must be used within AuthProvider");
   }
   return context;
 }

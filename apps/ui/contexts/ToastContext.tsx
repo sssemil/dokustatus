@@ -1,11 +1,17 @@
-'use client';
+"use client";
 
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
-import { createPortal } from 'react-dom';
-import { CheckCircle, XCircle, Info, X } from 'lucide-react';
-import { zIndex } from '@/lib/design-tokens';
+import {
+  createContext,
+  useContext,
+  useState,
+  useCallback,
+  ReactNode,
+} from "react";
+import { createPortal } from "react-dom";
+import { CheckCircle, XCircle, Info, X } from "lucide-react";
+import { zIndex } from "@/lib/design-tokens";
 
-type ToastType = 'success' | 'error' | 'info';
+type ToastType = "success" | "error" | "info";
 
 interface Toast {
   id: number;
@@ -22,7 +28,7 @@ const ToastContext = createContext<ToastContextValue | null>(null);
 export function useToast() {
   const context = useContext(ToastContext);
   if (!context) {
-    throw new Error('useToast must be used within a ToastProvider');
+    throw new Error("useToast must be used within a ToastProvider");
   }
   return context;
 }
@@ -34,15 +40,18 @@ interface ToastProviderProps {
 export function ToastProvider({ children }: ToastProviderProps) {
   const [toasts, setToasts] = useState<Toast[]>([]);
 
-  const addToast = useCallback((message: string, type: ToastType = 'success') => {
-    const id = Date.now();
-    setToasts((prev) => [...prev, { id, message, type }]);
+  const addToast = useCallback(
+    (message: string, type: ToastType = "success") => {
+      const id = Date.now();
+      setToasts((prev) => [...prev, { id, message, type }]);
 
-    // Auto-dismiss after 3 seconds
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
-    }, 3000);
-  }, []);
+      // Auto-dismiss after 3 seconds
+      setTimeout(() => {
+        setToasts((prev) => prev.filter((t) => t.id !== id));
+      }, 3000);
+    },
+    [],
+  );
 
   const removeToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
@@ -55,15 +64,15 @@ export function ToastProvider({ children }: ToastProviderProps) {
   };
 
   const toastStyles: Record<ToastType, string> = {
-    success: 'bg-emerald-600 text-white',
-    error: 'bg-red-600 text-white',
-    info: 'bg-zinc-700 text-white',
+    success: "bg-emerald-600 text-white",
+    error: "bg-red-600 text-white",
+    info: "bg-zinc-700 text-white",
   };
 
   return (
     <ToastContext.Provider value={{ addToast }}>
       {children}
-      {typeof document !== 'undefined' &&
+      {typeof document !== "undefined" &&
         createPortal(
           <div
             className="fixed bottom-4 right-4 flex flex-col gap-2"
@@ -94,7 +103,7 @@ export function ToastProvider({ children }: ToastProviderProps) {
               </div>
             ))}
           </div>,
-          document.body
+          document.body,
         )}
     </ToastContext.Provider>
   );

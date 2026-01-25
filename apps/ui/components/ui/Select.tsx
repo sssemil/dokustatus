@@ -1,5 +1,5 @@
-import { SelectHTMLAttributes, forwardRef } from 'react';
-import { ChevronDown } from 'lucide-react';
+import { SelectHTMLAttributes, forwardRef } from "react";
+import { ChevronDown } from "lucide-react";
 
 interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
   label?: string;
@@ -8,8 +8,8 @@ interface SelectProps extends SelectHTMLAttributes<HTMLSelectElement> {
 }
 
 export const Select = forwardRef<HTMLSelectElement, SelectProps>(
-  ({ label, error, options, className = '', id, ...props }, ref) => {
-    const selectId = id || label?.toLowerCase().replace(/\s+/g, '-');
+  ({ label, error, options, className = "", id, ...props }, ref) => {
+    const selectId = id || label?.toLowerCase().replace(/\s+/g, "-");
 
     return (
       <div className="w-full">
@@ -30,7 +30,7 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
               text-white appearance-none cursor-pointer
               transition-all duration-200
               focus:outline-none focus:ring-2 focus:ring-blue-500/50
-              ${error ? 'border-red-500' : 'border-zinc-700 hover:border-zinc-600 focus:border-blue-500'}
+              ${error ? "border-red-500" : "border-zinc-700 hover:border-zinc-600 focus:border-blue-500"}
               ${className}
             `}
             {...props}
@@ -46,12 +46,10 @@ export const Select = forwardRef<HTMLSelectElement, SelectProps>(
             className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none"
           />
         </div>
-        {error && (
-          <p className="mt-1 text-sm text-red-400">{error}</p>
-        )}
+        {error && <p className="mt-1 text-sm text-red-400">{error}</p>}
       </div>
     );
-  }
+  },
 );
 
-Select.displayName = 'Select';
+Select.displayName = "Select";

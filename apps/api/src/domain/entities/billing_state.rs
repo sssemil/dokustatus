@@ -5,8 +5,10 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[sqlx(type_name = "billing_state", rename_all = "snake_case")]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum BillingState {
     /// Normal active state - subscription is functioning normally
+    #[default]
     Active,
     /// Provider switch in progress - old subscription canceled, new one being created
     PendingSwitch,
@@ -59,12 +61,6 @@ impl BillingState {
     /// Check if transition to the given state is valid
     pub fn can_transition_to(&self, new_state: BillingState) -> bool {
         self.valid_transitions().contains(&new_state)
-    }
-}
-
-impl Default for BillingState {
-    fn default() -> Self {
-        BillingState::Active
     }
 }
 

@@ -1,29 +1,36 @@
-'use client';
+"use client";
 
-import { ReactNode, useState } from 'react';
+import { ReactNode, useState } from "react";
 
 interface TooltipProps {
   content: string;
   children: ReactNode;
-  position?: 'top' | 'bottom' | 'left' | 'right';
+  position?: "top" | "bottom" | "left" | "right";
   className?: string;
 }
 
 const positionStyles = {
-  top: 'bottom-full left-1/2 -translate-x-1/2 mb-2',
-  bottom: 'top-full left-1/2 -translate-x-1/2 mt-2',
-  left: 'right-full top-1/2 -translate-y-1/2 mr-2',
-  right: 'left-full top-1/2 -translate-y-1/2 ml-2',
+  top: "bottom-full left-1/2 -translate-x-1/2 mb-2",
+  bottom: "top-full left-1/2 -translate-x-1/2 mt-2",
+  left: "right-full top-1/2 -translate-y-1/2 mr-2",
+  right: "left-full top-1/2 -translate-y-1/2 ml-2",
 };
 
 const arrowStyles = {
-  top: 'top-full left-1/2 -translate-x-1/2 border-t-zinc-800 border-x-transparent border-b-transparent',
-  bottom: 'bottom-full left-1/2 -translate-x-1/2 border-b-zinc-800 border-x-transparent border-t-transparent',
-  left: 'left-full top-1/2 -translate-y-1/2 border-l-zinc-800 border-y-transparent border-r-transparent',
-  right: 'right-full top-1/2 -translate-y-1/2 border-r-zinc-800 border-y-transparent border-l-transparent',
+  top: "top-full left-1/2 -translate-x-1/2 border-t-zinc-800 border-x-transparent border-b-transparent",
+  bottom:
+    "bottom-full left-1/2 -translate-x-1/2 border-b-zinc-800 border-x-transparent border-t-transparent",
+  left: "left-full top-1/2 -translate-y-1/2 border-l-zinc-800 border-y-transparent border-r-transparent",
+  right:
+    "right-full top-1/2 -translate-y-1/2 border-r-zinc-800 border-y-transparent border-l-transparent",
 };
 
-export function Tooltip({ content, children, position = 'top', className = '' }: TooltipProps) {
+export function Tooltip({
+  content,
+  children,
+  position = "top",
+  className = "",
+}: TooltipProps) {
   const [visible, setVisible] = useState(false);
 
   return (

@@ -166,13 +166,13 @@ impl StripeClient {
             params.push(("client_reference_id".to_string(), ref_id.to_string()));
         }
 
-        if let Some(days) = trial_days {
-            if days > 0 {
-                params.push((
-                    "subscription_data[trial_period_days]".to_string(),
-                    days.to_string(),
-                ));
-            }
+        if let Some(days) = trial_days
+            && days > 0
+        {
+            params.push((
+                "subscription_data[trial_period_days]".to_string(),
+                days.to_string(),
+            ));
         }
 
         let response = self
@@ -628,10 +628,7 @@ impl StripeClient {
             if let Ok(error) = serde_json::from_str::<StripeErrorResponse>(&body) {
                 return Err(AppError::InvalidInput(format!(
                     "Stripe error: {}",
-                    error
-                        .error
-                        .message
-                        .unwrap_or_else(|| error.error.error_type)
+                    error.error.message.unwrap_or(error.error.error_type)
                 )));
             }
 

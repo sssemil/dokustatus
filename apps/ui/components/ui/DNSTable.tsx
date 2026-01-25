@@ -1,9 +1,9 @@
-'use client';
+"use client";
 
-import { RefreshCw, CheckCircle, XCircle, Clock } from 'lucide-react';
-import { Badge } from './Badge';
-import { CodeBlock } from './CodeBlock';
-import { Button } from './Button';
+import { RefreshCw, CheckCircle, XCircle, Clock } from "lucide-react";
+import { Badge } from "./Badge";
+import { CodeBlock } from "./CodeBlock";
+import { Button } from "./Button";
 
 interface DNSRecord {
   type: string;
@@ -25,7 +25,7 @@ export function DNSTable({
   lastChecked,
   onRefresh,
   refreshing = false,
-  className = '',
+  className = "",
 }: DNSTableProps) {
   return (
     <div className={`space-y-3 ${className}`}>
@@ -41,7 +41,10 @@ export function DNSTable({
           </thead>
           <tbody className="divide-y divide-zinc-800">
             {records.map((record, idx) => (
-              <tr key={idx} className="bg-zinc-900/50 hover:bg-zinc-900 transition-colors">
+              <tr
+                key={idx}
+                className="bg-zinc-900/50 hover:bg-zinc-900 transition-colors"
+              >
                 <td className="px-4 py-3">
                   <Badge>{record.type}</Badge>
                 </td>
@@ -53,7 +56,10 @@ export function DNSTable({
                 </td>
                 <td className="px-4 py-3 text-center">
                   {record.verified ? (
-                    <CheckCircle className="text-emerald-400 inline" size={18} />
+                    <CheckCircle
+                      className="text-emerald-400 inline"
+                      size={18}
+                    />
                   ) : (
                     <XCircle className="text-red-400 inline" size={18} />
                   )}

@@ -1,7 +1,11 @@
 import type {
-  ReauthSession, ReauthConfig, SubscriptionPlan, UserSubscription,
-  CheckoutSession, PortalSession
-} from './types';
+  ReauthSession,
+  ReauthConfig,
+  SubscriptionPlan,
+  UserSubscription,
+  CheckoutSession,
+  PortalSession,
+} from "./types";
 
 /**
  * Create a reauth client for browser-side authentication.
@@ -30,8 +34,8 @@ export function createReauthClient(config: ReauthConfig) {
      * After successful login, they'll be redirected back to your configured redirect URL.
      */
     login(): void {
-      if (typeof window === 'undefined') {
-        throw new Error('login() can only be called in browser');
+      if (typeof window === "undefined") {
+        throw new Error("login() can only be called in browser");
       }
       window.location.href = `https://reauth.${domain}/`;
     },
@@ -42,7 +46,7 @@ export function createReauthClient(config: ReauthConfig) {
      */
     async getSession(): Promise<ReauthSession> {
       const res = await fetch(`${baseUrl}/auth/session`, {
-        credentials: 'include',
+        credentials: "include",
       });
       return res.json();
     },
@@ -54,8 +58,8 @@ export function createReauthClient(config: ReauthConfig) {
      */
     async refresh(): Promise<boolean> {
       const res = await fetch(`${baseUrl}/auth/refresh`, {
-        method: 'POST',
-        credentials: 'include',
+        method: "POST",
+        credentials: "include",
       });
       return res.ok;
     },
@@ -65,8 +69,8 @@ export function createReauthClient(config: ReauthConfig) {
      */
     async logout(): Promise<void> {
       await fetch(`${baseUrl}/auth/logout`, {
-        method: 'POST',
-        credentials: 'include',
+        method: "POST",
+        credentials: "include",
       });
     },
 
@@ -76,8 +80,8 @@ export function createReauthClient(config: ReauthConfig) {
      */
     async deleteAccount(): Promise<boolean> {
       const res = await fetch(`${baseUrl}/auth/account`, {
-        method: 'DELETE',
-        credentials: 'include',
+        method: "DELETE",
+        credentials: "include",
       });
       return res.ok;
     },
@@ -92,35 +96,37 @@ export function createReauthClient(config: ReauthConfig) {
      */
     async getPlans(): Promise<SubscriptionPlan[]> {
       const res = await fetch(`${baseUrl}/billing/plans`, {
-        credentials: 'include',
+        credentials: "include",
       });
       if (!res.ok) return [];
       const data = await res.json();
-      return data.map((p: {
-        id: string;
-        code: string;
-        name: string;
-        description: string | null;
-        price_cents: number;
-        currency: string;
-        interval: string;
-        interval_count: number;
-        trial_days: number;
-        features: string[];
-        display_order: number;
-      }) => ({
-        id: p.id,
-        code: p.code,
-        name: p.name,
-        description: p.description,
-        priceCents: p.price_cents,
-        currency: p.currency,
-        interval: p.interval,
-        intervalCount: p.interval_count,
-        trialDays: p.trial_days,
-        features: p.features,
-        displayOrder: p.display_order,
-      }));
+      return data.map(
+        (p: {
+          id: string;
+          code: string;
+          name: string;
+          description: string | null;
+          price_cents: number;
+          currency: string;
+          interval: string;
+          interval_count: number;
+          trial_days: number;
+          features: string[];
+          display_order: number;
+        }) => ({
+          id: p.id,
+          code: p.code,
+          name: p.name,
+          description: p.description,
+          priceCents: p.price_cents,
+          currency: p.currency,
+          interval: p.interval,
+          intervalCount: p.interval_count,
+          trialDays: p.trial_days,
+          features: p.features,
+          displayOrder: p.display_order,
+        }),
+      );
     },
 
     /**
@@ -128,7 +134,7 @@ export function createReauthClient(config: ReauthConfig) {
      */
     async getSubscription(): Promise<UserSubscription> {
       const res = await fetch(`${baseUrl}/billing/subscription`, {
-        credentials: 'include',
+        credentials: "include",
       });
       const data = await res.json();
       return {
@@ -152,12 +158,12 @@ export function createReauthClient(config: ReauthConfig) {
     async createCheckout(
       planCode: string,
       successUrl: string,
-      cancelUrl: string
+      cancelUrl: string,
     ): Promise<CheckoutSession> {
       const res = await fetch(`${baseUrl}/billing/checkout`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           plan_code: planCode,
           success_url: successUrl,
@@ -166,7 +172,7 @@ export function createReauthClient(config: ReauthConfig) {
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.message || 'Failed to create checkout session');
+        throw new Error(err.message || "Failed to create checkout session");
       }
       const data = await res.json();
       return { checkoutUrl: data.checkout_url };
@@ -178,14 +184,14 @@ export function createReauthClient(config: ReauthConfig) {
      * @param planCode The plan code to subscribe to
      */
     async subscribe(planCode: string): Promise<void> {
-      if (typeof window === 'undefined') {
-        throw new Error('subscribe() can only be called in browser');
+      if (typeof window === "undefined") {
+        throw new Error("subscribe() can only be called in browser");
       }
       const currentUrl = window.location.href;
       const { checkoutUrl } = await this.createCheckout(
         planCode,
         currentUrl,
-        currentUrl
+        currentUrl,
       );
       window.location.href = checkoutUrl;
     },
@@ -195,19 +201,19 @@ export function createReauthClient(config: ReauthConfig) {
      * @param returnUrl URL to return to after leaving the portal
      */
     async openBillingPortal(returnUrl?: string): Promise<void> {
-      if (typeof window === 'undefined') {
-        throw new Error('openBillingPortal() can only be called in browser');
+      if (typeof window === "undefined") {
+        throw new Error("openBillingPortal() can only be called in browser");
       }
       const res = await fetch(`${baseUrl}/billing/portal`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
         body: JSON.stringify({
           return_url: returnUrl || window.location.href,
         }),
       });
       if (!res.ok) {
-        throw new Error('Failed to open billing portal');
+        throw new Error("Failed to open billing portal");
       }
       const data = await res.json();
       window.location.href = data.portal_url;
@@ -219,8 +225,8 @@ export function createReauthClient(config: ReauthConfig) {
      */
     async cancelSubscription(): Promise<boolean> {
       const res = await fetch(`${baseUrl}/billing/cancel`, {
-        method: 'POST',
-        credentials: 'include',
+        method: "POST",
+        credentials: "include",
       });
       return res.ok;
     },

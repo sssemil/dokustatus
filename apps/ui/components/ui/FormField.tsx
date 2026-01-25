@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import { ReactNode } from "react";
 
 interface FormFieldProps {
   label?: string;
@@ -9,7 +9,14 @@ interface FormFieldProps {
   className?: string;
 }
 
-export function FormField({ label, error, helpText, required, children, className = '' }: FormFieldProps) {
+export function FormField({
+  label,
+  error,
+  helpText,
+  required,
+  children,
+  className = "",
+}: FormFieldProps) {
   return (
     <div className={`w-full ${className}`}>
       {label && (
@@ -19,9 +26,7 @@ export function FormField({ label, error, helpText, required, children, classNam
         </label>
       )}
       {children}
-      {error && (
-        <p className="mt-1 text-sm text-red-400">{error}</p>
-      )}
+      {error && <p className="mt-1 text-sm text-red-400">{error}</p>}
       {helpText && !error && (
         <p className="mt-1 text-xs text-zinc-500">{helpText}</p>
       )}
