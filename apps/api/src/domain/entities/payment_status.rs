@@ -3,7 +3,16 @@ use strum::{AsRefStr, Display, EnumString};
 
 /// Payment status for billing payments
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, sqlx::Type, AsRefStr, Display,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
+    AsRefStr,
+    Display,
     EnumString,
 )]
 #[sqlx(type_name = "payment_status", rename_all = "snake_case")]

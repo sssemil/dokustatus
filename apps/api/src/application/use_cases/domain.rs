@@ -13,7 +13,7 @@ use crate::domain::entities::payment_mode::PaymentMode;
 pub use crate::application::helpers::domain_parsing::extract_root_from_reauth_hostname;
 
 #[async_trait]
-pub trait DomainRepo: Send + Sync {
+pub trait DomainRepoTrait: Send + Sync {
     async fn create(&self, owner_end_user_id: Uuid, domain: &str) -> AppResult<DomainProfile>;
     async fn get_by_id(&self, domain_id: Uuid) -> AppResult<Option<DomainProfile>>;
     async fn get_by_domain(&self, domain: &str) -> AppResult<Option<DomainProfile>>;
@@ -40,14 +40,14 @@ pub trait DnsVerifier: Send + Sync {
 
 #[derive(Clone)]
 pub struct DomainUseCases {
-    repo: Arc<dyn DomainRepo>,
+    repo: Arc<dyn DomainRepoTrait>,
     dns_verifier: Arc<dyn DnsVerifier>,
     ingress_domain: String,
 }
 
 impl DomainUseCases {
     pub fn new(
-        repo: Arc<dyn DomainRepo>,
+        repo: Arc<dyn DomainRepoTrait>,
         dns_verifier: Arc<dyn DnsVerifier>,
         ingress_domain: String,
     ) -> Self {

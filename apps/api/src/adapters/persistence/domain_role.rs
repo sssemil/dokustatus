@@ -18,7 +18,7 @@ pub struct DomainRoleWithCount {
 }
 
 #[async_trait]
-pub trait DomainRoleRepo: Send + Sync {
+pub trait DomainRoleRepoTrait: Send + Sync {
     async fn create(&self, domain_id: Uuid, name: &str) -> AppResult<DomainRole>;
     async fn list_by_domain(&self, domain_id: Uuid) -> AppResult<Vec<DomainRole>>;
     async fn list_by_domain_with_counts(
@@ -50,7 +50,7 @@ fn row_to_role_with_count(row: sqlx::postgres::PgRow) -> DomainRoleWithCount {
 }
 
 #[async_trait]
-impl DomainRoleRepo for PostgresPersistence {
+impl DomainRoleRepoTrait for PostgresPersistence {
     async fn create(&self, domain_id: Uuid, name: &str) -> AppResult<DomainRole> {
         let row = sqlx::query(
             r#"

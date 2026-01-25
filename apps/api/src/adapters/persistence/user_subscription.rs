@@ -7,7 +7,7 @@ use crate::{
     app_error::{AppError, AppResult},
     application::use_cases::domain_billing::{
         CreateSubscriptionInput, StripeSubscriptionUpdate, SubscriptionPlanProfile,
-        UserSubscriptionProfile, UserSubscriptionRepo, UserSubscriptionWithPlan,
+        UserSubscriptionProfile, UserSubscriptionRepoTrait, UserSubscriptionWithPlan,
     },
     domain::entities::billing_state::BillingState,
     domain::entities::payment_mode::PaymentMode,
@@ -50,7 +50,7 @@ const SELECT_COLS: &str = r#"
 "#;
 
 #[async_trait]
-impl UserSubscriptionRepo for PostgresPersistence {
+impl UserSubscriptionRepoTrait for PostgresPersistence {
     async fn get_by_id(&self, id: Uuid) -> AppResult<Option<UserSubscriptionProfile>> {
         let row = sqlx::query(&format!(
             "SELECT {} FROM user_subscriptions WHERE id = $1",

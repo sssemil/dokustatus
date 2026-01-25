@@ -6,7 +6,7 @@ use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
     application::use_cases::domain_billing::{
-        CreateSubscriptionEventInput, SubscriptionEventProfile, SubscriptionEventRepo,
+        CreateSubscriptionEventInput, SubscriptionEventProfile, SubscriptionEventRepoTrait,
     },
 };
 
@@ -30,7 +30,7 @@ const SELECT_COLS: &str = r#"
 "#;
 
 #[async_trait]
-impl SubscriptionEventRepo for PostgresPersistence {
+impl SubscriptionEventRepoTrait for PostgresPersistence {
     async fn create(&self, input: &CreateSubscriptionEventInput) -> AppResult<()> {
         let id = Uuid::new_v4();
         sqlx::query(

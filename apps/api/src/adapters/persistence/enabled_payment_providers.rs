@@ -31,7 +31,7 @@ pub struct EnabledPaymentProviderProfile {
 // ============================================================================
 
 #[async_trait]
-pub trait EnabledPaymentProvidersRepo: Send + Sync {
+pub trait EnabledPaymentProvidersRepoTrait: Send + Sync {
     /// List all enabled providers for a domain
     async fn list_by_domain(
         &self,
@@ -118,7 +118,7 @@ const SELECT_COLS: &str = r#"
 "#;
 
 #[async_trait]
-impl EnabledPaymentProvidersRepo for PostgresPersistence {
+impl EnabledPaymentProvidersRepoTrait for PostgresPersistence {
     async fn list_by_domain(
         &self,
         domain_id: Uuid,

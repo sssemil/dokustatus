@@ -4,7 +4,17 @@ use strum::{AsRefStr, Display, EnumString};
 /// Billing state for tracking provider switching operations.
 /// Used as a state machine to handle partial failures during provider switches.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, AsRefStr, Display,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
+    AsRefStr,
+    Display,
     EnumString,
 )]
 #[sqlx(type_name = "billing_state", rename_all = "snake_case")]

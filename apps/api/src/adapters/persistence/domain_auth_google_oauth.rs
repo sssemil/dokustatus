@@ -6,7 +6,7 @@ use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
     application::use_cases::domain_auth::{
-        DomainAuthGoogleOAuthProfile, DomainAuthGoogleOAuthRepo,
+        DomainAuthGoogleOAuthProfile, DomainAuthGoogleOAuthRepoTrait,
     },
 };
 
@@ -22,7 +22,7 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainAuthGoogleOAuthProfile {
 }
 
 #[async_trait]
-impl DomainAuthGoogleOAuthRepo for PostgresPersistence {
+impl DomainAuthGoogleOAuthRepoTrait for PostgresPersistence {
     async fn get_by_domain_id(
         &self,
         domain_id: Uuid,

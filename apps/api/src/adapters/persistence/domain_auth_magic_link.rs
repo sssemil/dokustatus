@@ -5,7 +5,9 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    application::use_cases::domain_auth::{DomainAuthMagicLinkProfile, DomainAuthMagicLinkRepo},
+    application::use_cases::domain_auth::{
+        DomainAuthMagicLinkProfile, DomainAuthMagicLinkRepoTrait,
+    },
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainAuthMagicLinkProfile {
@@ -20,7 +22,7 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainAuthMagicLinkProfile {
 }
 
 #[async_trait]
-impl DomainAuthMagicLinkRepo for PostgresPersistence {
+impl DomainAuthMagicLinkRepoTrait for PostgresPersistence {
     async fn get_by_domain_id(
         &self,
         domain_id: Uuid,

@@ -5,7 +5,9 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    application::use_cases::domain_billing::{BillingStripeConfigProfile, BillingStripeConfigRepo},
+    application::use_cases::domain_billing::{
+        BillingStripeConfigProfile, BillingStripeConfigRepoTrait,
+    },
     domain::entities::payment_mode::PaymentMode,
 };
 
@@ -23,7 +25,7 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> BillingStripeConfigProfile {
 }
 
 #[async_trait]
-impl BillingStripeConfigRepo for PostgresPersistence {
+impl BillingStripeConfigRepoTrait for PostgresPersistence {
     async fn get_by_domain_and_mode(
         &self,
         domain_id: Uuid,

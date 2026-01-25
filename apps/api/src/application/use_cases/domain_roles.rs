@@ -3,10 +3,10 @@ use std::sync::Arc;
 use tracing::instrument;
 use uuid::Uuid;
 
-use crate::adapters::persistence::domain_role::{DomainRoleRepo, DomainRoleWithCount};
+use crate::adapters::persistence::domain_role::{DomainRoleRepoTrait, DomainRoleWithCount};
 use crate::app_error::{AppError, AppResult};
-use crate::application::use_cases::domain::DomainRepo;
-use crate::application::use_cases::domain_auth::DomainEndUserRepo;
+use crate::application::use_cases::domain::DomainRepoTrait;
+use crate::application::use_cases::domain_auth::DomainEndUserRepoTrait;
 use crate::domain::entities::domain_role::DomainRole;
 
 // ============================================================================
@@ -15,16 +15,16 @@ use crate::domain::entities::domain_role::DomainRole;
 
 #[derive(Clone)]
 pub struct DomainRolesUseCases {
-    domain_repo: Arc<dyn DomainRepo>,
-    role_repo: Arc<dyn DomainRoleRepo>,
-    end_user_repo: Arc<dyn DomainEndUserRepo>,
+    domain_repo: Arc<dyn DomainRepoTrait>,
+    role_repo: Arc<dyn DomainRoleRepoTrait>,
+    end_user_repo: Arc<dyn DomainEndUserRepoTrait>,
 }
 
 impl DomainRolesUseCases {
     pub fn new(
-        domain_repo: Arc<dyn DomainRepo>,
-        role_repo: Arc<dyn DomainRoleRepo>,
-        end_user_repo: Arc<dyn DomainEndUserRepo>,
+        domain_repo: Arc<dyn DomainRepoTrait>,
+        role_repo: Arc<dyn DomainRoleRepoTrait>,
+        end_user_repo: Arc<dyn DomainEndUserRepoTrait>,
     ) -> Self {
         Self {
             domain_repo,

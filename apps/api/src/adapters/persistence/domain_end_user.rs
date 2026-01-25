@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    application::use_cases::domain_auth::{DomainEndUserProfile, DomainEndUserRepo},
+    application::use_cases::domain_auth::{DomainEndUserProfile, DomainEndUserRepoTrait},
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainEndUserProfile {
@@ -30,7 +30,7 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainEndUserProfile {
 }
 
 #[async_trait]
-impl DomainEndUserRepo for PostgresPersistence {
+impl DomainEndUserRepoTrait for PostgresPersistence {
     async fn get_by_id(&self, id: Uuid) -> AppResult<Option<DomainEndUserProfile>> {
         let row = sqlx::query(
             "SELECT id, domain_id, email, roles, google_id, email_verified_at, last_login_at, is_frozen, is_whitelisted, created_at, updated_at FROM domain_end_users WHERE id = $1",

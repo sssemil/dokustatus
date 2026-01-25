@@ -5,7 +5,7 @@ use crate::{
     app_error::{AppError, AppResult},
     application::use_cases::domain_auth::{
         MarkStateResult, OAuthCompletionData, OAuthLinkConfirmationData, OAuthStateData,
-        OAuthStateStore as OAuthStateStoreTrait,
+        OAuthStateStoreTrait,
     },
 };
 

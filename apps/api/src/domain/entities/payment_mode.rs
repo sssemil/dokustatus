@@ -3,7 +3,17 @@ use strum::{AsRefStr, Display, EnumString};
 
 /// Payment mode - test (sandbox) or live (production) environment
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, AsRefStr, Display,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
+    AsRefStr,
+    Display,
     EnumString,
 )]
 #[sqlx(type_name = "payment_mode", rename_all = "lowercase")]
@@ -56,7 +66,6 @@ impl PaymentMode {
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {

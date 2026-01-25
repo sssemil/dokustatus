@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    application::use_cases::api_key::{ApiKeyProfile, ApiKeyRepo, ApiKeyWithDomain},
+    application::use_cases::api_key::{ApiKeyProfile, ApiKeyRepoTrait, ApiKeyWithDomain},
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> ApiKeyProfile {
@@ -30,7 +30,7 @@ fn row_to_key_with_domain(row: sqlx::postgres::PgRow) -> ApiKeyWithDomain {
 }
 
 #[async_trait]
-impl ApiKeyRepo for PostgresPersistence {
+impl ApiKeyRepoTrait for PostgresPersistence {
     async fn create(
         &self,
         domain_id: Uuid,

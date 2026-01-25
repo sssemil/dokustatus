@@ -13,7 +13,7 @@ use crate::application::email_templates::{
     account_created_email, account_frozen_email, account_invited_email, account_unfrozen_email,
     account_whitelisted_email, primary_button, wrap_email,
 };
-use crate::application::use_cases::domain::DomainRepo;
+use crate::application::use_cases::domain::DomainRepoTrait;
 use crate::domain::entities::domain::DomainStatus;
 use crate::infra::crypto::ProcessCipher;
 
@@ -22,7 +22,7 @@ use crate::infra::crypto::ProcessCipher;
 // ============================================================================
 
 #[async_trait]
-pub trait DomainAuthConfigRepo: Send + Sync {
+pub trait DomainAuthConfigRepoTrait: Send + Sync {
     async fn get_by_domain_id(&self, domain_id: Uuid)
     -> AppResult<Option<DomainAuthConfigProfile>>;
     async fn get_by_domain_ids(
@@ -41,7 +41,7 @@ pub trait DomainAuthConfigRepo: Send + Sync {
 }
 
 #[async_trait]
-pub trait DomainAuthMagicLinkRepo: Send + Sync {
+pub trait DomainAuthMagicLinkRepoTrait: Send + Sync {
     async fn get_by_domain_id(
         &self,
         domain_id: Uuid,
@@ -57,7 +57,7 @@ pub trait DomainAuthMagicLinkRepo: Send + Sync {
 }
 
 #[async_trait]
-pub trait DomainAuthGoogleOAuthRepo: Send + Sync {
+pub trait DomainAuthGoogleOAuthRepoTrait: Send + Sync {
     async fn get_by_domain_id(
         &self,
         domain_id: Uuid,
@@ -72,7 +72,7 @@ pub trait DomainAuthGoogleOAuthRepo: Send + Sync {
 }
 
 #[async_trait]
-pub trait DomainEndUserRepo: Send + Sync {
+pub trait DomainEndUserRepoTrait: Send + Sync {
     async fn get_by_id(&self, id: Uuid) -> AppResult<Option<DomainEndUserProfile>>;
     async fn get_by_domain_and_email(
         &self,
@@ -175,7 +175,7 @@ pub struct OAuthLinkConfirmationData {
 }
 
 #[async_trait]
-pub trait OAuthStateStore: Send + Sync {
+pub trait OAuthStateStoreTrait: Send + Sync {
     /// Store state with domain and PKCE verifier. Single-use, expires after TTL.
     async fn store_state(
         &self,
@@ -314,13 +314,13 @@ pub struct PublicDomainConfig {
 
 #[derive(Clone)]
 pub struct DomainAuthUseCases {
-    domain_repo: Arc<dyn DomainRepo>,
-    auth_config_repo: Arc<dyn DomainAuthConfigRepo>,
-    magic_link_config_repo: Arc<dyn DomainAuthMagicLinkRepo>,
-    google_oauth_config_repo: Arc<dyn DomainAuthGoogleOAuthRepo>,
-    end_user_repo: Arc<dyn DomainEndUserRepo>,
+    domain_repo: Arc<dyn DomainRepoTrait>,
+    auth_config_repo: Arc<dyn DomainAuthConfigRepoTrait>,
+    magic_link_config_repo: Arc<dyn DomainAuthMagicLinkRepoTrait>,
+    google_oauth_config_repo: Arc<dyn DomainAuthGoogleOAuthRepoTrait>,
+    end_user_repo: Arc<dyn DomainEndUserRepoTrait>,
     magic_link_store: Arc<dyn DomainMagicLinkStore>,
-    oauth_state_store: Arc<dyn OAuthStateStore>,
+    oauth_state_store: Arc<dyn OAuthStateStoreTrait>,
     email_sender: Arc<dyn DomainEmailSender>,
     cipher: ProcessCipher,
     fallback_resend_api_key: String,
@@ -332,13 +332,13 @@ pub struct DomainAuthUseCases {
 impl DomainAuthUseCases {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        domain_repo: Arc<dyn DomainRepo>,
-        auth_config_repo: Arc<dyn DomainAuthConfigRepo>,
-        magic_link_config_repo: Arc<dyn DomainAuthMagicLinkRepo>,
-        google_oauth_config_repo: Arc<dyn DomainAuthGoogleOAuthRepo>,
-        end_user_repo: Arc<dyn DomainEndUserRepo>,
+        domain_repo: Arc<dyn DomainRepoTrait>,
+        auth_config_repo: Arc<dyn DomainAuthConfigRepoTrait>,
+        magic_link_config_repo: Arc<dyn DomainAuthMagicLinkRepoTrait>,
+        google_oauth_config_repo: Arc<dyn DomainAuthGoogleOAuthRepoTrait>,
+        end_user_repo: Arc<dyn DomainEndUserRepoTrait>,
         magic_link_store: Arc<dyn DomainMagicLinkStore>,
-        oauth_state_store: Arc<dyn OAuthStateStore>,
+        oauth_state_store: Arc<dyn OAuthStateStoreTrait>,
         email_sender: Arc<dyn DomainEmailSender>,
         cipher: ProcessCipher,
         fallback_resend_api_key: String,
@@ -1640,7 +1640,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl OAuthStateStore for InMemoryOAuthStateStore {
+    impl OAuthStateStoreTrait for InMemoryOAuthStateStore {
         async fn store_state(
             &self,
             state: &str,
@@ -1743,7 +1743,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl DomainAuthConfigRepo for InMemoryAuthConfigRepo {
+    impl DomainAuthConfigRepoTrait for InMemoryAuthConfigRepo {
         async fn get_by_domain_id(
             &self,
             domain_id: Uuid,
@@ -1807,7 +1807,7 @@ mod tests {
     struct NoopRepo;
 
     #[async_trait]
-    impl DomainRepo for NoopRepo {
+    impl DomainRepoTrait for NoopRepo {
         async fn create(
             &self,
             _owner_end_user_id: Uuid,
@@ -1862,7 +1862,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl DomainAuthMagicLinkRepo for NoopRepo {
+    impl DomainAuthMagicLinkRepoTrait for NoopRepo {
         async fn get_by_domain_id(
             &self,
             _domain_id: Uuid,
@@ -1889,7 +1889,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl DomainAuthGoogleOAuthRepo for NoopRepo {
+    impl DomainAuthGoogleOAuthRepoTrait for NoopRepo {
         async fn get_by_domain_id(
             &self,
             _domain_id: Uuid,
@@ -1912,7 +1912,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl DomainEndUserRepo for NoopRepo {
+    impl DomainEndUserRepoTrait for NoopRepo {
         async fn get_by_id(&self, _id: Uuid) -> AppResult<Option<DomainEndUserProfile>> {
             Err(AppError::Internal("not implemented".into()))
         }
@@ -2012,7 +2012,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl OAuthStateStore for NoopRepo {
+    impl OAuthStateStoreTrait for NoopRepo {
         async fn store_state(
             &self,
             _state: &str,
@@ -2086,7 +2086,7 @@ mod tests {
         }
     }
 
-    fn build_use_cases(auth_repo: Arc<dyn DomainAuthConfigRepo>) -> DomainAuthUseCases {
+    fn build_use_cases(auth_repo: Arc<dyn DomainAuthConfigRepoTrait>) -> DomainAuthUseCases {
         let key_b64 = base64::engine::general_purpose::STANDARD.encode([0u8; 32]);
         let cipher = ProcessCipher::new_from_base64(&key_b64).expect("cipher");
         let noop = Arc::new(NoopRepo::default());

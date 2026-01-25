@@ -9,15 +9,15 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::app_error::{AppError, AppResult};
-use crate::application::use_cases::domain::DomainRepo;
-use crate::application::use_cases::domain_auth::{DomainEndUserProfile, DomainEndUserRepo};
+use crate::application::use_cases::domain::DomainRepoTrait;
+use crate::application::use_cases::domain_auth::{DomainEndUserProfile, DomainEndUserRepoTrait};
 
 // ============================================================================
 // Repository Trait
 // ============================================================================
 
 #[async_trait]
-pub trait ApiKeyRepo: Send + Sync {
+pub trait ApiKeyRepoTrait: Send + Sync {
     async fn create(
         &self,
         domain_id: Uuid,
@@ -66,16 +66,16 @@ pub struct ApiKeyWithDomain {
 
 #[derive(Clone)]
 pub struct ApiKeyUseCases {
-    api_key_repo: Arc<dyn ApiKeyRepo>,
-    domain_repo: Arc<dyn DomainRepo>,
-    end_user_repo: Arc<dyn DomainEndUserRepo>,
+    api_key_repo: Arc<dyn ApiKeyRepoTrait>,
+    domain_repo: Arc<dyn DomainRepoTrait>,
+    end_user_repo: Arc<dyn DomainEndUserRepoTrait>,
 }
 
 impl ApiKeyUseCases {
     pub fn new(
-        api_key_repo: Arc<dyn ApiKeyRepo>,
-        domain_repo: Arc<dyn DomainRepo>,
-        end_user_repo: Arc<dyn DomainEndUserRepo>,
+        api_key_repo: Arc<dyn ApiKeyRepoTrait>,
+        domain_repo: Arc<dyn DomainRepoTrait>,
+        end_user_repo: Arc<dyn DomainEndUserRepoTrait>,
     ) -> Self {
         Self {
             api_key_repo,

@@ -7,7 +7,7 @@ use crate::{
     app_error::{AppError, AppResult},
     domain::entities::domain::DomainStatus,
     domain::entities::payment_mode::PaymentMode,
-    use_cases::domain::{DomainProfile, DomainRepo},
+    use_cases::domain::{DomainProfile, DomainRepoTrait},
 };
 
 const SELECT_COLS: &str = "id, owner_end_user_id, domain, status, active_payment_mode, verification_started_at, verified_at, created_at, updated_at";
@@ -27,7 +27,7 @@ fn row_to_profile(row: sqlx::postgres::PgRow) -> DomainProfile {
 }
 
 #[async_trait]
-impl DomainRepo for PostgresPersistence {
+impl DomainRepoTrait for PostgresPersistence {
     async fn create(&self, owner_end_user_id: Uuid, domain: &str) -> AppResult<DomainProfile> {
         let id = Uuid::new_v4();
         let row = sqlx::query(&format!(

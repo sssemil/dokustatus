@@ -8,7 +8,7 @@ use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
     application::use_cases::domain_billing::{
-        BillingPaymentProfile, BillingPaymentRepo, BillingPaymentWithUser, CreatePaymentInput,
+        BillingPaymentProfile, BillingPaymentRepoTrait, BillingPaymentWithUser, CreatePaymentInput,
         PaginatedPayments, PaymentListFilters, PaymentSummary,
     },
     domain::entities::{
@@ -129,7 +129,7 @@ fn push_payment_filters(builder: &mut QueryBuilder<'_, Postgres>, filters: &Paym
 }
 
 #[async_trait]
-impl BillingPaymentRepo for PostgresPersistence {
+impl BillingPaymentRepoTrait for PostgresPersistence {
     async fn upsert_from_stripe(
         &self,
         input: &CreatePaymentInput,

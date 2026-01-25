@@ -5,7 +5,17 @@ use super::payment_mode::PaymentMode;
 
 /// Payment provider type - the payment processor used for billing
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type, AsRefStr, Display,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    Deserialize,
+    sqlx::Type,
+    AsRefStr,
+    Display,
     EnumString,
 )]
 #[sqlx(type_name = "payment_provider", rename_all = "snake_case")]

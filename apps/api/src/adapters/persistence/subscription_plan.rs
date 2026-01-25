@@ -6,7 +6,7 @@ use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
     application::use_cases::domain_billing::{
-        CreatePlanInput, SubscriptionPlanProfile, SubscriptionPlanRepo, UpdatePlanInput,
+        CreatePlanInput, SubscriptionPlanProfile, SubscriptionPlanRepoTrait, UpdatePlanInput,
     },
     domain::entities::payment_mode::PaymentMode,
     domain::entities::payment_provider::PaymentProvider,
@@ -55,7 +55,7 @@ const SELECT_COLS: &str = r#"
 "#;
 
 #[async_trait]
-impl SubscriptionPlanRepo for PostgresPersistence {
+impl SubscriptionPlanRepoTrait for PostgresPersistence {
     async fn get_by_id(&self, id: Uuid) -> AppResult<Option<SubscriptionPlanProfile>> {
         let row = sqlx::query(&format!(
             "SELECT {} FROM subscription_plans WHERE id = $1",

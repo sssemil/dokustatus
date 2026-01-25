@@ -4,7 +4,9 @@ use strum::{AsRefStr, Display, EnumString};
 /// Payment scenario for the dummy provider.
 /// Simulates different payment outcomes for testing purposes.
 /// Matches a subset of Stripe's test card behaviors.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, Display, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, AsRefStr, Display, EnumString,
+)]
 #[serde(rename_all = "snake_case")]
 #[strum(serialize_all = "snake_case", ascii_case_insensitive)]
 #[derive(Default)]
@@ -183,10 +185,16 @@ mod tests {
     fn test_as_ref_all_variants() {
         assert_eq!(PaymentScenario::Success.as_ref(), "success");
         assert_eq!(PaymentScenario::Decline.as_ref(), "decline");
-        assert_eq!(PaymentScenario::InsufficientFunds.as_ref(), "insufficient_funds");
+        assert_eq!(
+            PaymentScenario::InsufficientFunds.as_ref(),
+            "insufficient_funds"
+        );
         assert_eq!(PaymentScenario::ThreeDSecure.as_ref(), "three_d_secure");
         assert_eq!(PaymentScenario::ExpiredCard.as_ref(), "expired_card");
-        assert_eq!(PaymentScenario::ProcessingError.as_ref(), "processing_error");
+        assert_eq!(
+            PaymentScenario::ProcessingError.as_ref(),
+            "processing_error"
+        );
     }
 
     #[test]

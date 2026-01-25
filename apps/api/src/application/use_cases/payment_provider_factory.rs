@@ -11,7 +11,7 @@ use crate::{
     },
 };
 
-use super::domain_billing::BillingStripeConfigRepo;
+use super::domain_billing::BillingStripeConfigRepoTrait;
 
 /// Factory for creating payment provider instances based on configuration.
 ///
@@ -21,11 +21,11 @@ use super::domain_billing::BillingStripeConfigRepo;
 /// - Instantiating the appropriate provider client
 pub struct PaymentProviderFactory {
     cipher: ProcessCipher,
-    config_repo: Arc<dyn BillingStripeConfigRepo>,
+    config_repo: Arc<dyn BillingStripeConfigRepoTrait>,
 }
 
 impl PaymentProviderFactory {
-    pub fn new(cipher: ProcessCipher, config_repo: Arc<dyn BillingStripeConfigRepo>) -> Self {
+    pub fn new(cipher: ProcessCipher, config_repo: Arc<dyn BillingStripeConfigRepoTrait>) -> Self {
         Self {
             cipher,
             config_repo,
@@ -124,8 +124,6 @@ impl PaymentProviderFactory {
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
-
-    // Note: Tests would require mocking the config repo and cipher
-    // For now, we just verify the type structure compiles correctly
 }
