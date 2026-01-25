@@ -47,7 +47,6 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     root.classList.remove('dark', 'light');
     // Add current theme class (CSS uses .light selector)
     root.classList.add(effectiveTheme);
-    // Also set data-theme attribute for backwards compatibility
     root.setAttribute('data-theme', effectiveTheme);
   }, [effectiveTheme]);
 

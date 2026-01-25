@@ -85,6 +85,9 @@ Before deploying, always verify the API builds successfully:
 ```
 This runs `SQLX_OFFLINE=true cargo build --release` because the local database may not be running.
 
+## Development Phase
+This project is in rapid development phase with no real users yet. Backward compatibility is NOT required - make breaking changes freely when they improve the codebase. Do not add compatibility shims, re-exports, or optional fields just to preserve old behavior.
+
 ## Coding Style & Naming Conventions
 - Rust 2024 edition; always run `cargo fmt` before committing. Prefer small modules aligned to `domain/application/adapters/infra`.
 - Naming: Rust modules `snake_case`; types and traits `PascalCase`; functions `snake_case`; constants `SCREAMING_SNAKE_CASE`.

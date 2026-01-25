@@ -2334,13 +2334,5 @@ def main_parallel():
         time.sleep(5)  # Poll every 5 seconds
 
 
-# Keep old main for backwards compatibility (can be removed later)
-def main():
-    """Original sequential main loop (deprecated, use main_parallel)."""
-    print("[DEPRECATED] Sequential main() is deprecated. Use main_parallel() for parallel execution.")
-    print("[DEPRECATED] Running main_parallel() instead...")
-    main_parallel()
-
-
 if __name__ == "__main__":
     main_parallel()
