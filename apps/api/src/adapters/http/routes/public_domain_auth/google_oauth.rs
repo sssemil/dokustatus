@@ -87,9 +87,6 @@ enum OAuthExchangeError {
     UserValidation { message: String },
     /// Database error during user creation
     Database { message: String },
-    /// Redis error during state management
-    #[allow(dead_code)]
-    Redis { message: String },
 }
 
 impl OAuthExchangeError {
@@ -101,7 +98,6 @@ impl OAuthExchangeError {
             OAuthExchangeError::TokenValidation { .. } => false,
             OAuthExchangeError::UserValidation { .. } => false,
             OAuthExchangeError::Database { .. } => true,
-            OAuthExchangeError::Redis { .. } => true,
         }
     }
 }
@@ -136,9 +132,6 @@ impl From<OAuthExchangeError> for AppError {
             OAuthExchangeError::UserValidation { message } => AppError::InvalidInput(message),
             OAuthExchangeError::Database { message } => {
                 AppError::Internal(format!("Database error: {message}"))
-            }
-            OAuthExchangeError::Redis { message } => {
-                AppError::Internal(format!("Redis error: {message}"))
             }
         }
     }
@@ -654,13 +647,13 @@ async fn handle_oauth_exchange_error(
 
 #[derive(Deserialize)]
 struct GoogleTokenResponse {
-    #[allow(dead_code)]
-    access_token: String,
+    #[serde(rename = "access_token")]
+    _access_token: String,
     id_token: String,
-    #[allow(dead_code)]
-    token_type: String,
-    #[allow(dead_code)]
-    expires_in: Option<i64>,
+    #[serde(rename = "token_type")]
+    _token_type: String,
+    #[serde(rename = "expires_in")]
+    _expires_in: Option<i64>,
 }
 
 /// Exchange authorization code with Google for tokens
@@ -735,11 +728,11 @@ struct GoogleIdTokenClaims {
     #[serde(default)]
     email_verified: bool,
     /// Issuer (validated by jsonwebtoken)
-    #[allow(dead_code)]
-    iss: String,
+    #[serde(rename = "iss")]
+    _iss: String,
     /// Audience (validated by jsonwebtoken)
-    #[allow(dead_code)]
-    aud: String,
+    #[serde(rename = "aud")]
+    _aud: String,
     /// Authorized party (if present, should match client_id)
     #[serde(default)]
     azp: Option<String>,
@@ -756,10 +749,10 @@ struct GoogleJwk {
     kid: String,
     n: String,
     e: String,
-    #[allow(dead_code)]
-    kty: String,
-    #[allow(dead_code)]
-    alg: Option<String>,
+    #[serde(rename = "kty")]
+    _kty: String,
+    #[serde(rename = "alg")]
+    _alg: Option<String>,
 }
 
 /// Fetch Google's public keys for JWT verification
