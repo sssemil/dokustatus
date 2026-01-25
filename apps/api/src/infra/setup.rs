@@ -16,7 +16,7 @@ use crate::{
     application::use_cases::domain_roles::DomainRolesUseCases,
     application::use_cases::payment_provider_factory::PaymentProviderFactory,
     infra::{
-        config::AppConfig, crypto::ProcessCipher, domain_email::DomainEmailSender,
+        InfraError, config::AppConfig, crypto::ProcessCipher, domain_email::DomainEmailSender,
         domain_magic_links::DomainMagicLinkStore, oauth_state::OAuthStateStore,
         postgres_persistence, rate_limit::RateLimiter,
     },
@@ -26,7 +26,7 @@ use std::fs::File;
 use std::sync::Arc;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, util::SubscriberInitExt};
 
-pub async fn init_app_state() -> anyhow::Result<AppState> {
+pub async fn init_app_state() -> Result<AppState, InfraError> {
     let config = AppConfig::from_env();
 
     let postgres_arc = Arc::new(postgres_persistence(&config.database_url).await?);
@@ -42,8 +42,11 @@ pub async fn init_app_state() -> anyhow::Result<AppState> {
     );
 
     // Redis connection for domain magic links and OAuth state
-    let redis_client = redis::Client::open(config.redis_url.as_str())?;
-    let redis_manager = redis::aio::ConnectionManager::new(redis_client).await?;
+    let redis_client =
+        redis::Client::open(config.redis_url.as_str()).map_err(InfraError::RedisConnection)?;
+    let redis_manager = redis::aio::ConnectionManager::new(redis_client)
+        .await
+        .map_err(InfraError::RedisConnection)?;
     let domain_magic_links = Arc::new(DomainMagicLinkStore::new(redis_manager.clone()));
     let oauth_state_store = Arc::new(OAuthStateStore::new(redis_manager));
 

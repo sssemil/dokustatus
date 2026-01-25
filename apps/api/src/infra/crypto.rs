@@ -6,6 +6,7 @@ use base64::{Engine as _, engine::general_purpose};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 
+use super::InfraError;
 use crate::app_error::{AppError, AppResult};
 
 const NONCE_LEN: usize = 12;
@@ -17,11 +18,12 @@ pub struct ProcessCipher {
 }
 
 impl ProcessCipher {
-    pub fn from_env() -> anyhow::Result<Self> {
-        let key_b64 = std::env::var("PROCESS_NUMBER_KEY")
-            .map_err(|_| anyhow::anyhow!("PROCESS_NUMBER_KEY environment variable not set"))?;
-        Self::new_from_base64(&key_b64)
-            .map_err(|e| anyhow::anyhow!("Failed to initialize cipher: {}", e))
+    pub fn from_env() -> Result<Self, InfraError> {
+        let key_b64 =
+            std::env::var("PROCESS_NUMBER_KEY").map_err(|_| InfraError::ConfigMissing {
+                var: "PROCESS_NUMBER_KEY",
+            })?;
+        Self::new_from_base64(&key_b64).map_err(InfraError::CipherInit)
     }
 
     pub fn new_from_base64(key_b64: &str) -> AppResult<Self> {

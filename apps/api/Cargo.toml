@@ -11,7 +11,6 @@ tokio = { version = "1", features = ["full"] }
 sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "macros", "uuid", "chrono"] }
 dotenvy = "0.15"
 tower = "0.5"
-anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "std", "json"] }
 tower-http = { version = "0.6", features = ["trace", "cors", "set-header"] }

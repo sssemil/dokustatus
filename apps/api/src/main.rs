@@ -1,15 +1,27 @@
 use dotenvy::dotenv;
-use tracing::info;
+use std::process::ExitCode;
+use tracing::{error, info};
 
 use reauth_api::infra::{
-    app::create_app, domain_verifier::run_domain_verification_loop, setup::init_app_state,
+    InfraError, app::create_app, domain_verifier::run_domain_verification_loop,
+    setup::init_app_state,
 };
 use std::net::SocketAddr;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> ExitCode {
     dotenv().ok();
 
+    if let Err(e) = run().await {
+        // Log sanitized error via Display (safe for logs)
+        // Note: Debug would expose full error chain including potential secrets
+        error!(error = %e, "Startup failed");
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+async fn run() -> Result<(), InfraError> {
     let app_state = init_app_state().await?;
 
     let bind_addr = app_state.config.bind_addr;
@@ -22,15 +34,21 @@ async fn main() -> anyhow::Result<()> {
         run_domain_verification_loop(domain_use_cases).await;
     });
 
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    let listener = tokio::net::TcpListener::bind(&bind_addr)
+        .await
+        .map_err(InfraError::TcpBind)?;
 
-    info!("Backend listening at {}", &listener.local_addr()?);
+    info!(
+        "Backend listening at {}",
+        &listener.local_addr().map_err(InfraError::Server)?
+    );
 
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
-    .await?;
+    .await
+    .map_err(InfraError::Server)?;
 
     Ok(())
 }
