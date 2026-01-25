@@ -7,7 +7,7 @@
 //!
 //! - **Config** (1 route): Domain configuration
 //! - **Magic Link** (2 routes): Email-based authentication
-//! - **Session** (4 routes): Session management, logout, account deletion
+//! - **Session** (5 routes): Session management, token, logout, account deletion
 //! - **Google OAuth** (5 routes): Google sign-in integration
 //! - **Billing** (9 routes): Plans, subscriptions, checkout, payments
 //! - **Billing Webhooks** (2 routes): Stripe webhook handlers

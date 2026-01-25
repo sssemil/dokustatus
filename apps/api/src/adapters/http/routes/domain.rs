@@ -171,7 +171,7 @@ async fn get_usage_stats(
     State(app_state): State<AppState>,
     jar: CookieJar,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     let domains = app_state.domain_use_cases.list_domains(user_id).await?;
     let domain_ids: Vec<_> = domains.iter().map(|d| d.id).collect();
@@ -210,7 +210,7 @@ async fn create_domain(
     jar: CookieJar,
     Json(payload): Json<CreateDomainPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     let domain = app_state
         .domain_use_cases
@@ -244,7 +244,7 @@ async fn list_domains(
     State(app_state): State<AppState>,
     jar: CookieJar,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     let domains = app_state.domain_use_cases.list_domains(user_id).await?;
 
@@ -298,7 +298,7 @@ async fn get_domain(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     let domain = app_state
         .domain_use_cases
@@ -345,7 +345,7 @@ async fn start_verification(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     let domain = app_state
         .domain_use_cases
@@ -376,7 +376,7 @@ async fn get_verification_status(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     let domain = app_state
         .domain_use_cases
@@ -410,7 +410,7 @@ async fn delete_domain(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_use_cases
@@ -422,13 +422,27 @@ async fn delete_domain(
 
 /// Extracts the current end-user from the session.
 /// Only allows access if the user is a main domain end-user (dashboard users).
-fn current_user(jar: &CookieJar, app_state: &AppState) -> AppResult<(CookieJar, Uuid)> {
+async fn current_user(jar: &CookieJar, app_state: &AppState) -> AppResult<(CookieJar, Uuid)> {
     // Check for end_user_access_token (new auth)
     let Some(access_cookie) = jar.get("end_user_access_token") else {
         return Err(crate::app_error::AppError::InvalidCredentials);
     };
 
-    let claims = jwt::verify_domain_end_user(access_cookie.value(), &app_state.config.jwt_secret)?;
+    // Peek at domain_id to know which keys to fetch
+    let domain_id = jwt::peek_domain_id_from_token(access_cookie.value())?;
+
+    // Get all active API keys for this domain
+    let keys = app_state
+        .api_key_use_cases
+        .get_all_active_keys_for_domain(domain_id)
+        .await?;
+
+    if keys.is_empty() {
+        return Err(AppError::NoApiKeyConfigured);
+    }
+
+    // Verify with multi-key verification
+    let claims = jwt::verify_domain_end_user_multi(access_cookie.value(), &keys)?;
 
     // Only allow main domain end-users to access dashboard
     if claims.domain != app_state.config.main_domain {
@@ -474,7 +488,7 @@ async fn get_auth_config(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     // Get domain to access domain name
     let domain = app_state
@@ -547,7 +561,7 @@ async fn update_auth_config(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<UpdateAuthConfigPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_auth_use_cases
@@ -585,7 +599,7 @@ async fn delete_magic_link_config(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_auth_use_cases
@@ -600,7 +614,7 @@ async fn delete_google_oauth_config(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_auth_use_cases
@@ -627,7 +641,7 @@ async fn list_end_users(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, user_id) = current_user(&jar, &app_state)?;
+    let (_, user_id) = current_user(&jar, &app_state).await?;
 
     let end_users = app_state
         .domain_auth_use_cases
@@ -669,7 +683,7 @@ async fn invite_end_user(
         return Err(AppError::InvalidInput("Invalid email format".into()));
     }
 
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let user = app_state
         .domain_auth_use_cases
@@ -707,7 +721,7 @@ async fn get_end_user(
     jar: CookieJar,
     Path(params): Path<EndUserPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let user = app_state
         .domain_auth_use_cases
@@ -731,7 +745,7 @@ async fn delete_end_user(
     jar: CookieJar,
     Path(params): Path<EndUserPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_auth_use_cases
@@ -746,7 +760,7 @@ async fn freeze_end_user(
     jar: CookieJar,
     Path(params): Path<EndUserPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_auth_use_cases
@@ -761,7 +775,7 @@ async fn unfreeze_end_user(
     jar: CookieJar,
     Path(params): Path<EndUserPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_auth_use_cases
@@ -776,7 +790,7 @@ async fn whitelist_end_user(
     jar: CookieJar,
     Path(params): Path<EndUserPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_auth_use_cases
@@ -791,7 +805,7 @@ async fn unwhitelist_end_user(
     jar: CookieJar,
     Path(params): Path<EndUserPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_auth_use_cases
@@ -840,7 +854,7 @@ async fn list_api_keys(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let keys = app_state
         .api_key_use_cases
@@ -868,7 +882,7 @@ async fn create_api_key(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<CreateApiKeyPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let name = payload.name.as_deref().unwrap_or("Default");
 
@@ -894,7 +908,7 @@ async fn revoke_api_key(
     jar: CookieJar,
     Path(params): Path<ApiKeyPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .api_key_use_cases
@@ -942,7 +956,7 @@ async fn list_roles(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let roles = app_state
         .domain_roles_use_cases
@@ -968,7 +982,7 @@ async fn create_role(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<CreateRolePayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let role = app_state
         .domain_roles_use_cases
@@ -991,7 +1005,7 @@ async fn delete_role(
     jar: CookieJar,
     Path(params): Path<RolePathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_roles_use_cases
@@ -1006,7 +1020,7 @@ async fn get_role_user_count(
     jar: CookieJar,
     Path(params): Path<RolePathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let user_count = app_state
         .domain_roles_use_cases
@@ -1022,7 +1036,7 @@ async fn set_user_roles(
     Path(params): Path<EndUserPathParams>,
     Json(payload): Json<SetUserRolesPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .domain_roles_use_cases
@@ -1055,7 +1069,7 @@ async fn get_billing_config(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let config = app_state
         .billing_use_cases
@@ -1089,7 +1103,7 @@ async fn update_billing_config(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<UpdateBillingConfigPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let config = app_state
         .billing_use_cases
@@ -1120,7 +1134,7 @@ async fn delete_billing_config(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<DeleteBillingConfigPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .billing_use_cases
@@ -1147,7 +1161,7 @@ async fn set_billing_mode(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<SetBillingModePayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let new_mode = app_state
         .billing_use_cases
@@ -1190,7 +1204,7 @@ async fn list_billing_plans(
     Path(domain_id): Path<Uuid>,
     Query(query): Query<ListPlansQuery>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let plans = app_state
         .billing_use_cases
@@ -1228,7 +1242,7 @@ async fn create_billing_plan(
     Path(domain_id): Path<Uuid>,
     Json(input): Json<CreatePlanInput>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let plan = app_state
         .billing_use_cases
@@ -1270,7 +1284,7 @@ async fn update_billing_plan(
     Path(params): Path<PlanPathParams>,
     Json(input): Json<UpdatePlanInput>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let plan = app_state
         .billing_use_cases
@@ -1302,7 +1316,7 @@ async fn archive_billing_plan(
     jar: CookieJar,
     Path(params): Path<PlanPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .billing_use_cases
@@ -1323,7 +1337,7 @@ async fn reorder_billing_plans(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<ReorderPlansPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .billing_use_cases
@@ -1356,7 +1370,7 @@ async fn list_billing_subscribers(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let subscribers = app_state
         .billing_use_cases
@@ -1397,7 +1411,7 @@ async fn grant_subscription(
     Path(params): Path<EndUserPathParams>,
     Json(payload): Json<GrantSubscriptionPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     // For manually granted subscriptions, we create a placeholder customer ID
     let stripe_customer_id = format!("manual_{}", params.user_id);
@@ -1421,7 +1435,7 @@ async fn revoke_subscription(
     jar: CookieJar,
     Path(params): Path<EndUserPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .billing_use_cases
@@ -1453,7 +1467,7 @@ async fn get_billing_analytics(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let analytics = app_state
         .billing_use_cases
@@ -1544,7 +1558,7 @@ async fn list_billing_payments(
     use crate::application::use_cases::domain_billing::PaymentListFilters;
     use crate::domain::entities::payment_status::PaymentStatus;
 
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(20).clamp(1, 100);
@@ -1634,7 +1648,7 @@ async fn export_billing_payments(
     use crate::application::use_cases::domain_billing::PaymentListFilters;
     use crate::domain::entities::payment_status::PaymentStatus;
 
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     // Parse status filter
     let status = query
@@ -1687,7 +1701,7 @@ async fn list_billing_providers(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let providers = app_state
         .billing_use_cases
@@ -1711,7 +1725,7 @@ async fn enable_billing_provider(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<EnableProviderPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let provider = app_state
         .billing_use_cases
@@ -1735,7 +1749,7 @@ async fn disable_billing_provider(
     jar: CookieJar,
     Path(path): Path<ProviderPath>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .billing_use_cases
@@ -1758,7 +1772,7 @@ async fn set_provider_active(
     Path(path): Path<ProviderPath>,
     Json(payload): Json<SetProviderActivePayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, owner_id) = current_user(&jar, &app_state)?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .billing_use_cases

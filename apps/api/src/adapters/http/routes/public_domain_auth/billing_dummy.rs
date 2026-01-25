@@ -103,7 +103,7 @@ async fn create_dummy_checkout(
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
     // Get user from token
-    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain).await?;
 
     // Verify dummy provider is enabled
     let is_enabled = app_state
@@ -235,7 +235,7 @@ async fn confirm_dummy_checkout(
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
     // Get user from token
-    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain).await?;
 
     // Verify and parse the token (format: 3ds_token_{plan_code}_{uuid})
     if !payload.confirmation_token.starts_with("3ds_token_") {

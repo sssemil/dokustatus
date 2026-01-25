@@ -8,5 +8,9 @@ export type {
   UserDetails,
   ReauthConfig,
   ReauthServerConfig,
-  TokenVerification,
+  AuthResult,
+  RequestLike,
+  DomainEndUserClaims,
+  SubscriptionInfo,
+  TokenResponse,
 } from "./types";

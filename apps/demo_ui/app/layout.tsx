@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { TokenProvider } from "./token-context";
 
 export const metadata: Metadata = {
   title: "Todo Demo - Reauth SDK",
@@ -27,7 +28,7 @@ export default function RootLayout({
           backgroundColor: "#f5f5f5",
         }}
       >
-        {children}
+        <TokenProvider>{children}</TokenProvider>
       </body>
     </html>
   );

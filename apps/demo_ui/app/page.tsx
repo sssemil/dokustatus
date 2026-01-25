@@ -3,18 +3,25 @@
 import { useAuth } from "@reauth/sdk/react";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { useToken } from "./token-context";
 
 const DOMAIN = process.env.NEXT_PUBLIC_DOMAIN || "demo.test";
 
 export default function Home() {
   const { user, loading, login } = useAuth({ domain: DOMAIN });
+  const { fetchToken } = useToken();
   const router = useRouter();
 
   useEffect(() => {
-    if (!loading && user) {
-      router.push("/todos");
+    async function checkAndFetchToken() {
+      if (!loading && user) {
+        // Fetch token for Bearer auth before redirecting
+        await fetchToken();
+        router.push("/todos");
+      }
     }
-  }, [user, loading, router]);
+    checkAndFetchToken();
+  }, [user, loading, router, fetchToken]);
 
   if (loading) {
     return (

@@ -210,7 +210,7 @@ async fn get_user_subscription(
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
     // Get user from token
-    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain).await?;
 
     let sub = app_state
         .billing_use_cases
@@ -255,7 +255,7 @@ async fn create_checkout(
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
     // Get user from token
-    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain).await?;
 
     // Get user details
     let user = app_state
@@ -369,7 +369,7 @@ async fn create_portal(
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
     // Get user from token
-    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain).await?;
 
     // Get user's subscription to find Stripe customer ID
     let subscription = app_state
@@ -407,7 +407,7 @@ async fn cancel_subscription(
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
     // Get user from token
-    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain).await?;
 
     // Get user's subscription
     let subscription = app_state
@@ -450,7 +450,7 @@ async fn get_user_payments(
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
     // Get user from token
-    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain).await?;
 
     let page = query.page.unwrap_or(1).max(1);
     let per_page = query.per_page.unwrap_or(10).clamp(1, 100);
@@ -502,7 +502,7 @@ async fn preview_plan_change(
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
     // Get user from token
-    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain).await?;
 
     // Get preview from use cases
     let preview = app_state
@@ -533,7 +533,7 @@ async fn change_plan(
     let root_domain = extract_root_from_reauth_hostname(&hostname);
 
     // Get user from token
-    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain)?;
+    let (user_id, domain_id) = get_current_user(&app_state, &cookies, &root_domain).await?;
 
     // Execute plan change
     let result = app_state

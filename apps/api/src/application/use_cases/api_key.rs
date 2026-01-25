@@ -11,6 +11,7 @@ use uuid::Uuid;
 use crate::app_error::{AppError, AppResult};
 use crate::application::use_cases::domain::DomainRepoTrait;
 use crate::application::use_cases::domain_auth::{DomainEndUserProfile, DomainEndUserRepoTrait};
+use crate::infra::crypto::ProcessCipher;
 
 // ============================================================================
 // Repository Trait
@@ -23,6 +24,7 @@ pub trait ApiKeyRepoTrait: Send + Sync {
         domain_id: Uuid,
         key_prefix: &str,
         key_hash: &str,
+        key_encrypted: &str,
         name: &str,
         created_by_end_user_id: Uuid,
     ) -> AppResult<ApiKeyProfile>;
@@ -34,6 +36,23 @@ pub trait ApiKeyRepoTrait: Send + Sync {
     async fn revoke(&self, id: Uuid) -> AppResult<()>;
 
     async fn update_last_used(&self, id: Uuid) -> AppResult<()>;
+
+    async fn count_active_by_domain(&self, domain_id: Uuid) -> AppResult<i64>;
+
+    /// Get the newest active API key for signing JWTs.
+    /// Returns None if no active keys with encrypted values exist.
+    async fn get_signing_key_for_domain(
+        &self,
+        domain_id: Uuid,
+        cipher: &ProcessCipher,
+    ) -> AppResult<Option<ApiKeyWithRaw>>;
+
+    /// Get all active API keys for a domain (for JWT verification).
+    async fn get_all_active_keys_for_domain(
+        &self,
+        domain_id: Uuid,
+        cipher: &ProcessCipher,
+    ) -> AppResult<Vec<ApiKeyWithRaw>>;
 }
 
 // ============================================================================
@@ -60,6 +79,17 @@ pub struct ApiKeyWithDomain {
     pub revoked_at: Option<NaiveDateTime>,
 }
 
+/// ApiKey with decrypted raw key value (for JWT derivation)
+#[derive(Debug, Clone)]
+pub struct ApiKeyWithRaw {
+    pub id: Uuid,
+    pub domain_id: Uuid,
+    pub raw_key: String,
+}
+
+/// Maximum number of active API keys allowed per domain
+pub const MAX_API_KEYS_PER_DOMAIN: i64 = 5;
+
 // ============================================================================
 // Use Cases
 // ============================================================================
@@ -69,6 +99,7 @@ pub struct ApiKeyUseCases {
     api_key_repo: Arc<dyn ApiKeyRepoTrait>,
     domain_repo: Arc<dyn DomainRepoTrait>,
     end_user_repo: Arc<dyn DomainEndUserRepoTrait>,
+    cipher: ProcessCipher,
 }
 
 impl ApiKeyUseCases {
@@ -76,11 +107,13 @@ impl ApiKeyUseCases {
         api_key_repo: Arc<dyn ApiKeyRepoTrait>,
         domain_repo: Arc<dyn DomainRepoTrait>,
         end_user_repo: Arc<dyn DomainEndUserRepoTrait>,
+        cipher: ProcessCipher,
     ) -> Self {
         Self {
             api_key_repo,
             domain_repo,
             end_user_repo,
+            cipher,
         }
     }
 
@@ -100,10 +133,19 @@ impl ApiKeyUseCases {
         self.verify_domain_ownership(owner_end_user_id, domain_id)
             .await?;
 
+        // Check max keys limit
+        let active_count = self.api_key_repo.count_active_by_domain(domain_id).await?;
+        if active_count >= MAX_API_KEYS_PER_DOMAIN {
+            return Err(AppError::TooManyApiKeys);
+        }
+
         // Generate key
         let raw_key = generate_api_key();
         let key_prefix = &raw_key[..16]; // "sk_live_" + first 8 chars of random
         let key_hash = hash_api_key(&raw_key);
+
+        // Encrypt raw key for storage (enables HKDF-based JWT derivation)
+        let key_encrypted = self.cipher.encrypt(&raw_key)?;
 
         // Sanitize name
         let name = name.trim();
@@ -112,7 +154,14 @@ impl ApiKeyUseCases {
         // Create
         let profile = self
             .api_key_repo
-            .create(domain_id, key_prefix, &key_hash, name, owner_end_user_id)
+            .create(
+                domain_id,
+                key_prefix,
+                &key_hash,
+                &key_encrypted,
+                name,
+                owner_end_user_id,
+            )
             .await?;
 
         Ok((profile, raw_key))
@@ -202,6 +251,32 @@ impl ApiKeyUseCases {
         }
 
         Ok(user)
+    }
+
+    // ========================================================================
+    // JWT Signing Operations (for token issuance and verification)
+    // ========================================================================
+
+    /// Get the signing key for a domain (newest active API key).
+    /// Returns None if no active API keys exist for the domain.
+    pub async fn get_signing_key_for_domain(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Option<ApiKeyWithRaw>> {
+        self.api_key_repo
+            .get_signing_key_for_domain(domain_id, &self.cipher)
+            .await
+    }
+
+    /// Get all active API keys for a domain (for JWT verification).
+    /// Tries all keys when verifying tokens during key rotation.
+    pub async fn get_all_active_keys_for_domain(
+        &self,
+        domain_id: Uuid,
+    ) -> AppResult<Vec<ApiKeyWithRaw>> {
+        self.api_key_repo
+            .get_all_active_keys_for_domain(domain_id, &self.cipher)
+            .await
     }
 
     // ========================================================================

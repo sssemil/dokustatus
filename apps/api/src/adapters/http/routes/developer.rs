@@ -65,8 +65,18 @@ async fn verify_token(
         return Err(AppError::InvalidApiKey);
     }
 
-    // Verify the JWT token
-    let claims = match jwt::verify_domain_end_user(&payload.token, &app_state.config.jwt_secret) {
+    // Get all active API keys for this domain (for multi-key verification)
+    let keys = app_state
+        .api_key_use_cases
+        .get_all_active_keys_for_domain(api_key_ctx.domain_id)
+        .await?;
+
+    if keys.is_empty() {
+        return Err(AppError::NoApiKeyConfigured);
+    }
+
+    // Verify the JWT token using derived secrets
+    let claims = match jwt::verify_domain_end_user_multi(&payload.token, &keys) {
         Ok(claims) => claims,
         Err(_) => {
             return Ok(Json(VerifyTokenResponse {

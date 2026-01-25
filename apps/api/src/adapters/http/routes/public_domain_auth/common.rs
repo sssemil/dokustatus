@@ -137,25 +137,32 @@ pub(crate) async fn complete_login(
         .await
         .unwrap_or_else(|_| SubscriptionClaims::none());
 
-    // Issue access token (short-lived)
-    let access_token = jwt::issue_domain_end_user(
+    // Get signing key for this domain (derived from API key)
+    let signing_key = app_state
+        .api_key_use_cases
+        .get_signing_key_for_domain(user.domain_id)
+        .await?
+        .ok_or(AppError::NoApiKeyConfigured)?;
+
+    // Issue access token (short-lived) using derived secret
+    let access_token = jwt::issue_domain_end_user_derived(
         user.id,
         user.domain_id,
         root_domain,
         user.roles.clone(),
         subscription_claims.clone(),
-        &app_state.config.jwt_secret,
+        &signing_key,
         time::Duration::seconds(access_ttl_secs as i64),
     )?;
 
-    // Issue refresh token (long-lived)
-    let refresh_token = jwt::issue_domain_end_user(
+    // Issue refresh token (long-lived) using derived secret
+    let refresh_token = jwt::issue_domain_end_user_derived(
         user.id,
         user.domain_id,
         root_domain,
         user.roles.clone(),
         subscription_claims,
-        &app_state.config.jwt_secret,
+        &signing_key,
         time::Duration::days(refresh_ttl_days as i64),
     )?;
 
@@ -224,8 +231,8 @@ pub(crate) fn ensure_login_session(
     (jar.add(cookie), session_id)
 }
 
-/// Helper to extract current user from cookies
-pub(crate) fn get_current_user(
+/// Helper to extract current user from cookies (using derived JWT verification)
+pub(crate) async fn get_current_user(
     app_state: &AppState,
     cookies: &CookieJar,
     root_domain: &str,
@@ -235,8 +242,7 @@ pub(crate) fn get_current_user(
         .or_else(|| cookies.get("end_user_refresh_token"))
         .ok_or(AppError::InvalidCredentials)?;
 
-    let claims = jwt::verify_domain_end_user(token.value(), &app_state.config.jwt_secret)
-        .map_err(|_| AppError::InvalidCredentials)?;
+    let claims = verify_token_with_domain_keys(app_state, token.value()).await?;
 
     if claims.domain != root_domain {
         return Err(AppError::InvalidCredentials);
@@ -246,6 +252,29 @@ pub(crate) fn get_current_user(
     let domain_id = Uuid::parse_str(&claims.domain_id).map_err(|_| AppError::InvalidCredentials)?;
 
     Ok((user_id, domain_id))
+}
+
+/// Verify a token using domain-specific API keys.
+/// Peeks at the domain_id claim to fetch the appropriate keys.
+pub(crate) async fn verify_token_with_domain_keys(
+    app_state: &AppState,
+    token: &str,
+) -> AppResult<jwt::DomainEndUserClaims> {
+    // Peek at domain_id from token (without verification)
+    let domain_id = jwt::peek_domain_id_from_token(token)?;
+
+    // Get all active API keys for this domain
+    let keys = app_state
+        .api_key_use_cases
+        .get_all_active_keys_for_domain(domain_id)
+        .await?;
+
+    if keys.is_empty() {
+        return Err(AppError::NoApiKeyConfigured);
+    }
+
+    // Verify with multi-key verification (tries kid first, then all keys)
+    jwt::verify_domain_end_user_multi(token, &keys)
 }
 
 // Response types used by multiple modules

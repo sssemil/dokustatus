@@ -45,6 +45,16 @@ impl IntoResponse for AppError {
             AppError::TooManyDocuments => {
                 error_resp(StatusCode::BAD_REQUEST, ErrorCode::TooManyDocuments, None)
             }
+            AppError::TooManyApiKeys => error_resp(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::TooManyApiKeys,
+                Some("Maximum of 5 API keys per domain".to_string()),
+            ),
+            AppError::NoApiKeyConfigured => error_resp(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::NoApiKeyConfigured,
+                Some("Domain must have at least one API key for authentication".to_string()),
+            ),
             AppError::NotFound => error_resp(StatusCode::NOT_FOUND, ErrorCode::NotFound, None),
             AppError::Forbidden => error_resp(StatusCode::FORBIDDEN, ErrorCode::Forbidden, None),
             AppError::SessionMismatch => error_resp(

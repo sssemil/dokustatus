@@ -1,6 +1,14 @@
-//! Session management routes: check session, refresh token, logout, delete account.
+//! Session management routes: check session, refresh token, get token, logout, delete account.
 
 use super::common::*;
+
+/// Response for GET /auth/token endpoint
+#[derive(Serialize)]
+struct TokenResponse {
+    access_token: String,
+    expires_in: i64,
+    token_type: String,
+}
 
 /// GET /api/public/domain/{domain}/auth/session
 /// Checks if the end-user session is valid (checks access token first, then refresh)
@@ -16,8 +24,7 @@ async fn check_session(
 
     // Check access token first
     if let Some(access_token) = cookies.get("end_user_access_token")
-        && let Ok(claims) =
-            jwt::verify_domain_end_user(access_token.value(), &app_state.config.jwt_secret)
+        && let Ok(claims) = verify_token_with_domain_keys(&app_state, access_token.value()).await
         && claims.domain == root_domain
     {
         // Parse user ID and check real-time status from database
@@ -121,8 +128,7 @@ async fn check_session(
 
     // Fallback: check refresh token (client should call /refresh if access expired)
     if let Some(refresh_token) = cookies.get("end_user_refresh_token")
-        && let Ok(claims) =
-            jwt::verify_domain_end_user(refresh_token.value(), &app_state.config.jwt_secret)
+        && let Ok(claims) = verify_token_with_domain_keys(&app_state, refresh_token.value()).await
         && claims.domain == root_domain
     {
         // Refresh token is valid but access token expired - return 401 to prompt refresh
@@ -152,6 +158,93 @@ async fn check_session(
     }))
 }
 
+/// GET /api/public/domain/{domain}/auth/token
+/// Returns an access token in the response body for Bearer auth.
+/// SECURITY: Only accepts refresh token (not access token) to prevent indefinite refresh.
+/// The {domain} param is the hostname (e.g., "reauth.example.com")
+async fn get_token(
+    State(app_state): State<AppState>,
+    Path(hostname): Path<String>,
+    cookies: CookieJar,
+) -> AppResult<impl IntoResponse> {
+    // Extract root domain from reauth.* hostname
+    let root_domain = extract_root_from_reauth_hostname(&hostname);
+
+    // SECURITY: Only accept refresh token (not access token)
+    // This prevents indefinite refresh if access token is stolen
+    let Some(refresh_cookie) = cookies.get("end_user_refresh_token") else {
+        return Err(AppError::InvalidCredentials);
+    };
+
+    let claims = verify_token_with_domain_keys(&app_state, refresh_cookie.value())
+        .await
+        .map_err(|_| AppError::InvalidCredentials)?;
+
+    if claims.domain != root_domain {
+        return Err(AppError::InvalidCredentials);
+    }
+
+    // Parse end_user_id from claims
+    let end_user_id =
+        Uuid::parse_str(&claims.sub).map_err(|_| AppError::InvalidCredentials)?;
+    let domain_id = Uuid::parse_str(&claims.domain_id)
+        .map_err(|_| AppError::InvalidCredentials)?;
+
+    // Check user's current status from database before issuing new token
+    if let Ok(Some(user)) = app_state
+        .domain_auth_use_cases
+        .get_end_user_by_id(end_user_id)
+        .await
+        && user.is_frozen
+    {
+        return Err(AppError::AccountSuspended);
+    }
+
+    // Get TTL config
+    let config = app_state
+        .domain_auth_use_cases
+        .get_auth_config_for_domain(&root_domain)
+        .await
+        .ok();
+
+    let access_ttl_secs = config
+        .as_ref()
+        .map(|c| c.access_token_ttl_secs)
+        .unwrap_or(86400);
+
+    // Fetch fresh subscription claims for the new token
+    let subscription_claims = app_state
+        .billing_use_cases
+        .get_subscription_claims(domain_id, end_user_id)
+        .await
+        .unwrap_or_else(|_| SubscriptionClaims::none());
+
+    // Get signing key for this domain (derived from API key)
+    let signing_key = app_state
+        .api_key_use_cases
+        .get_signing_key_for_domain(domain_id)
+        .await?
+        .ok_or(AppError::NoApiKeyConfigured)?;
+
+    // Issue new access token using derived secret
+    // Use roles from refresh token claims (they're refreshed on login)
+    let access_token = jwt::issue_domain_end_user_derived(
+        end_user_id,
+        domain_id,
+        &root_domain,
+        claims.roles,
+        subscription_claims,
+        &signing_key,
+        time::Duration::seconds(access_ttl_secs as i64),
+    )?;
+
+    Ok(Json(TokenResponse {
+        access_token,
+        expires_in: access_ttl_secs as i64,
+        token_type: "Bearer".to_string(),
+    }))
+}
+
 /// POST /api/public/domain/{domain}/auth/refresh
 /// Refreshes the access token using the refresh token
 /// Checks real-time frozen status before issuing new token
@@ -168,7 +261,8 @@ async fn refresh_token(
         return Ok((StatusCode::UNAUTHORIZED, HeaderMap::new()));
     };
 
-    let claims = jwt::verify_domain_end_user(refresh_cookie.value(), &app_state.config.jwt_secret)
+    let claims = verify_token_with_domain_keys(&app_state, refresh_cookie.value())
+        .await
         .map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
 
     if claims.domain != root_domain {
@@ -210,14 +304,21 @@ async fn refresh_token(
         .await
         .unwrap_or_else(|_| SubscriptionClaims::none());
 
-    // Issue new access token
-    let access_token = jwt::issue_domain_end_user(
+    // Get signing key for this domain (derived from API key)
+    let signing_key = app_state
+        .api_key_use_cases
+        .get_signing_key_for_domain(domain_id)
+        .await?
+        .ok_or(AppError::NoApiKeyConfigured)?;
+
+    // Issue new access token using derived secret
+    let access_token = jwt::issue_domain_end_user_derived(
         end_user_id,
         domain_id,
         &root_domain,
         claims.roles,
         subscription_claims,
-        &app_state.config.jwt_secret,
+        &signing_key,
         time::Duration::seconds(access_ttl_secs as i64),
     )?;
 
@@ -263,9 +364,7 @@ async fn delete_account(
 
     // Get end_user_id from access or refresh token
     let end_user_id = if let Some(access_token) = cookies.get("end_user_access_token") {
-        if let Ok(claims) =
-            jwt::verify_domain_end_user(access_token.value(), &app_state.config.jwt_secret)
-        {
+        if let Ok(claims) = verify_token_with_domain_keys(&app_state, access_token.value()).await {
             if claims.domain == root_domain {
                 Some(Uuid::parse_str(&claims.sub).ok())
             } else {
@@ -275,8 +374,7 @@ async fn delete_account(
             None
         }
     } else if let Some(refresh_token) = cookies.get("end_user_refresh_token") {
-        if let Ok(claims) =
-            jwt::verify_domain_end_user(refresh_token.value(), &app_state.config.jwt_secret)
+        if let Ok(claims) = verify_token_with_domain_keys(&app_state, refresh_token.value()).await
         {
             if claims.domain == root_domain {
                 Some(Uuid::parse_str(&claims.sub).ok())
@@ -310,6 +408,7 @@ async fn delete_account(
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/{domain}/auth/session", get(check_session))
+        .route("/{domain}/auth/token", get(get_token))
         .route("/{domain}/auth/refresh", post(refresh_token))
         .route("/{domain}/auth/logout", post(logout))
         .route("/{domain}/auth/account", delete(delete_account))

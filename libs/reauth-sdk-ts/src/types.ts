@@ -37,10 +37,29 @@ export type UserDetails = {
   createdAt: string | null;
 };
 
-/** Token verification result */
-export type TokenVerification = {
-  valid: boolean;
-  user: UserDetails | null;
+/** JWT claims for domain end-user tokens */
+export type DomainEndUserClaims = {
+  /** User ID (subject) */
+  sub: string;
+  /** Domain ID */
+  domain_id: string;
+  /** Root domain (e.g., "example.com") */
+  domain: string;
+  /** User roles */
+  roles: string[];
+  /** Subscription information */
+  subscription: {
+    status: string;
+    plan_code: string | null;
+    plan_name: string | null;
+    current_period_end: number | null;
+    cancel_at_period_end: boolean | null;
+    trial_ends_at: number | null;
+  };
+  /** Token expiration (Unix timestamp) */
+  exp: number;
+  /** Token issued at (Unix timestamp) */
+  iat: number;
 };
 
 /** Configuration for browser-side reauth client */
@@ -49,10 +68,10 @@ export type ReauthConfig = {
   domain: string;
 };
 
-/** Configuration for server-side reauth client with API key */
+/** Configuration for server-side reauth client */
 export type ReauthServerConfig = ReauthConfig & {
-  /** API key for server-to-server authentication (e.g., "sk_live_...") */
-  apiKey?: string;
+  /** API key for server-to-server authentication (required, e.g., "sk_live_...") */
+  apiKey: string;
 };
 
 // ============================================================================
@@ -85,6 +104,36 @@ export type SubscriptionInfo = {
   cancelAtPeriodEnd: boolean | null;
   /** Unix timestamp when trial ends (if applicable) */
   trialEndsAt: number | null;
+};
+
+/** Authentication result from verifyToken/authenticate */
+export type AuthResult = {
+  valid: boolean;
+  user: {
+    id: string;
+    roles: string[];
+    subscription: SubscriptionInfo;
+  } | null;
+  claims: DomainEndUserClaims | null;
+  error?: string;
+};
+
+/** Request-like object for extractToken/authenticate */
+export type RequestLike = {
+  headers?: {
+    authorization?: string;
+    cookie?: string;
+  };
+};
+
+/** Response from GET /auth/token endpoint */
+export type TokenResponse = {
+  /** The JWT access token */
+  accessToken: string;
+  /** Token expiration time in seconds */
+  expiresIn: number;
+  /** Token type (always "Bearer") */
+  tokenType: string;
 };
 
 /** Subscription plan available for purchase */

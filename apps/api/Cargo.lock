@@ -1874,6 +1874,7 @@ dependencies = [
  "env_helpers",
  "hex",
  "hickory-resolver",
+ "hkdf",
  "hmac",
  "jsonwebtoken",
  "once_cell",

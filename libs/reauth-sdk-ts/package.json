@@ -31,6 +31,9 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write src"
   },
+  "dependencies": {
+    "jose": "^5.0.0"
+  },
   "peerDependencies": {
     "react": ">=18.0.0"
   },

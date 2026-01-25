@@ -90,10 +90,12 @@ pub async fn init_app_state() -> Result<AppState, InfraError> {
         config.fallback_google_client_secret.clone(),
     );
 
+    let api_key_cipher = ProcessCipher::from_env()?;
     let api_key_use_cases = ApiKeyUseCases::new(
         api_key_repo_arc,
         domain_repo_arc.clone(),
         end_user_repo_arc.clone(),
+        api_key_cipher,
     );
 
     let domain_roles_use_cases =

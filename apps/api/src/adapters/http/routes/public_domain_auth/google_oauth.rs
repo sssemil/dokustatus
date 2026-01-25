@@ -553,9 +553,7 @@ async fn unlink_google(
 
     // Get end_user_id from access or refresh token (same pattern as delete_account)
     let end_user_id = if let Some(access_token) = cookies.get("end_user_access_token") {
-        if let Ok(claims) =
-            jwt::verify_domain_end_user(access_token.value(), &app_state.config.jwt_secret)
-        {
+        if let Ok(claims) = verify_token_with_domain_keys(&app_state, access_token.value()).await {
             if claims.domain == root_domain {
                 Some(Uuid::parse_str(&claims.sub).ok())
             } else {
@@ -565,8 +563,7 @@ async fn unlink_google(
             None
         }
     } else if let Some(refresh_token) = cookies.get("end_user_refresh_token") {
-        if let Ok(claims) =
-            jwt::verify_domain_end_user(refresh_token.value(), &app_state.config.jwt_secret)
+        if let Ok(claims) = verify_token_with_domain_keys(&app_state, refresh_token.value()).await
         {
             if claims.domain == root_domain {
                 Some(Uuid::parse_str(&claims.sub).ok())

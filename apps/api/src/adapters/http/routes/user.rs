@@ -25,7 +25,7 @@ struct MeResponse {
 }
 
 async fn get_me(State(app_state): State<AppState>, jar: CookieJar) -> AppResult<impl IntoResponse> {
-    let (_, claims) = current_user(&jar, &app_state)?;
+    let (_, claims) = current_user(&jar, &app_state).await?;
 
     Ok(Json(MeResponse {
         email: jar
@@ -40,7 +40,7 @@ async fn delete_account(
     State(app_state): State<AppState>,
     jar: CookieJar,
 ) -> AppResult<(StatusCode, HeaderMap)> {
-    let (_, claims) = current_user(&jar, &app_state)?;
+    let (_, claims) = current_user(&jar, &app_state).await?;
 
     let end_user_id =
         Uuid::parse_str(&claims.sub).map_err(|_| crate::app_error::AppError::InvalidCredentials)?;
@@ -71,7 +71,7 @@ async fn delete_account(
 
 /// Extracts the current end-user from the session.
 /// Only allows access if the user is a main domain end-user (dashboard users).
-fn current_user(
+async fn current_user(
     jar: &CookieJar,
     app_state: &AppState,
 ) -> AppResult<(CookieJar, jwt::DomainEndUserClaims)> {
@@ -79,7 +79,21 @@ fn current_user(
         return Err(crate::app_error::AppError::InvalidCredentials);
     };
 
-    let claims = jwt::verify_domain_end_user(access_cookie.value(), &app_state.config.jwt_secret)?;
+    // Peek at domain_id to know which keys to fetch
+    let domain_id = jwt::peek_domain_id_from_token(access_cookie.value())?;
+
+    // Get all active API keys for this domain
+    let keys = app_state
+        .api_key_use_cases
+        .get_all_active_keys_for_domain(domain_id)
+        .await?;
+
+    if keys.is_empty() {
+        return Err(crate::app_error::AppError::NoApiKeyConfigured);
+    }
+
+    // Verify with multi-key verification
+    let claims = jwt::verify_domain_end_user_multi(access_cookie.value(), &keys)?;
 
     // Only allow main domain end-users to access dashboard
     if claims.domain != app_state.config.main_domain {

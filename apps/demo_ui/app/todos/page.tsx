@@ -3,6 +3,7 @@
 import { useAuth } from "@reauth/sdk/react";
 import { useRouter } from "next/navigation";
 import { useEffect, useState, useCallback } from "react";
+import { useToken } from "../token-context";
 
 const DOMAIN = process.env.NEXT_PUBLIC_DOMAIN || "demo.test";
 
@@ -15,10 +16,52 @@ interface Todo {
 
 export default function TodosPage() {
   const { user, loading, logout } = useAuth({ domain: DOMAIN });
+  const { token, fetchToken, clearToken } = useToken();
   const router = useRouter();
   const [todos, setTodos] = useState<Todo[]>([]);
   const [newTodoText, setNewTodoText] = useState("");
   const [isLoading, setIsLoading] = useState(true);
+
+  // Helper to make authenticated API calls with Bearer token
+  const authFetch = useCallback(
+    async (url: string, options: RequestInit = {}): Promise<Response> => {
+      let currentToken = token;
+
+      // If no token, try to fetch one
+      if (!currentToken) {
+        currentToken = await fetchToken();
+      }
+
+      if (!currentToken) {
+        throw new Error("No token available");
+      }
+
+      const res = await fetch(url, {
+        ...options,
+        headers: {
+          ...options.headers,
+          Authorization: `Bearer ${currentToken}`,
+        },
+      });
+
+      // If 401, try to refresh token and retry once
+      if (res.status === 401) {
+        const newToken = await fetchToken();
+        if (newToken) {
+          return fetch(url, {
+            ...options,
+            headers: {
+              ...options.headers,
+              Authorization: `Bearer ${newToken}`,
+            },
+          });
+        }
+      }
+
+      return res;
+    },
+    [token, fetchToken]
+  );
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -30,23 +73,32 @@ export default function TodosPage() {
   // Fetch todos
   const fetchTodos = useCallback(async () => {
     try {
-      const res = await fetch("/api/todos", { credentials: "include" });
+      const res = await authFetch("/api/todos");
       if (res.ok) {
         const data = await res.json();
         setTodos(data);
+      } else if (res.status === 401) {
+        router.push("/");
       }
     } catch (err) {
       console.error("Failed to fetch todos:", err);
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [authFetch, router]);
 
   useEffect(() => {
-    if (user) {
+    if (user && token) {
       fetchTodos();
+    } else if (user && !token) {
+      // Try to fetch token on page load (e.g., after refresh)
+      fetchToken().then((t) => {
+        if (!t) {
+          router.push("/");
+        }
+      });
     }
-  }, [user, fetchTodos]);
+  }, [user, token, fetchTodos, fetchToken, router]);
 
   // Add todo
   const addTodo = async (e: React.FormEvent) => {
@@ -54,10 +106,9 @@ export default function TodosPage() {
     if (!newTodoText.trim()) return;
 
     try {
-      const res = await fetch("/api/todos", {
+      const res = await authFetch("/api/todos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ text: newTodoText }),
       });
 
@@ -74,16 +125,15 @@ export default function TodosPage() {
   // Toggle todo
   const toggleTodo = async (id: string, completed: boolean) => {
     try {
-      const res = await fetch(`/api/todos/${id}`, {
+      const res = await authFetch(`/api/todos/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ completed: !completed }),
       });
 
       if (res.ok) {
         setTodos(
-          todos.map((t) => (t.id === id ? { ...t, completed: !completed } : t)),
+          todos.map((t) => (t.id === id ? { ...t, completed: !completed } : t))
         );
       }
     } catch (err) {
@@ -94,9 +144,8 @@ export default function TodosPage() {
   // Delete todo
   const deleteTodo = async (id: string) => {
     try {
-      const res = await fetch(`/api/todos/${id}`, {
+      const res = await authFetch(`/api/todos/${id}`, {
         method: "DELETE",
-        credentials: "include",
       });
 
       if (res.ok) {
@@ -109,6 +158,7 @@ export default function TodosPage() {
 
   // Handle logout
   const handleLogout = async () => {
+    clearToken();
     await logout();
     router.push("/");
   };

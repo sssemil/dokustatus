@@ -1,14 +1,17 @@
 import express, { Request, Response, NextFunction } from "express";
 import { createServerClient } from "@reauth/sdk/server";
-import type { User } from "@reauth/sdk";
+import type { AuthResult } from "@reauth/sdk";
 import { Redis } from "ioredis";
 import { v4 as uuid } from "uuid";
+
+// User type from AuthResult
+type AuthUser = NonNullable<AuthResult["user"]>;
 
 // Extend Express Request to include user
 declare global {
   namespace Express {
     interface Request {
-      user?: User;
+      user?: AuthUser;
     }
   }
 }
@@ -27,6 +30,10 @@ const REDIS_URL = process.env.REDIS_URL || "redis://localhost:6379";
 const DOMAIN = process.env.DOMAIN || "demo.test";
 const REAUTH_API_KEY = process.env.REAUTH_API_KEY;
 
+if (!REAUTH_API_KEY) {
+  throw new Error("REAUTH_API_KEY environment variable is required");
+}
+
 // Clients
 const redis = new Redis(REDIS_URL);
 const reauth = createServerClient({
@@ -38,17 +45,22 @@ const reauth = createServerClient({
 const app = express();
 app.use(express.json());
 
-// Auth middleware - cookie-based authentication
+// Auth middleware - supports Bearer token and cookie-based authentication
+// Uses local JWT verification (no network call to reauth)
 async function authMiddleware(req: Request, res: Response, next: NextFunction) {
-  const cookies = req.headers.cookie || "";
-  const user = await reauth.getUser(cookies);
+  const result = await reauth.authenticate({
+    headers: {
+      authorization: req.headers.authorization as string | undefined,
+      cookie: req.headers.cookie,
+    },
+  });
 
-  if (!user) {
-    res.status(401).json({ error: "Unauthorized" });
+  if (!result.valid || !result.user) {
+    res.status(401).json({ error: result.error || "Unauthorized" });
     return;
   }
 
-  req.user = user;
+  req.user = result.user;
   next();
 }
 
@@ -74,7 +86,7 @@ app.get("/api/health", (_req, res) => {
   res.json({ status: "ok" });
 });
 
-// Get current user's full profile (requires API key)
+// Get current user's full profile (requires network call to get email)
 app.get("/api/me", authMiddleware, async (req, res) => {
   const userDetails = await reauth.getUserById(req.user!.id);
   if (!userDetails) {

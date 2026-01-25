@@ -5,6 +5,7 @@ import type {
   UserSubscription,
   CheckoutSession,
   PortalSession,
+  TokenResponse,
 } from "./types";
 
 /**
@@ -62,6 +63,45 @@ export function createReauthClient(config: ReauthConfig) {
         credentials: "include",
       });
       return res.ok;
+    },
+
+    /**
+     * Get an access token for Bearer authentication.
+     * Use this when calling your own API that uses local token verification.
+     *
+     * @returns TokenResponse with access token, or null if not authenticated
+     *
+     * @example
+     * ```typescript
+     * const tokenResponse = await reauth.getToken();
+     * if (tokenResponse) {
+     *   fetch('/api/data', {
+     *     headers: { Authorization: `Bearer ${tokenResponse.accessToken}` }
+     *   });
+     * }
+     * ```
+     */
+    async getToken(): Promise<TokenResponse | null> {
+      try {
+        const res = await fetch(`${baseUrl}/auth/token`, {
+          method: "GET",
+          credentials: "include",
+        });
+
+        if (!res.ok) {
+          if (res.status === 401) return null;
+          throw new Error(`Failed to get token: ${res.status}`);
+        }
+
+        const data = await res.json();
+        return {
+          accessToken: data.access_token,
+          expiresIn: data.expires_in,
+          tokenType: data.token_type,
+        };
+      } catch {
+        return null;
+      }
     },
 
     /**

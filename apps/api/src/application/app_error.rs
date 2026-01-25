@@ -29,6 +29,12 @@ pub enum AppError {
     #[error("Too many documents")]
     TooManyDocuments,
 
+    #[error("Too many API keys for this domain (max 5)")]
+    TooManyApiKeys,
+
+    #[error("No API key configured for this domain")]
+    NoApiKeyConfigured,
+
     #[error("Not found")]
     NotFound,
 
@@ -62,6 +68,8 @@ pub enum ErrorCode {
     ValidationError,
     AccountSuspended,
     TooManyDocuments,
+    TooManyApiKeys,
+    NoApiKeyConfigured,
     NotFound,
     Forbidden,
     SessionMismatch,
@@ -83,6 +91,8 @@ impl ErrorCode {
             ErrorCode::ValidationError => "VALIDATION_ERROR",
             ErrorCode::AccountSuspended => "ACCOUNT_SUSPENDED",
             ErrorCode::TooManyDocuments => "TOO_MANY_DOCUMENTS",
+            ErrorCode::TooManyApiKeys => "TOO_MANY_API_KEYS",
+            ErrorCode::NoApiKeyConfigured => "NO_API_KEY_CONFIGURED",
             ErrorCode::NotFound => "NOT_FOUND",
             ErrorCode::Forbidden => "FORBIDDEN",
             ErrorCode::SessionMismatch => "SESSION_MISMATCH",

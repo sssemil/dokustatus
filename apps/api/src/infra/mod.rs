@@ -10,6 +10,7 @@ pub mod domain_verifier;
 pub mod dummy_payment_client;
 pub mod error;
 pub mod http_client;
+pub mod key_derivation;
 pub mod oauth_state;
 pub mod rate_limit;
 pub mod setup;

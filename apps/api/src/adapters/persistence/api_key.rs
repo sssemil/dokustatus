@@ -5,7 +5,8 @@ use uuid::Uuid;
 use crate::{
     adapters::persistence::PostgresPersistence,
     app_error::{AppError, AppResult},
-    application::use_cases::api_key::{ApiKeyProfile, ApiKeyRepoTrait, ApiKeyWithDomain},
+    application::use_cases::api_key::{ApiKeyProfile, ApiKeyRepoTrait, ApiKeyWithDomain, ApiKeyWithRaw},
+    infra::crypto::ProcessCipher,
 };
 
 fn row_to_profile(row: sqlx::postgres::PgRow) -> ApiKeyProfile {
@@ -36,19 +37,21 @@ impl ApiKeyRepoTrait for PostgresPersistence {
         domain_id: Uuid,
         key_prefix: &str,
         key_hash: &str,
+        key_encrypted: &str,
         name: &str,
         created_by_end_user_id: Uuid,
     ) -> AppResult<ApiKeyProfile> {
         let row = sqlx::query(
             r#"
-            INSERT INTO domain_api_keys (domain_id, key_prefix, key_hash, name, created_by_end_user_id)
-            VALUES ($1, $2, $3, $4, $5)
+            INSERT INTO domain_api_keys (domain_id, key_prefix, key_hash, key_encrypted, name, created_by_end_user_id)
+            VALUES ($1, $2, $3, $4, $5, $6)
             RETURNING id, domain_id, key_prefix, name, last_used_at, revoked_at, created_at
             "#,
         )
         .bind(domain_id)
         .bind(key_prefix)
         .bind(key_hash)
+        .bind(key_encrypted)
         .bind(name)
         .bind(created_by_end_user_id)
         .fetch_one(&self.pool)
@@ -110,5 +113,89 @@ impl ApiKeyRepoTrait for PostgresPersistence {
             .map_err(AppError::from)?;
 
         Ok(())
+    }
+
+    async fn count_active_by_domain(&self, domain_id: Uuid) -> AppResult<i64> {
+        let row = sqlx::query(
+            r#"
+            SELECT COUNT(*) as count
+            FROM domain_api_keys
+            WHERE domain_id = $1 AND revoked_at IS NULL
+            "#,
+        )
+        .bind(domain_id)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+
+        Ok(row.get("count"))
+    }
+
+    async fn get_signing_key_for_domain(
+        &self,
+        domain_id: Uuid,
+        cipher: &ProcessCipher,
+    ) -> AppResult<Option<ApiKeyWithRaw>> {
+        let row = sqlx::query(
+            r#"
+            SELECT id, domain_id, key_encrypted
+            FROM domain_api_keys
+            WHERE domain_id = $1 AND revoked_at IS NULL
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            "#,
+        )
+        .bind(domain_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+
+        match row {
+            Some(row) => {
+                let id: Uuid = row.get("id");
+                let domain_id: Uuid = row.get("domain_id");
+                let key_encrypted: String = row.get("key_encrypted");
+                let raw_key = cipher.decrypt(&key_encrypted)?;
+                Ok(Some(ApiKeyWithRaw {
+                    id,
+                    domain_id,
+                    raw_key,
+                }))
+            }
+            None => Ok(None),
+        }
+    }
+
+    async fn get_all_active_keys_for_domain(
+        &self,
+        domain_id: Uuid,
+        cipher: &ProcessCipher,
+    ) -> AppResult<Vec<ApiKeyWithRaw>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT id, domain_id, key_encrypted
+            FROM domain_api_keys
+            WHERE domain_id = $1 AND revoked_at IS NULL
+            ORDER BY created_at DESC, id DESC
+            "#,
+        )
+        .bind(domain_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+
+        let mut keys = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.get("id");
+            let domain_id: Uuid = row.get("domain_id");
+            let key_encrypted: String = row.get("key_encrypted");
+            let raw_key = cipher.decrypt(&key_encrypted)?;
+            keys.push(ApiKeyWithRaw {
+                id,
+                domain_id,
+                raw_key,
+            });
+        }
+        Ok(keys)
     }
 }
