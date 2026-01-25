@@ -26,6 +26,7 @@ use crate::{
 };
 
 use super::domain::DomainRepoTrait;
+use crate::application::validators::is_valid_plan_code;
 
 /// Number of months in a year, used for MRR calculations
 const MONTHS_PER_YEAR: i64 = 12;
@@ -1064,14 +1065,25 @@ impl DomainBillingUseCases {
         &self,
         owner_id: Uuid,
         domain_id: Uuid,
-        input: CreatePlanInput,
+        mut input: CreatePlanInput,
     ) -> AppResult<SubscriptionPlanProfile> {
         let domain = self.get_domain_verified(owner_id, domain_id).await?;
 
-        // Validate input
-        if input.code.is_empty() || input.code.len() > 50 {
+        // Reject non-ASCII codes before normalization to prevent Unicode case-folding exploits
+        // (e.g., Kelvin sign "K" normalizing to ASCII "k")
+        if !input.code.is_ascii() {
             return Err(AppError::InvalidInput(
-                "Plan code must be 1-50 characters".into(),
+                "Plan code must contain only ASCII characters.".into(),
+            ));
+        }
+
+        // Normalize code to lowercase
+        input.code = input.code.to_lowercase();
+
+        // Validate plan code (must be URL-friendly)
+        if !is_valid_plan_code(&input.code) {
+            return Err(AppError::InvalidInput(
+                "Plan code must be 1-50 characters using only lowercase letters, numbers, hyphens, and underscores. Must start with a letter or number.".into(),
             ));
         }
         if input.name.is_empty() || input.name.len() > 100 {
@@ -2548,6 +2560,282 @@ mod billing_integration_tests {
         // Non-owner should get Forbidden
         let result = use_cases.create_plan(other_user_id, domain.id, input).await;
         assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_rejects_special_characters() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let invalid_codes = vec![
+            "plan@code",
+            "plan.code",
+            "plan/code",
+            "plan!",
+            "plan$code",
+            "plan#tag",
+        ];
+
+        for invalid_code in invalid_codes {
+            let input = CreatePlanInput {
+                code: invalid_code.to_string(),
+                name: "Test Plan".to_string(),
+                description: None,
+                price_cents: 999,
+                currency: "usd".to_string(),
+                interval: "monthly".to_string(),
+                interval_count: 1,
+                trial_days: 0,
+                features: vec![],
+                is_public: true,
+            };
+
+            let result = use_cases.create_plan(owner_id, domain.id, input).await;
+            assert!(
+                matches!(result, Err(AppError::InvalidInput(_))),
+                "Expected InvalidInput for code: {}",
+                invalid_code
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_rejects_leading_hyphen() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let input = CreatePlanInput {
+            code: "-basic".to_string(),
+            name: "Test Plan".to_string(),
+            description: None,
+            price_cents: 999,
+            currency: "usd".to_string(),
+            interval: "monthly".to_string(),
+            interval_count: 1,
+            trial_days: 0,
+            features: vec![],
+            is_public: true,
+        };
+
+        let result = use_cases.create_plan(owner_id, domain.id, input).await;
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_rejects_leading_underscore() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let input = CreatePlanInput {
+            code: "_basic".to_string(),
+            name: "Test Plan".to_string(),
+            description: None,
+            price_cents: 999,
+            currency: "usd".to_string(),
+            interval: "monthly".to_string(),
+            interval_count: 1,
+            trial_days: 0,
+            features: vec![],
+            is_public: true,
+        };
+
+        let result = use_cases.create_plan(owner_id, domain.id, input).await;
+        assert!(matches!(result, Err(AppError::InvalidInput(_))));
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_rejects_whitespace() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let whitespace_codes = vec!["basic plan", " basic", "basic ", "basic\t", "basic\n"];
+
+        for code in whitespace_codes {
+            let input = CreatePlanInput {
+                code: code.to_string(),
+                name: "Test Plan".to_string(),
+                description: None,
+                price_cents: 999,
+                currency: "usd".to_string(),
+                interval: "monthly".to_string(),
+                interval_count: 1,
+                trial_days: 0,
+                features: vec![],
+                is_public: true,
+            };
+
+            let result = use_cases.create_plan(owner_id, domain.id, input).await;
+            assert!(
+                matches!(result, Err(AppError::InvalidInput(_))),
+                "Expected InvalidInput for code with whitespace: {:?}",
+                code
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_normalizes_to_lowercase() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let input = CreatePlanInput {
+            code: "BASIC-PLAN".to_string(),
+            name: "Test Plan".to_string(),
+            description: None,
+            price_cents: 999,
+            currency: "usd".to_string(),
+            interval: "monthly".to_string(),
+            interval_count: 1,
+            trial_days: 0,
+            features: vec![],
+            is_public: true,
+        };
+
+        let result = use_cases.create_plan(owner_id, domain.id, input).await;
+        assert!(result.is_ok());
+
+        // Verify the plan was stored with lowercase code
+        let plans = plan_repo.plans.lock().unwrap();
+        let created_plan = plans.values().next().expect("Plan should exist");
+        assert_eq!(created_plan.code, "basic-plan");
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_accepts_valid_codes_with_separators() {
+        let (use_cases, domain_repo, plan_repo, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let valid_codes = vec![
+            "pro-plan",
+            "tier_1",
+            "plan-with-dashes",
+            "plan_with_underscores",
+            "123plan",
+            "plan123",
+        ];
+
+        for code in valid_codes {
+            // Clear plan repo for each iteration
+            plan_repo.plans.lock().unwrap().clear();
+
+            let input = CreatePlanInput {
+                code: code.to_string(),
+                name: "Test Plan".to_string(),
+                description: None,
+                price_cents: 999,
+                currency: "usd".to_string(),
+                interval: "monthly".to_string(),
+                interval_count: 1,
+                trial_days: 0,
+                features: vec![],
+                is_public: true,
+            };
+
+            let result = use_cases.create_plan(owner_id, domain.id, input).await;
+            assert!(result.is_ok(), "Expected success for code: {}", code);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_create_plan_rejects_non_ascii_characters() {
+        let (use_cases, domain_repo, _, _, _) = create_test_use_cases();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Test various non-ASCII codes that could potentially normalize to ASCII
+        let non_ascii_codes = vec![
+            "plän",     // German umlaut
+            "план",     // Cyrillic
+            "计划",     // Chinese
+            "プラン",   // Japanese
+            "\u{212A}", // Kelvin sign (normalizes to 'k')
+        ];
+
+        for code in non_ascii_codes {
+            let input = CreatePlanInput {
+                code: code.to_string(),
+                name: "Test Plan".to_string(),
+                description: None,
+                price_cents: 999,
+                currency: "usd".to_string(),
+                interval: "monthly".to_string(),
+                interval_count: 1,
+                trial_days: 0,
+                features: vec![],
+                is_public: true,
+            };
+
+            let result = use_cases.create_plan(owner_id, domain.id, input).await;
+            assert!(
+                matches!(result, Err(AppError::InvalidInput(_))),
+                "Expected InvalidInput for non-ASCII code: {:?}",
+                code
+            );
+        }
     }
 
     #[tokio::test]
