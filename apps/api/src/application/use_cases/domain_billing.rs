@@ -1,8 +1,13 @@
 use async_trait::async_trait;
-use chrono::NaiveDateTime;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
+
+/// Convert a Unix timestamp to NaiveDateTime
+fn timestamp_to_naive(secs: i64) -> Option<NaiveDateTime> {
+    DateTime::<Utc>::from_timestamp(secs, 0).map(|dt| dt.naive_utc())
+}
 
 use crate::{
     adapters::persistence::enabled_payment_providers::{
@@ -1936,7 +1941,7 @@ impl DomainBillingUseCases {
         let payment_date = if status == PaymentStatus::Paid {
             invoice["status_transitions"]["paid_at"]
                 .as_i64()
-                .and_then(|ts| NaiveDateTime::from_timestamp_opt(ts, 0))
+                .and_then(timestamp_to_naive)
         } else {
             None
         };
@@ -1963,9 +1968,7 @@ impl DomainBillingUseCases {
             invoice_number: invoice["number"].as_str().map(|s| s.to_string()),
             billing_reason: invoice["billing_reason"].as_str().map(|s| s.to_string()),
             failure_message: None,
-            invoice_created_at: invoice["created"]
-                .as_i64()
-                .and_then(|ts| NaiveDateTime::from_timestamp_opt(ts, 0)),
+            invoice_created_at: invoice["created"].as_i64().and_then(timestamp_to_naive),
             payment_date,
         };
 
@@ -3665,7 +3668,12 @@ mod billing_integration_tests {
         assert_eq!(payment.plan_code, Some("premium".to_string()));
         assert_eq!(payment.plan_name, Some("Premium Plan".to_string()));
         assert!(payment.stripe_invoice_id.starts_with("dummy_inv_"));
-        assert!(payment.stripe_payment_intent_id.unwrap().starts_with("dummy_pi_"));
+        assert!(
+            payment
+                .stripe_payment_intent_id
+                .unwrap()
+                .starts_with("dummy_pi_")
+        );
 
         let stored = payment_repo
             .get_by_stripe_invoice_id(&payment.stripe_invoice_id)
@@ -3689,11 +3697,7 @@ mod billing_integration_tests {
 
         {
             let key = (domain_id, payment.payment_mode, invoice_id.clone());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         use_cases
@@ -3726,11 +3730,7 @@ mod billing_integration_tests {
 
         {
             let key = (domain_id, payment.payment_mode, invoice_id.clone());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         use_cases
@@ -3761,11 +3761,7 @@ mod billing_integration_tests {
 
         {
             let key = (domain_id, payment.payment_mode, invoice_id.clone());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         use_cases
@@ -3794,11 +3790,7 @@ mod billing_integration_tests {
 
         {
             let key = (domain_id, payment.payment_mode, invoice_id.clone());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         use_cases
@@ -3852,12 +3844,12 @@ mod billing_integration_tests {
                 p.stripe_invoice_id = format!("inv_user_{}", i);
                 p.payment_mode = PaymentMode::Test;
             });
-            let key = (domain.id, PaymentMode::Test, payment.stripe_invoice_id.clone());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            let key = (
+                domain.id,
+                PaymentMode::Test,
+                payment.stripe_invoice_id.clone(),
+            );
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         payment_repo.set_user_email(user_id, "user@test.com");
@@ -3869,7 +3861,12 @@ mod billing_integration_tests {
 
         assert_eq!(result.payments.len(), 3);
         assert_eq!(result.total, 3);
-        assert!(result.payments.iter().all(|p| p.user_email == "user@test.com"));
+        assert!(
+            result
+                .payments
+                .iter()
+                .all(|p| p.user_email == "user@test.com")
+        );
     }
 
     #[tokio::test]
@@ -3893,12 +3890,12 @@ mod billing_integration_tests {
                 p.stripe_invoice_id = format!("inv_page_{}", i);
                 p.payment_mode = PaymentMode::Test;
             });
-            let key = (domain.id, PaymentMode::Test, payment.stripe_invoice_id.clone());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            let key = (
+                domain.id,
+                PaymentMode::Test,
+                payment.stripe_invoice_id.clone(),
+            );
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         let page1 = use_cases
@@ -3987,7 +3984,10 @@ mod billing_integration_tests {
             .unwrap();
 
         assert_eq!(result.payments.len(), 1);
-        assert_eq!(result.payments[0].payment.stripe_invoice_id, "inv_test_mode");
+        assert_eq!(
+            result.payments[0].payment.stripe_invoice_id,
+            "inv_test_mode"
+        );
     }
 
     #[tokio::test]
@@ -4012,12 +4012,12 @@ mod billing_integration_tests {
                 p.payment_mode = PaymentMode::Test;
             });
             payment_repo.set_user_email(user_id, &format!("user{}@test.com", i));
-            let key = (domain.id, PaymentMode::Test, payment.stripe_invoice_id.clone());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            let key = (
+                domain.id,
+                PaymentMode::Test,
+                payment.stripe_invoice_id.clone(),
+            );
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         let filters = PaymentListFilters {
@@ -4066,10 +4066,7 @@ mod billing_integration_tests {
 
         {
             let mut payments = payment_repo.payments.lock().unwrap();
-            payments.insert(
-                (domain.id, PaymentMode::Test, "inv_paid".to_string()),
-                paid,
-            );
+            payments.insert((domain.id, PaymentMode::Test, "inv_paid".to_string()), paid);
             payments.insert(
                 (domain.id, PaymentMode::Test, "inv_failed".to_string()),
                 failed,
@@ -4183,14 +4180,8 @@ mod billing_integration_tests {
 
         {
             let mut payments = payment_repo.payments.lock().unwrap();
-            payments.insert(
-                (domain.id, PaymentMode::Test, "inv_alice".to_string()),
-                p1,
-            );
-            payments.insert(
-                (domain.id, PaymentMode::Test, "inv_bob".to_string()),
-                p2,
-            );
+            payments.insert((domain.id, PaymentMode::Test, "inv_alice".to_string()), p1);
+            payments.insert((domain.id, PaymentMode::Test, "inv_bob".to_string()), p2);
         }
 
         let filters = PaymentListFilters {
@@ -4271,11 +4262,7 @@ mod billing_integration_tests {
 
         {
             let key = (domain.id, PaymentMode::Test, "inv_csv_test".to_string());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         let filters = PaymentListFilters {
@@ -4291,7 +4278,9 @@ mod billing_integration_tests {
             .await
             .unwrap();
 
-        assert!(csv.starts_with("Date,User Email,Plan,Amount,Status,Invoice Number,Billing Reason\n"));
+        assert!(
+            csv.starts_with("Date,User Email,Plan,Amount,Status,Invoice Number,Billing Reason\n")
+        );
         assert!(csv.contains("test@example.com"));
         assert!(csv.contains("Basic Plan"));
         assert!(csv.contains("9.99"));
@@ -4325,11 +4314,7 @@ mod billing_integration_tests {
 
         {
             let key = (domain.id, PaymentMode::Test, "inv_comma".to_string());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         let filters = PaymentListFilters::default();
@@ -4368,11 +4353,7 @@ mod billing_integration_tests {
 
         {
             let key = (domain.id, PaymentMode::Test, "inv_quote".to_string());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         let filters = PaymentListFilters::default();
@@ -4411,11 +4392,7 @@ mod billing_integration_tests {
 
         {
             let key = (domain.id, PaymentMode::Test, "inv_formula".to_string());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         let filters = PaymentListFilters::default();
@@ -4456,11 +4433,7 @@ mod billing_integration_tests {
 
         {
             let key = (domain.id, PaymentMode::Test, "inv_nulls".to_string());
-            payment_repo
-                .payments
-                .lock()
-                .unwrap()
-                .insert(key, payment);
+            payment_repo.payments.lock().unwrap().insert(key, payment);
         }
 
         let filters = PaymentListFilters::default();
@@ -4998,16 +4971,31 @@ mod billing_integration_tests {
             .unwrap();
 
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Stripe, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Stripe,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
 
         let result = use_cases
-            .disable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .disable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await;
 
         assert!(result.is_ok());
@@ -5035,12 +5023,22 @@ mod billing_integration_tests {
             .insert(domain.id, domain.clone());
 
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
 
         let result = use_cases
-            .disable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .disable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await;
 
         assert!(matches!(result, Err(AppError::InvalidInput(_))));
@@ -5063,7 +5061,12 @@ mod billing_integration_tests {
             .insert(domain.id, domain.clone());
 
         let result = use_cases
-            .disable_provider(other_user, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .disable_provider(
+                other_user,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await;
 
         assert!(matches!(result, Err(AppError::Forbidden)));
@@ -5085,12 +5088,23 @@ mod billing_integration_tests {
             .insert(domain.id, domain.clone());
 
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
 
         let result = use_cases
-            .set_provider_active(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test, true)
+            .set_provider_active(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+                true,
+            )
             .await;
 
         assert!(result.is_ok());
@@ -5126,11 +5140,21 @@ mod billing_integration_tests {
 
         // Enable both Dummy and Stripe in Test mode
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Stripe, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Stripe,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
 
@@ -5164,7 +5188,12 @@ mod billing_integration_tests {
             .insert(domain.id, domain.clone());
 
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
 
@@ -5211,11 +5240,21 @@ mod billing_integration_tests {
 
         // Enable both Dummy and Stripe in Test mode
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Stripe, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Stripe,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
 
@@ -5280,11 +5319,21 @@ mod billing_integration_tests {
 
         // Enable both Dummy and Stripe in Test mode
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Stripe, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Stripe,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
 
@@ -5322,7 +5371,12 @@ mod billing_integration_tests {
             .insert(domain.id, domain.clone());
 
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
 
@@ -5355,7 +5409,12 @@ mod billing_integration_tests {
             .insert(domain.id, domain.clone());
 
         use_cases
-            .enable_provider(owner_id, domain.id, PaymentProvider::Dummy, PaymentMode::Test)
+            .enable_provider(
+                owner_id,
+                domain.id,
+                PaymentProvider::Dummy,
+                PaymentMode::Test,
+            )
             .await
             .unwrap();
 
@@ -5545,7 +5604,11 @@ mod billing_integration_tests {
         let plan = create_test_plan(other_domain_id, |p| {
             p.code = "other_domain_plan".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let result = use_cases
             .reorder_plans(owner_id, domain.id, vec![plan.id])
@@ -5595,7 +5658,11 @@ mod billing_integration_tests {
             .insert(domain.id, domain.clone());
 
         let plan = create_test_plan(domain.id, |_| {});
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let result = use_cases
             .reorder_plans(other_user, domain.id, vec![plan.id])
@@ -5623,7 +5690,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "premium".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let result = use_cases
             .get_plan_by_code(domain.id, "premium")
@@ -5677,7 +5748,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Live;
             p.code = "premium".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         // get_plan_by_code uses active mode (Test), so Live plan not found
         let result = use_cases
@@ -5707,7 +5782,11 @@ mod billing_integration_tests {
             p.stripe_product_id = None;
             p.stripe_price_id = None;
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let result = use_cases
             .set_stripe_ids(plan.id, "prod_abc123", "price_xyz789")
@@ -5746,7 +5825,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.stripe_price_id = Some("price_unique123".to_string());
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let result = use_cases
             .get_plan_by_stripe_price_id(domain.id, PaymentMode::Test, "price_unique123")
@@ -5803,7 +5886,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -5868,7 +5955,11 @@ mod billing_integration_tests {
         let plan = create_test_plan(domain.id, |p| {
             p.payment_mode = PaymentMode::Test;
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -5927,7 +6018,11 @@ mod billing_integration_tests {
         let plan = create_test_plan(domain.id, |p| {
             p.payment_mode = PaymentMode::Live;
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Live;
@@ -5970,7 +6065,11 @@ mod billing_integration_tests {
         let plan = create_test_plan(domain.id, |p| {
             p.payment_mode = PaymentMode::Test;
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let input = CreateSubscriptionInput {
             domain_id: domain.id,
@@ -6018,7 +6117,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let new_plan = create_test_plan(domain.id, |p| {
             p.payment_mode = PaymentMode::Test;
@@ -6087,7 +6190,11 @@ mod billing_integration_tests {
         let plan = create_test_plan(domain.id, |p| {
             p.payment_mode = PaymentMode::Test;
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6163,7 +6270,11 @@ mod billing_integration_tests {
             .insert(domain.id, domain.clone());
 
         let plan = create_test_plan(domain.id, |_| {});
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |_| {});
         subscription_repo
@@ -6215,7 +6326,11 @@ mod billing_integration_tests {
             p.code = "basic".to_string();
             p.name = "Basic Plan".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6311,7 +6426,11 @@ mod billing_integration_tests {
         let plan = create_test_plan(domain.id, |p| {
             p.payment_mode = PaymentMode::Test;
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6388,7 +6507,11 @@ mod billing_integration_tests {
             p.code = "premium".to_string();
             p.name = "Premium Plan".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6473,7 +6596,11 @@ mod billing_integration_tests {
         let plan = create_test_plan(domain.id, |p| {
             p.payment_mode = PaymentMode::Test;
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, end_user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6529,7 +6656,9 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "premium")
             .await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("No active subscription")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("No active subscription"))
+        );
     }
 
     #[tokio::test]
@@ -6552,7 +6681,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6569,7 +6702,9 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "premium")
             .await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("manually granted")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("manually granted"))
+        );
     }
 
     #[tokio::test]
@@ -6592,7 +6727,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6609,7 +6748,9 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "premium")
             .await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("not linked to Stripe")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("not linked to Stripe"))
+        );
     }
 
     #[tokio::test]
@@ -6632,7 +6773,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6672,7 +6817,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6689,7 +6838,9 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "premium")
             .await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("complete the current payment")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("complete the current payment"))
+        );
     }
 
     #[tokio::test]
@@ -6712,7 +6863,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6752,7 +6907,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6770,7 +6929,9 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "premium")
             .await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("canceled subscription")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("canceled subscription"))
+        );
     }
 
     #[tokio::test]
@@ -6794,7 +6955,11 @@ mod billing_integration_tests {
             p.code = "basic".to_string();
             p.is_public = true;
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -6812,7 +6977,9 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "basic")
             .await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Already subscribed")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Already subscribed"))
+        );
     }
 
     #[tokio::test]
@@ -6869,7 +7036,9 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "premium")
             .await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("no longer available")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("no longer available"))
+        );
     }
 
     #[tokio::test]
@@ -6925,7 +7094,9 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "enterprise")
             .await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("not available")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("not available"))
+        );
     }
 
     #[tokio::test]
@@ -6983,7 +7154,9 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "basic_yearly")
             .await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Cannot switch between")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Cannot switch between"))
+        );
     }
 
     #[tokio::test]
@@ -7006,7 +7179,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -7046,7 +7223,9 @@ mod billing_integration_tests {
 
         let result = use_cases.change_plan(domain.id, user_id, "premium").await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("No active subscription")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("No active subscription"))
+        );
     }
 
     #[tokio::test]
@@ -7069,7 +7248,11 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic".to_string();
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -7084,7 +7267,9 @@ mod billing_integration_tests {
 
         let result = use_cases.change_plan(domain.id, user_id, "premium").await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("manually granted")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("manually granted"))
+        );
     }
 
     #[tokio::test]
@@ -7108,7 +7293,11 @@ mod billing_integration_tests {
             p.code = "basic".to_string();
             p.is_public = true;
         });
-        plan_repo.plans.lock().unwrap().insert(plan.id, plan.clone());
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
 
         let subscription = create_test_subscription(domain.id, user_id, plan.id, |s| {
             s.payment_mode = PaymentMode::Test;
@@ -7123,7 +7312,9 @@ mod billing_integration_tests {
 
         let result = use_cases.change_plan(domain.id, user_id, "basic").await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Already subscribed")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Already subscribed"))
+        );
     }
 
     #[tokio::test]
@@ -7230,7 +7421,9 @@ mod billing_integration_tests {
 
         let result = use_cases.change_plan(domain.id, user_id, "legacy").await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("no longer available")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("no longer available"))
+        );
     }
 
     #[tokio::test]
@@ -7285,6 +7478,8 @@ mod billing_integration_tests {
 
         let result = use_cases.change_plan(domain.id, user_id, "yearly").await;
 
-        assert!(matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Cannot switch between")));
+        assert!(
+            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Cannot switch between"))
+        );
     }
 }

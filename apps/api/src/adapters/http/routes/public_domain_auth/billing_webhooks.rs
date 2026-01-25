@@ -7,10 +7,16 @@ use crate::application::use_cases::domain_billing::{
 use crate::domain::entities::payment_status::PaymentStatus;
 use crate::domain::entities::user_subscription::SubscriptionStatus;
 use crate::infra::stripe_client::StripeClient;
+use chrono::{DateTime, NaiveDateTime, Utc};
 
 // ============================================================================
 // Helper Functions
 // ============================================================================
+
+/// Convert a Unix timestamp to NaiveDateTime
+fn timestamp_to_naive(secs: i64) -> Option<NaiveDateTime> {
+    DateTime::<Utc>::from_timestamp(secs, 0).map(|dt| dt.naive_utc())
+}
 
 /// Determines if a webhook processing error should trigger a Stripe retry.
 ///
@@ -387,20 +393,10 @@ async fn handle_checkout_session_completed(
         stripe_customer_id: customer_id.to_string(),
         stripe_subscription_id: Some(sub_id.to_string()),
         status,
-        current_period_start: Some(
-            chrono::NaiveDateTime::from_timestamp_opt(stripe_sub.current_period_start, 0)
-                .unwrap_or_default(),
-        ),
-        current_period_end: Some(
-            chrono::NaiveDateTime::from_timestamp_opt(stripe_sub.current_period_end, 0)
-                .unwrap_or_default(),
-        ),
-        trial_start: stripe_sub
-            .trial_start
-            .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
-        trial_end: stripe_sub
-            .trial_end
-            .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+        current_period_start: timestamp_to_naive(stripe_sub.current_period_start),
+        current_period_end: timestamp_to_naive(stripe_sub.current_period_end),
+        trial_start: stripe_sub.trial_start.and_then(timestamp_to_naive),
+        trial_end: stripe_sub.trial_end.and_then(timestamp_to_naive),
     };
 
     // Create subscription - MUST succeed for user access
@@ -499,22 +495,22 @@ async fn handle_subscription_update(
         stripe_subscription_id: None, // Already set, don't overwrite
         current_period_start: subscription["current_period_start"]
             .as_i64()
-            .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+            .and_then(timestamp_to_naive),
         current_period_end: subscription["current_period_end"]
             .as_i64()
-            .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+            .and_then(timestamp_to_naive),
         cancel_at_period_end: subscription["cancel_at_period_end"]
             .as_bool()
             .unwrap_or(false),
         canceled_at: subscription["canceled_at"]
             .as_i64()
-            .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+            .and_then(timestamp_to_naive),
         trial_start: subscription["trial_start"]
             .as_i64()
-            .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+            .and_then(timestamp_to_naive),
         trial_end: subscription["trial_end"]
             .as_i64()
-            .and_then(|ts| chrono::NaiveDateTime::from_timestamp_opt(ts, 0)),
+            .and_then(timestamp_to_naive),
     };
 
     match app_state

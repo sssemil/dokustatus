@@ -34,13 +34,11 @@ use crate::{
 /// any external API calls. It supports different payment scenarios to
 /// test various outcomes (success, decline, 3DS, etc.).
 #[derive(Clone)]
-pub struct DummyPaymentClient {
-    domain_id: Uuid,
-}
+pub struct DummyPaymentClient;
 
 impl DummyPaymentClient {
-    pub fn new(domain_id: Uuid) -> Self {
-        Self { domain_id }
+    pub fn new(_domain_id: Uuid) -> Self {
+        Self
     }
 
     /// Generate a deterministic customer ID

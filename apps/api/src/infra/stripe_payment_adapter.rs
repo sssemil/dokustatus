@@ -482,7 +482,6 @@ trait StripeSubscriptionExt {
     fn latest_invoice_id(&self) -> Option<String>;
     fn latest_invoice_amount(&self) -> Option<i64>;
     fn latest_invoice_currency(&self) -> Option<String>;
-    fn hosted_invoice_url(&self) -> Option<String>;
 }
 
 impl StripeSubscriptionExt for crate::infra::stripe_client::StripeSubscription {
@@ -509,15 +508,6 @@ impl StripeSubscriptionExt for crate::infra::stripe_client::StripeSubscription {
         match &self.latest_invoice {
             Some(crate::infra::stripe_client::StripeLatestInvoice::Expanded(inv)) => {
                 Some(inv.currency.clone())
-            }
-            _ => None,
-        }
-    }
-
-    fn hosted_invoice_url(&self) -> Option<String> {
-        match &self.latest_invoice {
-            Some(crate::infra::stripe_client::StripeLatestInvoice::Expanded(inv)) => {
-                inv.hosted_invoice_url.clone()
             }
             _ => None,
         }
