@@ -391,3 +391,14 @@ pub enum InvoicePdfResult {
     /// No PDF available
     NotAvailable,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_plan_change_type_as_str_all_variants() {
+        assert_eq!(PlanChangeType::Upgrade.as_str(), "upgrade");
+        assert_eq!(PlanChangeType::Downgrade.as_str(), "downgrade");
+    }
+}

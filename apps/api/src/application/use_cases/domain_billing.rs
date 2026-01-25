@@ -2328,3 +2328,14 @@ mod mrr_calculation_tests {
         // Old integer math: 1000 * 991 = 991000 (loses $6.67)
     }
 }
+
+#[cfg(test)]
+mod plan_change_type_tests {
+    use super::*;
+
+    #[test]
+    fn test_as_str_all_variants() {
+        assert_eq!(PlanChangeType::Upgrade.as_str(), "upgrade");
+        assert_eq!(PlanChangeType::Downgrade.as_str(), "downgrade");
+    }
+}

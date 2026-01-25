@@ -224,4 +224,42 @@ mod tests {
         assert!("test".parse::<PaymentProvider>().is_err());
         assert!("invalid".parse::<PaymentProvider>().is_err());
     }
+
+    #[test]
+    fn test_as_str_all_variants() {
+        assert_eq!(PaymentProvider::Stripe.as_str(), "stripe");
+        assert_eq!(PaymentProvider::Dummy.as_str(), "dummy");
+        assert_eq!(PaymentProvider::Coinbase.as_str(), "coinbase");
+    }
+
+    #[test]
+    fn test_display_matches_as_str() {
+        for variant in [
+            PaymentProvider::Stripe,
+            PaymentProvider::Dummy,
+            PaymentProvider::Coinbase,
+        ] {
+            assert_eq!(format!("{}", variant), variant.as_str());
+        }
+    }
+
+    #[test]
+    fn test_from_str_case_insensitive() {
+        assert_eq!(
+            "STRIPE".parse::<PaymentProvider>().unwrap(),
+            PaymentProvider::Stripe
+        );
+        assert_eq!(
+            "Stripe".parse::<PaymentProvider>().unwrap(),
+            PaymentProvider::Stripe
+        );
+        assert_eq!(
+            "DUMMY".parse::<PaymentProvider>().unwrap(),
+            PaymentProvider::Dummy
+        );
+        assert_eq!(
+            "COINBASE".parse::<PaymentProvider>().unwrap(),
+            PaymentProvider::Coinbase
+        );
+    }
 }

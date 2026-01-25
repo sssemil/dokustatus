@@ -209,4 +209,37 @@ mod tests {
         assert!("3ds".parse::<PaymentScenario>().is_err());
         assert!("invalid".parse::<PaymentScenario>().is_err());
     }
+
+    #[test]
+    fn test_as_str_all_variants() {
+        assert_eq!(PaymentScenario::Success.as_str(), "success");
+        assert_eq!(PaymentScenario::Decline.as_str(), "decline");
+        assert_eq!(PaymentScenario::InsufficientFunds.as_str(), "insufficient_funds");
+        assert_eq!(PaymentScenario::ThreeDSecure.as_str(), "three_d_secure");
+        assert_eq!(PaymentScenario::ExpiredCard.as_str(), "expired_card");
+        assert_eq!(PaymentScenario::ProcessingError.as_str(), "processing_error");
+    }
+
+    #[test]
+    fn test_display_matches_as_str() {
+        for variant in PaymentScenario::all() {
+            assert_eq!(format!("{}", variant), variant.as_str());
+        }
+    }
+
+    #[test]
+    fn test_from_str_case_insensitive() {
+        assert_eq!(
+            "SUCCESS".parse::<PaymentScenario>().unwrap(),
+            PaymentScenario::Success
+        );
+        assert_eq!(
+            "Decline".parse::<PaymentScenario>().unwrap(),
+            PaymentScenario::Decline
+        );
+        assert_eq!(
+            "THREE_D_SECURE".parse::<PaymentScenario>().unwrap(),
+            PaymentScenario::ThreeDSecure
+        );
+    }
 }

@@ -171,4 +171,25 @@ mod tests {
         assert!(PaymentMode::Test.is_test());
         assert!(!PaymentMode::Live.is_test());
     }
+
+    #[test]
+    fn test_as_str_all_variants() {
+        assert_eq!(PaymentMode::Test.as_str(), "test");
+        assert_eq!(PaymentMode::Live.as_str(), "live");
+    }
+
+    #[test]
+    fn test_display_matches_as_str() {
+        for variant in [PaymentMode::Test, PaymentMode::Live] {
+            assert_eq!(format!("{}", variant), variant.as_str());
+        }
+    }
+
+    #[test]
+    fn test_from_str_case_insensitive() {
+        assert_eq!("TEST".parse::<PaymentMode>().unwrap(), PaymentMode::Test);
+        assert_eq!("Test".parse::<PaymentMode>().unwrap(), PaymentMode::Test);
+        assert_eq!("LIVE".parse::<PaymentMode>().unwrap(), PaymentMode::Live);
+        assert_eq!("Live".parse::<PaymentMode>().unwrap(), PaymentMode::Live);
+    }
 }

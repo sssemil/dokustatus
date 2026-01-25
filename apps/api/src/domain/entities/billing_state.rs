@@ -130,4 +130,42 @@ mod tests {
         );
         assert!("invalid".parse::<BillingState>().is_err());
     }
+
+    #[test]
+    fn test_as_str_all_variants() {
+        assert_eq!(BillingState::Active.as_str(), "active");
+        assert_eq!(BillingState::PendingSwitch.as_str(), "pending_switch");
+        assert_eq!(BillingState::SwitchFailed.as_str(), "switch_failed");
+    }
+
+    #[test]
+    fn test_display_matches_as_str() {
+        for variant in [
+            BillingState::Active,
+            BillingState::PendingSwitch,
+            BillingState::SwitchFailed,
+        ] {
+            assert_eq!(format!("{}", variant), variant.as_str());
+        }
+    }
+
+    #[test]
+    fn test_from_str_case_insensitive() {
+        assert_eq!(
+            "ACTIVE".parse::<BillingState>().unwrap(),
+            BillingState::Active
+        );
+        assert_eq!(
+            "Active".parse::<BillingState>().unwrap(),
+            BillingState::Active
+        );
+        assert_eq!(
+            "PENDING_SWITCH".parse::<BillingState>().unwrap(),
+            BillingState::PendingSwitch
+        );
+        assert_eq!(
+            "SWITCH_FAILED".parse::<BillingState>().unwrap(),
+            BillingState::SwitchFailed
+        );
+    }
 }

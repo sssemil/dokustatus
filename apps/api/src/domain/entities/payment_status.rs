@@ -154,4 +154,79 @@ mod tests {
         assert!(!PaymentStatus::Failed.is_terminal());
         assert!(!PaymentStatus::Uncollectible.is_terminal());
     }
+
+    #[test]
+    fn test_as_str_all_variants() {
+        assert_eq!(PaymentStatus::Pending.as_str(), "pending");
+        assert_eq!(PaymentStatus::Paid.as_str(), "paid");
+        assert_eq!(PaymentStatus::Failed.as_str(), "failed");
+        assert_eq!(PaymentStatus::Refunded.as_str(), "refunded");
+        assert_eq!(PaymentStatus::PartialRefund.as_str(), "partial_refund");
+        assert_eq!(PaymentStatus::Uncollectible.as_str(), "uncollectible");
+        assert_eq!(PaymentStatus::Void.as_str(), "void");
+    }
+
+    #[test]
+    fn test_display_matches_as_str() {
+        for variant in [
+            PaymentStatus::Pending,
+            PaymentStatus::Paid,
+            PaymentStatus::Failed,
+            PaymentStatus::Refunded,
+            PaymentStatus::PartialRefund,
+            PaymentStatus::Uncollectible,
+            PaymentStatus::Void,
+        ] {
+            assert_eq!(format!("{}", variant), variant.as_str());
+        }
+    }
+
+    #[test]
+    fn test_from_str() {
+        assert_eq!(
+            "pending".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::Pending
+        );
+        assert_eq!(
+            "paid".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::Paid
+        );
+        assert_eq!(
+            "failed".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::Failed
+        );
+        assert_eq!(
+            "refunded".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::Refunded
+        );
+        assert_eq!(
+            "partial_refund".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::PartialRefund
+        );
+        assert_eq!(
+            "uncollectible".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::Uncollectible
+        );
+        assert_eq!(
+            "void".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::Void
+        );
+        assert!("invalid".parse::<PaymentStatus>().is_err());
+    }
+
+    #[test]
+    fn test_from_str_case_insensitive() {
+        assert_eq!(
+            "PENDING".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::Pending
+        );
+        assert_eq!(
+            "Paid".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::Paid
+        );
+        assert_eq!(
+            "PARTIAL_REFUND".parse::<PaymentStatus>().unwrap(),
+            PaymentStatus::PartialRefund
+        );
+    }
 }
