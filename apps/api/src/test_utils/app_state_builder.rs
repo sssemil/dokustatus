@@ -122,6 +122,7 @@ pub struct TestAppStateBuilder {
     cipher: ProcessCipher,
     magic_link_store: Option<Arc<dyn DomainMagicLinkStore>>,
     email_sender: Option<Arc<dyn DomainEmailSender>>,
+    main_domain: String,
 }
 
 impl TestAppStateBuilder {
@@ -140,6 +141,7 @@ impl TestAppStateBuilder {
             cipher,
             magic_link_store: None,
             email_sender: None,
+            main_domain: "reauth.test".to_string(),
         }
     }
 
@@ -187,6 +189,12 @@ impl TestAppStateBuilder {
     /// Set a custom email sender (for testing email sending).
     pub fn with_email_sender(mut self, sender: Arc<dyn DomainEmailSender>) -> Self {
         self.email_sender = Some(sender);
+        self
+    }
+
+    /// Set the main domain (for dashboard user tests that check main_domain access).
+    pub fn with_main_domain(mut self, main_domain: String) -> Self {
+        self.main_domain = main_domain;
         self
     }
 
@@ -313,7 +321,7 @@ impl TestAppStateBuilder {
             trust_proxy: false,
             ingress_domain: "ingress.test".to_string(),
             dns_server: None,
-            main_domain: "reauth.test".to_string(),
+            main_domain: self.main_domain,
             fallback_resend_api_key: "fallback_key".to_string(),
             fallback_email_domain: "fallback.test".to_string(),
             fallback_google_client_id: "fallback_client_id".to_string(),
