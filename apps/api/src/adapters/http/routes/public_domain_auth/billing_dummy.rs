@@ -327,3 +327,173 @@ pub(crate) fn router() -> Router<AppState> {
             get(get_dummy_scenarios),
         )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::Router;
+    use axum_test::TestServer;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use crate::domain::entities::domain::DomainStatus;
+    use crate::test_utils::{TestAppStateBuilder, create_test_auth_config, create_test_domain};
+
+    fn build_test_router(app_state: AppState) -> Router<()> {
+        router().with_state(app_state)
+    }
+
+    // =========================================================================
+    // GET /{domain}/billing/dummy/scenarios
+    // =========================================================================
+
+    #[tokio::test]
+    async fn get_scenarios_returns_all_scenarios() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/billing/dummy/scenarios")
+            .await;
+
+        response.assert_status(StatusCode::OK);
+
+        let body = response.json::<serde_json::Value>();
+        let scenarios = body.as_array().expect("Should be array");
+        assert_eq!(scenarios.len(), 6);
+
+        // Verify all expected scenarios are present
+        let scenario_names: Vec<&str> = scenarios
+            .iter()
+            .filter_map(|s| s["scenario"].as_str())
+            .collect();
+        assert!(scenario_names.contains(&"success"));
+        assert!(scenario_names.contains(&"decline"));
+        assert!(scenario_names.contains(&"insufficient_funds"));
+        assert!(scenario_names.contains(&"three_d_secure"));
+        assert!(scenario_names.contains(&"expired_card"));
+        assert!(scenario_names.contains(&"processing_error"));
+    }
+
+    // =========================================================================
+    // POST /{domain}/billing/checkout/dummy
+    // =========================================================================
+
+    #[tokio::test]
+    async fn checkout_dummy_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/billing/checkout/dummy")
+            .json(&json!({
+                "plan_code": "premium",
+                "scenario": "success"
+            }))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    // =========================================================================
+    // POST /{domain}/billing/dummy/confirm
+    // =========================================================================
+
+    #[tokio::test]
+    async fn confirm_dummy_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/billing/dummy/confirm")
+            .json(&json!({
+                "confirmation_token": "3ds_token_premium_12345"
+            }))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn confirm_dummy_invalid_token_returns_400() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let api_key_raw = "test_api_key_12345678";
+
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+        let user = crate::test_utils::create_test_end_user(domain_id, |u| {
+            u.id = user_id;
+            u.email = "user@example.com".to_string();
+        });
+        let auth_config = create_test_auth_config(domain_id, |_| {});
+
+        let app_state = TestAppStateBuilder::new()
+            .with_domain(domain)
+            .with_user(user)
+            .with_auth_config(auth_config)
+            .with_api_key(domain_id, "example.com", api_key_raw)
+            .build();
+
+        // Generate a valid access token
+        use crate::application::jwt;
+        use crate::application::use_cases::api_key::ApiKeyWithRaw;
+        use crate::application::use_cases::domain_billing::SubscriptionClaims;
+
+        let api_key = ApiKeyWithRaw {
+            id: Uuid::new_v4(),
+            domain_id,
+            raw_key: api_key_raw.to_string(),
+        };
+
+        let access_token = jwt::issue_domain_end_user_derived(
+            user_id,
+            domain_id,
+            "example.com",
+            vec![],
+            SubscriptionClaims::none(),
+            &api_key,
+            time::Duration::hours(1),
+        )
+        .unwrap();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/billing/dummy/confirm")
+            .add_cookie(Cookie::new("end_user_access_token", access_token))
+            .json(&json!({
+                "confirmation_token": "invalid_token"
+            }))
+            .await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
+        let body = response.json::<serde_json::Value>();
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("Invalid confirmation token")
+        );
+    }
+}
