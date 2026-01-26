@@ -1,0 +1,23 @@
+# Node modules
+**/node_modules
+**/.next
+
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+
+# Build artifacts
+**/target
+**/.cargo
+
+# Environment files
+**/.env.local
+**/.env*.local
+
+# OS files
+.DS_Store
+Thumbs.db

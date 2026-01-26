@@ -26,7 +26,7 @@ async function deriveJwtSecret(
   const info = Buffer.from("reauth-jwt-v1");
 
   return new Promise((resolve, reject) => {
-    hkdf("sha256", apiKey, salt, info, 32, (err, derivedKey) => {
+    hkdf("sha256", apiKey, salt, info, 32, (err: Error | null, derivedKey: ArrayBuffer) => {
       if (err) reject(err);
       else resolve(Buffer.from(derivedKey));
     });

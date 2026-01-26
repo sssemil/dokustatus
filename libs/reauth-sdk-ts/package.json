@@ -7,19 +7,19 @@
   "types": "dist/index.d.ts",
   "exports": {
     ".": {
+      "types": "./dist/index.d.ts",
       "import": "./dist/index.mjs",
-      "require": "./dist/index.js",
-      "types": "./dist/index.d.ts"
+      "require": "./dist/index.js"
     },
     "./react": {
+      "types": "./dist/react/index.d.ts",
       "import": "./dist/react/index.mjs",
-      "require": "./dist/react/index.js",
-      "types": "./dist/react/index.d.ts"
+      "require": "./dist/react/index.js"
     },
     "./server": {
+      "types": "./dist/server.d.ts",
       "import": "./dist/server.mjs",
-      "require": "./dist/server.js",
-      "types": "./dist/server.d.ts"
+      "require": "./dist/server.js"
     }
   },
   "files": [
@@ -43,6 +43,7 @@
     }
   },
   "devDependencies": {
+    "@types/node": "^20.0.0",
     "@types/react": "^18.0.0",
     "prettier": "^3.8.1",
     "react": "^18.0.0",
