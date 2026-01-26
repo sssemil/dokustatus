@@ -618,3 +618,352 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/{domain}/billing/plan-change", post(change_plan))
         .route("/{domain}/billing/providers", get(get_available_providers))
 }
+
+#[cfg(test)]
+mod tests {
+    use axum::http::StatusCode;
+    use axum_test::TestServer;
+    use uuid::Uuid;
+
+    use crate::{
+        application::{
+            jwt,
+            use_cases::{api_key::ApiKeyWithRaw, domain_billing::SubscriptionClaims},
+        },
+        test_utils::{
+            TestAppStateBuilder, create_test_auth_config, create_test_domain, create_test_end_user,
+        },
+    };
+
+    use super::*;
+
+    fn create_test_app_state(
+        domain: crate::application::use_cases::domain::DomainProfile,
+        user: crate::application::use_cases::domain_auth::DomainEndUserProfile,
+        api_key_raw: &str,
+    ) -> crate::adapters::http::app_state::AppState {
+        let auth_config = create_test_auth_config(domain.id, |c| {
+            c.access_token_ttl_secs = 86400;
+            c.refresh_token_ttl_days = 30;
+        });
+
+        TestAppStateBuilder::new()
+            .with_domain(domain.clone())
+            .with_user(user)
+            .with_auth_config(auth_config)
+            .with_api_key(domain.id, &domain.domain, api_key_raw)
+            .build()
+    }
+
+    fn create_access_token(
+        user_id: Uuid,
+        domain_id: Uuid,
+        domain_name: &str,
+        api_key_raw: &str,
+    ) -> String {
+        let api_key = ApiKeyWithRaw {
+            id: Uuid::new_v4(),
+            domain_id,
+            raw_key: api_key_raw.to_string(),
+        };
+
+        jwt::issue_domain_end_user_derived(
+            user_id,
+            domain_id,
+            domain_name,
+            vec![],
+            SubscriptionClaims::none(),
+            &api_key,
+            time::Duration::hours(24),
+        )
+        .expect("Failed to issue test token")
+    }
+
+    // ========================================================================
+    // GET /billing/plans Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn get_plans_returns_not_found_for_unknown_domain() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.get("/reauth.unknown.com/billing/plans").await;
+
+        assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_plans_returns_empty_array_when_no_plans() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.get("/reauth.example.com/billing/plans").await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let body: serde_json::Value = response.json();
+        assert!(body.as_array().unwrap().is_empty());
+    }
+
+    // ========================================================================
+    // GET /billing/subscription Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn get_subscription_rejects_unauthenticated_request() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.get("/reauth.example.com/billing/subscription").await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_subscription_returns_none_when_no_subscription() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let access_token = create_access_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/billing/subscription")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_access_token",
+                access_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let body: serde_json::Value = response.json();
+        assert_eq!(body.get("status").unwrap(), "none");
+        assert!(body.get("id").unwrap().is_null());
+        assert!(body.get("plan_code").unwrap().is_null());
+    }
+
+    // ========================================================================
+    // POST /billing/checkout Tests (auth validation only - requires Stripe for full test)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn create_checkout_rejects_unauthenticated_request() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/billing/checkout")
+            .json(&serde_json::json!({
+                "plan_code": "basic",
+                "success_url": "https://example.com/success",
+                "cancel_url": "https://example.com/cancel"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ========================================================================
+    // POST /billing/portal Tests (auth validation only - requires Stripe for full test)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn create_portal_rejects_unauthenticated_request() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/billing/portal")
+            .json(&serde_json::json!({
+                "return_url": "https://example.com/account"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ========================================================================
+    // POST /billing/cancel Tests (auth validation only - requires Stripe for full test)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn cancel_subscription_rejects_unauthenticated_request() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.post("/reauth.example.com/billing/cancel").await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ========================================================================
+    // GET /billing/payments Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn get_payments_rejects_unauthenticated_request() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.get("/reauth.example.com/billing/payments").await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_payments_returns_empty_when_no_payments() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user_id = Uuid::new_v4();
+        let user = create_test_end_user(domain.id, |u| {
+            u.id = user_id;
+        });
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let access_token = create_access_token(user_id, domain.id, &domain.domain, api_key_raw);
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/billing/payments")
+            .add_cookie(axum_extra::extract::cookie::Cookie::new(
+                "end_user_access_token",
+                access_token,
+            ))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let body: serde_json::Value = response.json();
+        assert!(body.get("payments").unwrap().as_array().unwrap().is_empty());
+        assert_eq!(body.get("total").unwrap(), 0);
+        assert_eq!(body.get("page").unwrap(), 1);
+    }
+
+    // ========================================================================
+    // GET /billing/plan-change/preview Tests (auth validation)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn preview_plan_change_rejects_unauthenticated_request() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .get("/reauth.example.com/billing/plan-change/preview?plan_code=premium")
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ========================================================================
+    // POST /billing/plan-change Tests (auth validation)
+    // ========================================================================
+
+    #[tokio::test]
+    async fn change_plan_rejects_unauthenticated_request() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/billing/plan-change")
+            .json(&serde_json::json!({
+                "plan_code": "premium"
+            }))
+            .await;
+
+        assert_eq!(response.status_code(), StatusCode::UNAUTHORIZED);
+    }
+
+    // ========================================================================
+    // GET /billing/providers Tests
+    // ========================================================================
+
+    #[tokio::test]
+    async fn get_providers_returns_not_found_for_unknown_domain() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.get("/reauth.unknown.com/billing/providers").await;
+
+        assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn get_providers_returns_empty_when_no_providers() {
+        let domain = create_test_domain(|d| d.domain = "example.com".to_string());
+        let user = create_test_end_user(domain.id, |_| {});
+        let api_key_raw = "test_api_key_123456789012345678901234";
+
+        let app_state = create_test_app_state(domain.clone(), user, api_key_raw);
+        let app = router().with_state(app_state);
+        let server = TestServer::new(app).unwrap();
+
+        let response = server.get("/reauth.example.com/billing/providers").await;
+
+        assert_eq!(response.status_code(), StatusCode::OK);
+
+        let body: serde_json::Value = response.json();
+        assert!(body.as_array().unwrap().is_empty());
+    }
+}
