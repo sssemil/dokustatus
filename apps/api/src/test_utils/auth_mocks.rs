@@ -722,6 +722,71 @@ impl crate::application::use_cases::domain_auth::DomainMagicLinkStore for StubMa
     }
 }
 
+// ============================================================================
+// InMemoryMagicLinkStore
+// ============================================================================
+
+/// Stored magic link data for testing.
+struct StoredMagicLink {
+    data: crate::application::use_cases::domain_auth::DomainMagicLinkData,
+    session_id: String,
+}
+
+/// In-memory implementation of DomainMagicLinkStore for testing.
+#[derive(Default)]
+pub struct InMemoryMagicLinkStore {
+    entries: Mutex<HashMap<String, StoredMagicLink>>,
+}
+
+impl InMemoryMagicLinkStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl crate::application::use_cases::domain_auth::DomainMagicLinkStore for InMemoryMagicLinkStore {
+    async fn save(
+        &self,
+        token_hash: &str,
+        end_user_id: Uuid,
+        domain_id: Uuid,
+        session_id: &str,
+        _ttl_minutes: i64,
+    ) -> AppResult<()> {
+        let mut entries = self.entries.lock().unwrap();
+        entries.insert(
+            token_hash.to_string(),
+            StoredMagicLink {
+                data: crate::application::use_cases::domain_auth::DomainMagicLinkData {
+                    end_user_id,
+                    domain_id,
+                },
+                session_id: session_id.to_string(),
+            },
+        );
+        Ok(())
+    }
+
+    async fn consume(
+        &self,
+        token_hash: &str,
+        session_id: &str,
+    ) -> AppResult<Option<crate::application::use_cases::domain_auth::DomainMagicLinkData>> {
+        let mut entries = self.entries.lock().unwrap();
+        let Some(stored) = entries.remove(token_hash) else {
+            return Ok(None);
+        };
+
+        if stored.session_id != session_id {
+            entries.insert(token_hash.to_string(), stored);
+            return Err(AppError::SessionMismatch);
+        }
+
+        Ok(Some(stored.data))
+    }
+}
+
 /// Stub implementation of OAuthStateStoreTrait - not used in token tests.
 #[derive(Default)]
 pub struct StubOAuthStateStore;
@@ -809,6 +874,63 @@ impl crate::application::use_cases::domain_auth::DomainEmailSender for StubEmail
         _html: &str,
     ) -> AppResult<()> {
         unimplemented!("not needed for token tests")
+    }
+}
+
+// ============================================================================
+// InMemoryEmailSender
+// ============================================================================
+
+/// Captured email for testing.
+#[derive(Debug, Clone)]
+pub struct CapturedEmail {
+    pub from: String,
+    pub to: String,
+    pub subject: String,
+    pub html: String,
+}
+
+/// In-memory implementation of DomainEmailSender for testing.
+/// Captures emails instead of sending them.
+#[derive(Default)]
+pub struct InMemoryEmailSender {
+    pub emails: Mutex<Vec<CapturedEmail>>,
+}
+
+impl InMemoryEmailSender {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get all captured emails.
+    pub fn captured_emails(&self) -> Vec<CapturedEmail> {
+        self.emails.lock().unwrap().clone()
+    }
+
+    /// Get the last captured email.
+    pub fn last_email(&self) -> Option<CapturedEmail> {
+        self.emails.lock().unwrap().last().cloned()
+    }
+}
+
+#[async_trait]
+impl crate::application::use_cases::domain_auth::DomainEmailSender for InMemoryEmailSender {
+    async fn send(
+        &self,
+        _api_key: &str,
+        from_email: &str,
+        to: &str,
+        subject: &str,
+        html: &str,
+    ) -> AppResult<()> {
+        let mut emails = self.emails.lock().unwrap();
+        emails.push(CapturedEmail {
+            from: from_email.to_string(),
+            to: to.to_string(),
+            subject: subject.to_string(),
+            html: html.to_string(),
+        });
+        Ok(())
     }
 }
 

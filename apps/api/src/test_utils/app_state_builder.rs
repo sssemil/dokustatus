@@ -21,7 +21,10 @@ use crate::{
     application::use_cases::{
         api_key::ApiKeyUseCases,
         domain::{DnsVerifier, DomainProfile, DomainUseCases},
-        domain_auth::{DomainAuthConfigProfile, DomainAuthUseCases, DomainEndUserProfile},
+        domain_auth::{
+            DomainAuthConfigProfile, DomainAuthUseCases, DomainEmailSender, DomainEndUserProfile,
+            DomainMagicLinkStore,
+        },
         domain_billing::DomainBillingUseCases,
         domain_roles::DomainRolesUseCases,
         payment_provider_factory::PaymentProviderFactory,
@@ -31,10 +34,10 @@ use crate::{
     test_utils::{
         InMemoryApiKeyRepo, InMemoryBillingPaymentRepo, InMemoryBillingStripeConfigRepo,
         InMemoryDomainAuthConfigRepo, InMemoryDomainEndUserRepo, InMemoryDomainRepo,
-        InMemoryEnabledPaymentProvidersRepo, InMemoryRateLimiter, InMemorySubscriptionEventRepo,
-        InMemorySubscriptionPlanRepo, InMemoryUserSubscriptionRepo, StubEmailSender,
-        StubGoogleOAuthConfigRepo, StubMagicLinkConfigRepo, StubMagicLinkStore,
-        StubOAuthStateStore,
+        InMemoryEmailSender, InMemoryEnabledPaymentProvidersRepo, InMemoryMagicLinkStore,
+        InMemoryRateLimiter, InMemorySubscriptionEventRepo, InMemorySubscriptionPlanRepo,
+        InMemoryUserSubscriptionRepo, StubEmailSender, StubGoogleOAuthConfigRepo,
+        StubMagicLinkConfigRepo, StubMagicLinkStore, StubOAuthStateStore,
     },
 };
 
@@ -117,6 +120,8 @@ pub struct TestAppStateBuilder {
     auth_configs: Vec<DomainAuthConfigProfile>,
     api_keys: Vec<(Uuid, Uuid, String, String)>, // (domain_id, key_id, raw_key, domain_name)
     cipher: ProcessCipher,
+    magic_link_store: Option<Arc<dyn DomainMagicLinkStore>>,
+    email_sender: Option<Arc<dyn DomainEmailSender>>,
 }
 
 impl TestAppStateBuilder {
@@ -133,6 +138,8 @@ impl TestAppStateBuilder {
             auth_configs: vec![],
             api_keys: vec![],
             cipher,
+            magic_link_store: None,
+            email_sender: None,
         }
     }
 
@@ -171,6 +178,38 @@ impl TestAppStateBuilder {
         &self.cipher
     }
 
+    /// Set a custom magic link store (for testing magic link flow).
+    pub fn with_magic_link_store(mut self, store: Arc<dyn DomainMagicLinkStore>) -> Self {
+        self.magic_link_store = Some(store);
+        self
+    }
+
+    /// Set a custom email sender (for testing email sending).
+    pub fn with_email_sender(mut self, sender: Arc<dyn DomainEmailSender>) -> Self {
+        self.email_sender = Some(sender);
+        self
+    }
+
+    /// Create app state with in-memory magic link store and email sender.
+    /// Returns (AppState, Arc<InMemoryMagicLinkStore>, Arc<InMemoryEmailSender>) for test assertions.
+    pub fn build_with_magic_link_mocks(
+        self,
+    ) -> (
+        AppState,
+        Arc<InMemoryMagicLinkStore>,
+        Arc<InMemoryEmailSender>,
+    ) {
+        let magic_link_store = Arc::new(InMemoryMagicLinkStore::new());
+        let email_sender = Arc::new(InMemoryEmailSender::new());
+
+        let app_state = self
+            .with_magic_link_store(magic_link_store.clone())
+            .with_email_sender(email_sender.clone())
+            .build();
+
+        (app_state, magic_link_store, email_sender)
+    }
+
     /// Build the AppState with all configured mocks.
     pub fn build(self) -> AppState {
         // Create shared repos
@@ -195,9 +234,13 @@ impl TestAppStateBuilder {
         // Stub repos for auth
         let magic_link_config_repo = Arc::new(StubMagicLinkConfigRepo);
         let google_oauth_config_repo = Arc::new(StubGoogleOAuthConfigRepo);
-        let magic_link_store = Arc::new(StubMagicLinkStore);
+        let magic_link_store: Arc<dyn DomainMagicLinkStore> = self
+            .magic_link_store
+            .unwrap_or_else(|| Arc::new(StubMagicLinkStore));
         let oauth_state_store = Arc::new(StubOAuthStateStore);
-        let email_sender = Arc::new(StubEmailSender);
+        let email_sender: Arc<dyn DomainEmailSender> = self
+            .email_sender
+            .unwrap_or_else(|| Arc::new(StubEmailSender));
 
         // Create use cases
         let domain_use_cases = Arc::new(DomainUseCases::new(
