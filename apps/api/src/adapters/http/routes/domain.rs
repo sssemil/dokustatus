@@ -1787,3 +1787,691 @@ async fn set_provider_active(
 
     Ok(StatusCode::NO_CONTENT)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::Router;
+    use axum_extra::extract::cookie::Cookie;
+    use axum_test::TestServer;
+    use serde_json::json;
+
+    use crate::application::jwt;
+    use crate::application::use_cases::api_key::ApiKeyWithRaw;
+    use crate::application::use_cases::domain_billing::SubscriptionClaims;
+    use crate::domain::entities::domain::DomainStatus;
+    use crate::test_utils::{TestAppStateBuilder, create_test_auth_config, create_test_domain};
+
+    fn build_test_router(app_state: AppState) -> Router<()> {
+        router().with_state(app_state)
+    }
+
+    /// Generate a dashboard user access token for testing.
+    fn generate_dashboard_token(
+        user_id: Uuid,
+        domain_id: Uuid,
+        main_domain: &str,
+        api_key_raw: &str,
+    ) -> String {
+        let api_key = ApiKeyWithRaw {
+            id: Uuid::new_v4(),
+            domain_id,
+            raw_key: api_key_raw.to_string(),
+        };
+
+        jwt::issue_domain_end_user_derived(
+            user_id,
+            domain_id,
+            main_domain,
+            vec![],
+            SubscriptionClaims::none(),
+            &api_key,
+            time::Duration::hours(1),
+        )
+        .unwrap()
+    }
+
+    // =========================================================================
+    // GET /check-allowed (public endpoint for Caddy on-demand TLS)
+    // =========================================================================
+
+    #[tokio::test]
+    async fn check_allowed_verified_domain_returns_200() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get("/check-allowed?domain=example.com").await;
+
+        response.assert_status(StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn check_allowed_unverified_domain_returns_404() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::PendingDns;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get("/check-allowed?domain=example.com").await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn check_allowed_unknown_domain_returns_404() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get("/check-allowed?domain=unknown.com").await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    // =========================================================================
+    // Domain CRUD - auth required tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn list_domains_no_auth_returns_401() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get("/").await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_domains_returns_empty_for_new_user() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let api_key_raw = "test_api_key_12345678";
+        let main_domain = "reauth.test";
+
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = main_domain.to_string();
+            d.status = DomainStatus::Verified;
+        });
+        let user = crate::test_utils::create_test_end_user(domain_id, |u| {
+            u.id = user_id;
+            u.email = "dashboard@example.com".to_string();
+        });
+        let auth_config = create_test_auth_config(domain_id, |_| {});
+
+        let app_state = TestAppStateBuilder::new()
+            .with_main_domain(main_domain.to_string())
+            .with_domain(domain)
+            .with_user(user)
+            .with_auth_config(auth_config)
+            .with_api_key(domain_id, main_domain, api_key_raw)
+            .build();
+
+        let token = generate_dashboard_token(user_id, domain_id, main_domain, api_key_raw);
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get("/")
+            .add_cookie(Cookie::new("end_user_access_token", token))
+            .await;
+
+        response.assert_status(StatusCode::OK);
+
+        let body = response.json::<serde_json::Value>();
+        assert!(body.as_array().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn create_domain_no_auth_returns_401() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/")
+            .json(&json!({"domain": "new.example.com"}))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_domain_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get(&format!("/{}", domain_id)).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_domain_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.delete(&format!("/{}", domain_id)).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_stats_no_auth_returns_401() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get("/stats").await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_stats_returns_zero_for_new_user() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let api_key_raw = "test_api_key_12345678";
+        let main_domain = "reauth.test";
+
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = main_domain.to_string();
+            d.status = DomainStatus::Verified;
+        });
+        let user = crate::test_utils::create_test_end_user(domain_id, |u| {
+            u.id = user_id;
+        });
+        let auth_config = create_test_auth_config(domain_id, |_| {});
+
+        let app_state = TestAppStateBuilder::new()
+            .with_main_domain(main_domain.to_string())
+            .with_domain(domain)
+            .with_user(user)
+            .with_auth_config(auth_config)
+            .with_api_key(domain_id, main_domain, api_key_raw)
+            .build();
+
+        let token = generate_dashboard_token(user_id, domain_id, main_domain, api_key_raw);
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get("/stats")
+            .add_cookie(Cookie::new("end_user_access_token", token))
+            .await;
+
+        response.assert_status(StatusCode::OK);
+
+        let body = response.json::<serde_json::Value>();
+        assert_eq!(body["domains_count"].as_i64().unwrap(), 0);
+        assert_eq!(body["total_users"].as_i64().unwrap(), 0);
+    }
+
+    // =========================================================================
+    // Auth Config endpoints
+    // =========================================================================
+
+    #[tokio::test]
+    async fn get_auth_config_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get(&format!("/{}/auth-config", domain_id)).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn update_auth_config_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .patch(&format!("/{}/auth-config", domain_id))
+            .json(&json!({"whitelist_enabled": true}))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    // =========================================================================
+    // End Users endpoints
+    // =========================================================================
+
+    #[tokio::test]
+    async fn list_end_users_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get(&format!("/{}/end-users", domain_id)).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn invite_end_user_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post(&format!("/{}/end-users/invite", domain_id))
+            .json(&json!({"email": "new@example.com"}))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_end_user_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get(&format!("/{}/end-users/{}", domain_id, user_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_end_user_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .delete(&format!("/{}/end-users/{}", domain_id, user_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn freeze_end_user_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post(&format!("/{}/end-users/{}/freeze", domain_id, user_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn unfreeze_end_user_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .delete(&format!("/{}/end-users/{}/freeze", domain_id, user_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn whitelist_end_user_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post(&format!("/{}/end-users/{}/whitelist", domain_id, user_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn unwhitelist_end_user_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .delete(&format!("/{}/end-users/{}/whitelist", domain_id, user_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn set_user_roles_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .put(&format!("/{}/end-users/{}/roles", domain_id, user_id))
+            .json(&json!({"roles": ["admin"]}))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    // =========================================================================
+    // API Keys endpoints
+    // =========================================================================
+
+    #[tokio::test]
+    async fn list_api_keys_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get(&format!("/{}/api-keys", domain_id)).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn create_api_key_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post(&format!("/{}/api-keys", domain_id))
+            .json(&json!({}))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn revoke_api_key_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let key_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .delete(&format!("/{}/api-keys/{}", domain_id, key_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    // =========================================================================
+    // Roles endpoints
+    // =========================================================================
+
+    #[tokio::test]
+    async fn list_roles_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get(&format!("/{}/roles", domain_id)).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn create_role_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post(&format!("/{}/roles", domain_id))
+            .json(&json!({"name": "admin"}))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_role_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.delete(&format!("/{}/roles/admin", domain_id)).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_role_user_count_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get(&format!("/{}/roles/admin/user-count", domain_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    // =========================================================================
+    // Billing endpoints
+    // =========================================================================
+
+    #[tokio::test]
+    async fn get_billing_config_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get(&format!("/{}/billing/config", domain_id)).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn update_billing_config_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .patch(&format!("/{}/billing/config", domain_id))
+            .json(&json!({
+                "mode": "test",
+                "secret_key": "sk_test_xxx",
+                "publishable_key": "pk_test_xxx",
+                "webhook_secret": "whsec_xxx"
+            }))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn delete_billing_config_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .delete(&format!("/{}/billing/config", domain_id))
+            .json(&json!({"mode": "test"}))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_billing_plans_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.get(&format!("/{}/billing/plans", domain_id)).await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn create_billing_plan_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post(&format!("/{}/billing/plans", domain_id))
+            .json(&json!({
+                "name": "Pro",
+                "code": "pro",
+                "price_cents": 1000,
+                "currency": "USD",
+                "interval": "monthly",
+                "interval_count": 1,
+                "trial_days": 0,
+                "features": [],
+                "is_public": true
+            }))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_billing_providers_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get(&format!("/{}/billing/providers", domain_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn enable_billing_provider_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post(&format!("/{}/billing/providers", domain_id))
+            .json(&json!({
+                "provider": "stripe",
+                "mode": "test"
+            }))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_billing_subscribers_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get(&format!("/{}/billing/subscribers", domain_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn get_billing_analytics_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get(&format!("/{}/billing/analytics", domain_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn list_billing_payments_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get(&format!("/{}/billing/payments", domain_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn export_billing_payments_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .get(&format!("/{}/billing/payments/export", domain_id))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+}
