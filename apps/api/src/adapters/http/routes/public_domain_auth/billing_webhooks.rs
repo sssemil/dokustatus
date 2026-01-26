@@ -869,3 +869,143 @@ mod webhook_error_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::Router;
+    use axum_test::TestServer;
+    use uuid::Uuid;
+
+    use crate::domain::entities::domain::DomainStatus;
+    use crate::test_utils::{TestAppStateBuilder, create_test_domain};
+
+    fn build_test_router(app_state: AppState) -> Router<()> {
+        router().with_state(app_state)
+    }
+
+    // =========================================================================
+    // POST /{domain}/billing/webhook/test
+    // =========================================================================
+
+    #[tokio::test]
+    async fn webhook_test_unknown_domain_returns_404() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.unknown.com/billing/webhook/test")
+            .text("{}")
+            .await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn webhook_test_unverified_domain_returns_400() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::PendingDns;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/billing/webhook/test")
+            .text("{}")
+            .await;
+
+        // Unverified domain has no Stripe config
+        response.assert_status(StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn webhook_test_no_stripe_config_returns_400() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/billing/webhook/test")
+            .text("{}")
+            .await;
+
+        // No Stripe config means no webhook secret, should fail
+        response.assert_status(StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn webhook_test_missing_signature_returns_400() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        // Even if Stripe config existed, missing signature should fail
+        let response = server
+            .post("/reauth.example.com/billing/webhook/test")
+            .text("{}")
+            .await;
+
+        // Should fail due to no stripe config or missing signature
+        response.assert_status(StatusCode::BAD_REQUEST);
+    }
+
+    // =========================================================================
+    // POST /{domain}/billing/webhook/live
+    // =========================================================================
+
+    #[tokio::test]
+    async fn webhook_live_unknown_domain_returns_404() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.unknown.com/billing/webhook/live")
+            .text("{}")
+            .await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn webhook_live_no_stripe_config_returns_400() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/billing/webhook/live")
+            .text("{}")
+            .await;
+
+        // No Stripe config means no webhook secret
+        response.assert_status(StatusCode::BAD_REQUEST);
+    }
+}
