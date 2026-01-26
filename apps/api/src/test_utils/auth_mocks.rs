@@ -859,6 +859,128 @@ impl crate::application::use_cases::domain_auth::OAuthStateStoreTrait for StubOA
     }
 }
 
+// ============================================================================
+// InMemoryOAuthStateStore
+// ============================================================================
+
+use crate::application::use_cases::domain_auth::{
+    MarkStateResult, OAuthCompletionData, OAuthLinkConfirmationData, OAuthStateData,
+    OAuthStateStoreTrait,
+};
+
+/// Entry tracking OAuth state with in-use marker.
+struct OAuthStateEntry {
+    data: OAuthStateData,
+    in_use: bool,
+}
+
+/// In-memory implementation of OAuthStateStoreTrait for testing.
+#[derive(Default)]
+pub struct InMemoryOAuthStateStore {
+    states: Mutex<HashMap<String, OAuthStateEntry>>,
+    completions: Mutex<HashMap<String, OAuthCompletionData>>,
+    link_confirmations: Mutex<HashMap<String, OAuthLinkConfirmationData>>,
+}
+
+impl InMemoryOAuthStateStore {
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl OAuthStateStoreTrait for InMemoryOAuthStateStore {
+    async fn store_state(
+        &self,
+        state: &str,
+        data: &OAuthStateData,
+        _ttl_minutes: i64,
+    ) -> AppResult<()> {
+        let mut states = self.states.lock().unwrap();
+        states.insert(
+            state.to_string(),
+            OAuthStateEntry {
+                data: data.clone(),
+                in_use: false,
+            },
+        );
+        Ok(())
+    }
+
+    async fn consume_state(&self, state: &str) -> AppResult<Option<OAuthStateData>> {
+        let mut states = self.states.lock().unwrap();
+        Ok(states.remove(state).map(|e| e.data))
+    }
+
+    async fn mark_state_in_use(
+        &self,
+        state: &str,
+        _retry_window_secs: i64,
+    ) -> AppResult<MarkStateResult> {
+        let mut states = self.states.lock().unwrap();
+        match states.get_mut(state) {
+            Some(entry) => {
+                if entry.in_use {
+                    Ok(MarkStateResult::RetryWindowExpired)
+                } else {
+                    entry.in_use = true;
+                    Ok(MarkStateResult::Success(entry.data.clone()))
+                }
+            }
+            None => Ok(MarkStateResult::NotFound),
+        }
+    }
+
+    async fn complete_state(&self, state: &str) -> AppResult<()> {
+        let mut states = self.states.lock().unwrap();
+        states.remove(state);
+        Ok(())
+    }
+
+    async fn abort_state(&self, state: &str) -> AppResult<()> {
+        let mut states = self.states.lock().unwrap();
+        if let Some(entry) = states.get_mut(state) {
+            entry.in_use = false;
+        }
+        Ok(())
+    }
+
+    async fn store_completion(
+        &self,
+        token: &str,
+        data: &OAuthCompletionData,
+        _ttl_minutes: i64,
+    ) -> AppResult<()> {
+        let mut completions = self.completions.lock().unwrap();
+        completions.insert(token.to_string(), data.clone());
+        Ok(())
+    }
+
+    async fn consume_completion(&self, token: &str) -> AppResult<Option<OAuthCompletionData>> {
+        let mut completions = self.completions.lock().unwrap();
+        Ok(completions.remove(token))
+    }
+
+    async fn store_link_confirmation(
+        &self,
+        token: &str,
+        data: &OAuthLinkConfirmationData,
+        _ttl_minutes: i64,
+    ) -> AppResult<()> {
+        let mut confirmations = self.link_confirmations.lock().unwrap();
+        confirmations.insert(token.to_string(), data.clone());
+        Ok(())
+    }
+
+    async fn consume_link_confirmation(
+        &self,
+        token: &str,
+    ) -> AppResult<Option<OAuthLinkConfirmationData>> {
+        let mut confirmations = self.link_confirmations.lock().unwrap();
+        Ok(confirmations.remove(token))
+    }
+}
+
 /// Stub implementation of DomainEmailSender - not used in token tests.
 #[derive(Default)]
 pub struct StubEmailSender;

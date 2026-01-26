@@ -23,7 +23,7 @@ use crate::{
         domain::{DnsVerifier, DomainProfile, DomainUseCases},
         domain_auth::{
             DomainAuthConfigProfile, DomainAuthUseCases, DomainEmailSender, DomainEndUserProfile,
-            DomainMagicLinkStore,
+            DomainMagicLinkStore, OAuthStateStoreTrait,
         },
         domain_billing::DomainBillingUseCases,
         domain_roles::DomainRolesUseCases,
@@ -35,9 +35,9 @@ use crate::{
         InMemoryApiKeyRepo, InMemoryBillingPaymentRepo, InMemoryBillingStripeConfigRepo,
         InMemoryDomainAuthConfigRepo, InMemoryDomainEndUserRepo, InMemoryDomainRepo,
         InMemoryEmailSender, InMemoryEnabledPaymentProvidersRepo, InMemoryMagicLinkStore,
-        InMemoryRateLimiter, InMemorySubscriptionEventRepo, InMemorySubscriptionPlanRepo,
-        InMemoryUserSubscriptionRepo, StubEmailSender, StubGoogleOAuthConfigRepo,
-        StubMagicLinkConfigRepo, StubMagicLinkStore, StubOAuthStateStore,
+        InMemoryOAuthStateStore, InMemoryRateLimiter, InMemorySubscriptionEventRepo,
+        InMemorySubscriptionPlanRepo, InMemoryUserSubscriptionRepo, StubEmailSender,
+        StubGoogleOAuthConfigRepo, StubMagicLinkConfigRepo, StubMagicLinkStore,
     },
 };
 
@@ -237,7 +237,8 @@ impl TestAppStateBuilder {
         let magic_link_store: Arc<dyn DomainMagicLinkStore> = self
             .magic_link_store
             .unwrap_or_else(|| Arc::new(StubMagicLinkStore));
-        let oauth_state_store = Arc::new(StubOAuthStateStore);
+        let oauth_state_store: Arc<dyn OAuthStateStoreTrait> =
+            Arc::new(InMemoryOAuthStateStore::new());
         let email_sender: Arc<dyn DomainEmailSender> = self
             .email_sender
             .unwrap_or_else(|| Arc::new(StubEmailSender));

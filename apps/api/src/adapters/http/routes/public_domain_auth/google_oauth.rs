@@ -881,3 +881,301 @@ mod oauth_exchange_tests {
         assert!(err.is_retryable());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum_test::TestServer;
+    use serde_json::json;
+    use uuid::Uuid;
+
+    use crate::domain::entities::domain::DomainStatus;
+    use crate::test_utils::{
+        TestAppStateBuilder, create_test_auth_config, create_test_domain, create_test_end_user,
+    };
+
+    fn build_test_router(app_state: AppState) -> Router<()> {
+        router().with_state(app_state)
+    }
+
+    // =========================================================================
+    // POST /{domain}/auth/google/start
+    // =========================================================================
+
+    #[tokio::test]
+    async fn google_start_unknown_domain_returns_404() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.post("/reauth.unknown.com/auth/google/start").await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn google_start_unverified_domain_returns_404() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::PendingDns;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.post("/reauth.example.com/auth/google/start").await;
+
+        response.assert_status(StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn google_start_oauth_disabled_returns_400() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+        let auth_config = create_test_auth_config(domain_id, |c| {
+            c.google_oauth_enabled = false;
+        });
+
+        let app_state = TestAppStateBuilder::new()
+            .with_domain(domain)
+            .with_auth_config(auth_config)
+            .build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.post("/reauth.example.com/auth/google/start").await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn google_start_success_returns_state_and_auth_url() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+        let auth_config = create_test_auth_config(domain_id, |c| {
+            c.google_oauth_enabled = true;
+        });
+
+        let app_state = TestAppStateBuilder::new()
+            .with_domain(domain)
+            .with_auth_config(auth_config)
+            .build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.post("/reauth.example.com/auth/google/start").await;
+
+        response.assert_status(StatusCode::OK);
+
+        let body = response.json::<serde_json::Value>();
+        assert!(body["state"].as_str().is_some());
+        assert!(
+            body["auth_url"]
+                .as_str()
+                .unwrap()
+                .contains("accounts.google.com")
+        );
+        assert!(
+            body["auth_url"]
+                .as_str()
+                .unwrap()
+                .contains("code_challenge")
+        );
+    }
+
+    // =========================================================================
+    // POST /{domain}/auth/google/exchange
+    // =========================================================================
+
+    #[tokio::test]
+    async fn google_exchange_invalid_state_returns_400() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/auth/google/exchange")
+            .json(&json!({
+                "code": "some-code",
+                "state": "invalid-state"
+            }))
+            .await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
+        let body = response.json::<serde_json::Value>();
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("Invalid or expired OAuth state")
+        );
+    }
+
+    // =========================================================================
+    // POST /{domain}/auth/google/confirm-link
+    // =========================================================================
+
+    #[tokio::test]
+    async fn google_confirm_link_invalid_token_returns_400() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/auth/google/confirm-link")
+            .json(&json!({ "link_token": "invalid-token" }))
+            .await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
+        let body = response.json::<serde_json::Value>();
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("Invalid or expired link token")
+        );
+    }
+
+    // =========================================================================
+    // POST /{domain}/auth/google/complete
+    // =========================================================================
+
+    #[tokio::test]
+    async fn google_complete_invalid_token_returns_400() {
+        let app_state = TestAppStateBuilder::new().build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/auth/google/complete")
+            .json(&json!({ "token": "invalid-token" }))
+            .await;
+
+        response.assert_status(StatusCode::BAD_REQUEST);
+        let body = response.json::<serde_json::Value>();
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("Invalid or expired completion token")
+        );
+    }
+
+    // =========================================================================
+    // POST /{domain}/auth/google/unlink
+    // =========================================================================
+
+    #[tokio::test]
+    async fn google_unlink_no_auth_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server.post("/reauth.example.com/auth/google/unlink").await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn google_unlink_invalid_token_returns_401() {
+        let domain_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+
+        let app_state = TestAppStateBuilder::new().with_domain(domain).build();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/auth/google/unlink")
+            .add_cookie(Cookie::new("end_user_access_token", "invalid-jwt"))
+            .await;
+
+        response.assert_status(StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn google_unlink_with_valid_auth_succeeds() {
+        let domain_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let api_key_raw = "test_api_key_12345678";
+
+        let domain = create_test_domain(|d| {
+            d.id = domain_id;
+            d.domain = "example.com".to_string();
+            d.status = DomainStatus::Verified;
+        });
+        let user = create_test_end_user(domain_id, |u| {
+            u.id = user_id;
+            u.email = "user@example.com".to_string();
+            u.google_id = Some("google_12345".to_string());
+        });
+        let auth_config = create_test_auth_config(domain_id, |_| {});
+
+        let app_state = TestAppStateBuilder::new()
+            .with_domain(domain)
+            .with_user(user)
+            .with_auth_config(auth_config)
+            .with_api_key(domain_id, "example.com", api_key_raw)
+            .build();
+
+        // Generate a valid access token
+        use crate::application::jwt;
+        use crate::application::use_cases::api_key::ApiKeyWithRaw;
+        use crate::application::use_cases::domain_billing::SubscriptionClaims;
+
+        let api_key = ApiKeyWithRaw {
+            id: Uuid::new_v4(),
+            domain_id,
+            raw_key: api_key_raw.to_string(),
+        };
+
+        let access_token = jwt::issue_domain_end_user_derived(
+            user_id,
+            domain_id,
+            "example.com",
+            vec![],
+            SubscriptionClaims::none(),
+            &api_key,
+            time::Duration::hours(1),
+        )
+        .unwrap();
+
+        let server = TestServer::new(build_test_router(app_state)).unwrap();
+
+        let response = server
+            .post("/reauth.example.com/auth/google/unlink")
+            .add_cookie(Cookie::new("end_user_access_token", access_token))
+            .await;
+
+        response.assert_status(StatusCode::OK);
+    }
+}
