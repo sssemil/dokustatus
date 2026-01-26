@@ -13,14 +13,18 @@ import type {
  * Derives a JWT signing secret from an API key using HKDF-SHA256.
  * This must match the Rust backend implementation exactly.
  *
+ * IMPORTANT: Returns hex-encoded string (64 chars), NOT raw bytes.
+ * The Rust API uses the ASCII bytes of the hex string as the JWT secret,
+ * so we must do the same for compatibility.
+ *
  * @param apiKey - The raw API key (e.g., "sk_live_...")
  * @param domainId - UUID of the domain (used as salt for domain isolation)
- * @returns Promise<Buffer> - 32-byte secret suitable for HS256 signing
+ * @returns Promise<string> - 64-char hex string (to be used as ASCII bytes for JWT signing)
  */
 async function deriveJwtSecret(
   apiKey: string,
   domainId: string
-): Promise<Buffer> {
+): Promise<string> {
   // Convert domain_id UUID to 16 bytes (remove hyphens and decode as hex)
   const salt = Buffer.from(domainId.replace(/-/g, ""), "hex");
   const info = Buffer.from("reauth-jwt-v1");
@@ -28,7 +32,7 @@ async function deriveJwtSecret(
   return new Promise((resolve, reject) => {
     hkdf("sha256", apiKey, salt, info, 32, (err: Error | null, derivedKey: ArrayBuffer) => {
       if (err) reject(err);
-      else resolve(Buffer.from(derivedKey));
+      else resolve(Buffer.from(derivedKey).toString("hex"));
     });
   });
 }
@@ -150,10 +154,12 @@ export function createServerClient(config: ReauthServerConfig) {
         }
 
         // 2. Derive secret and verify signature
+        // Note: secret is a hex string (64 chars). We use its ASCII bytes as the JWT secret
+        // to match the Rust API which does: EncodingKey::from_secret(hex_string.as_bytes())
         const secret = await deriveJwtSecret(apiKey, domainId);
         const { payload } = await jose.jwtVerify(
           token,
-          new Uint8Array(secret),
+          new TextEncoder().encode(secret),
           {
             algorithms: ["HS256"],
             clockTolerance: 60, // 60 seconds clock skew tolerance

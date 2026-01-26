@@ -1,6 +1,4 @@
-use hkdf::Hkdf;
 use secrecy::SecretString;
-use sha2::Sha256;
 use uuid::Uuid;
 
 /// Derives a JWT signing secret from an API key using HKDF-SHA256.
@@ -11,17 +9,12 @@ use uuid::Uuid;
 ///
 /// # Returns
 /// A 32-byte secret suitable for HS256 signing, hex-encoded in a SecretString
+///
+/// This delegates to `reauth_types::derive_jwt_secret` for the actual derivation,
+/// ensuring consistency between the API and SDKs.
 pub fn derive_jwt_secret(api_key: &str, domain_id: &Uuid) -> SecretString {
-    // Use domain_id as salt for per-domain isolation
-    // This ensures identical API keys across domains cannot produce the same derived secret
-    let salt = domain_id.as_bytes();
-    let info = b"reauth-jwt-v1";
-
-    let hk = Hkdf::<Sha256>::new(Some(salt), api_key.as_bytes());
-    let mut output = [0u8; 32];
-    hk.expand(info, &mut output)
-        .expect("32 bytes is valid for SHA256 HKDF expand");
-    SecretString::new(hex::encode(output).into())
+    let secret = reauth_types::derive_jwt_secret(api_key, domain_id);
+    SecretString::new(secret.into())
 }
 
 #[cfg(test)]
