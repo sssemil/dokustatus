@@ -400,12 +400,15 @@ impl InMemoryApiKeyRepo {
         keys: Vec<(Uuid, Uuid, String, String)>, // (domain_id, key_id, raw_key, domain_name)
         cipher: &ProcessCipher,
     ) -> Self {
+        use sha2::{Digest, Sha256};
+
         let mut map = HashMap::new();
         let now = chrono::Utc::now().naive_utc();
 
         for (domain_id, key_id, raw_key, domain_name) in keys {
             let key_encrypted = cipher.encrypt(&raw_key).unwrap_or_default();
-            let key_hash = format!("hash_{}", key_id);
+            // Use real hash so validate_api_key works
+            let key_hash = hex::encode(Sha256::digest(raw_key.as_bytes()));
             let key_prefix = raw_key.chars().take(8).collect::<String>();
 
             let storage = ApiKeyStorage {
