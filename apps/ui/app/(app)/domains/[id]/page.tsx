@@ -628,24 +628,29 @@ export default function DomainDetailPage() {
   };
 
   const handleSaveConfig = async (
-    e: React.FormEvent,
+    e?: React.FormEvent,
     whitelistAllExisting = false,
+    overrides?: { magicLinkEnabled?: boolean; googleOAuthEnabled?: boolean },
   ) => {
-    e.preventDefault();
+    e?.preventDefault();
     setSaving(true);
     try {
+      const effectiveMagicLinkEnabled =
+        overrides?.magicLinkEnabled ?? magicLinkEnabled;
+      const effectiveGoogleOAuthEnabled =
+        overrides?.googleOAuthEnabled ?? googleOAuthEnabled;
       const payload: Record<string, unknown> = {
-        magic_link_enabled: magicLinkEnabled,
-        google_oauth_enabled: googleOAuthEnabled,
+        magic_link_enabled: effectiveMagicLinkEnabled,
+        google_oauth_enabled: effectiveGoogleOAuthEnabled,
         redirect_url: redirectUrl || null,
         whitelist_enabled: whitelistEnabled,
         whitelist_all_existing: whitelistAllExisting,
       };
-      if (magicLinkEnabled) {
+      if (effectiveMagicLinkEnabled) {
         if (resendApiKey) payload.resend_api_key = resendApiKey;
         if (fromEmail) payload.from_email = fromEmail;
       }
-      if (googleOAuthEnabled && googleClientId && googleClientSecret) {
+      if (effectiveGoogleOAuthEnabled && googleClientId && googleClientSecret) {
         payload.google_client_id = googleClientId;
         payload.google_client_secret = googleClientSecret;
       }
@@ -1468,10 +1473,9 @@ export default function DomainDetailPage() {
                     onToggle={() => {
                       const newValue = !magicLinkEnabled;
                       setMagicLinkEnabled(newValue);
-                      // Auto-save toggle
-                      handleSaveConfig({
-                        preventDefault: () => {},
-                      } as React.FormEvent);
+                      handleSaveConfig(undefined, false, {
+                        magicLinkEnabled: newValue,
+                      });
                     }}
                     onSettings={() => setAuthConfigModal("magic_link")}
                   />
@@ -1487,10 +1491,9 @@ export default function DomainDetailPage() {
                     onToggle={() => {
                       const newValue = !googleOAuthEnabled;
                       setGoogleOAuthEnabled(newValue);
-                      // Auto-save toggle
-                      handleSaveConfig({
-                        preventDefault: () => {},
-                      } as React.FormEvent);
+                      handleSaveConfig(undefined, false, {
+                        googleOAuthEnabled: newValue,
+                      });
                     }}
                     onSettings={() => setAuthConfigModal("google_oauth")}
                   />
