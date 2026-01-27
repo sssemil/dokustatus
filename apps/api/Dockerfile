@@ -7,18 +7,20 @@ RUN curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal
 ENV PATH="/root/.cargo/bin:${PATH}"
 RUN cargo install sqlx-cli --no-default-features --features postgres
 
-WORKDIR /app
+WORKDIR /build
 
-# Pre-fetch dependencies for faster builds
-COPY apps/api/Cargo.toml apps/api/Cargo.lock ./
-RUN mkdir -p src && echo "fn main() {}" > src/main.rs
-RUN cargo fetch
+# Copy workspace root and all workspace members
+COPY Cargo.toml ./
+COPY libs/reauth-types /build/libs/reauth-types
+COPY libs/reauth-sdk-rs /build/libs/reauth-sdk-rs
+COPY apps/api /build/apps/api
+
+# Pre-fetch dependencies
+RUN cargo fetch --manifest-path apps/api/Cargo.toml
 
 # Build application
-RUN rm -rf src
-COPY apps/api/ .
 ENV SQLX_OFFLINE=true
-RUN cargo build --release
+RUN cargo build --release --manifest-path apps/api/Cargo.toml
 
 FROM archlinux:base AS runtime
 RUN pacman -Syu --noconfirm && \
@@ -26,7 +28,7 @@ RUN pacman -Syu --noconfirm && \
 RUN pacman -Scc --noconfirm
 
 WORKDIR /app
-COPY --from=builder /app/target/release/reauth-api /usr/local/bin/reauth-api
+COPY --from=builder /build/target/release/reauth-api /usr/local/bin/reauth-api
 COPY --from=builder /root/.cargo/bin/sqlx /usr/local/bin/sqlx
 COPY apps/api/migrations ./migrations
 
