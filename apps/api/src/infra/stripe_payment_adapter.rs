@@ -461,6 +461,9 @@ impl PaymentProviderPort for StripePaymentAdapter {
             .create_product(&plan.name, plan.code.as_str().into())
             .await?;
 
+        // Convert interval from internal format to Stripe format
+        let stripe_interval = convert_interval_to_stripe(&plan.interval);
+
         // Create price
         let price = self
             .client
@@ -468,7 +471,7 @@ impl PaymentProviderPort for StripePaymentAdapter {
                 &product.id,
                 plan.price_cents as i64,
                 &plan.currency,
-                &plan.interval,
+                stripe_interval,
                 plan.interval_count,
             )
             .await?;
@@ -511,5 +514,58 @@ impl StripeSubscriptionExt for crate::infra::stripe_client::StripeSubscription {
             }
             _ => None,
         }
+    }
+}
+
+/// Convert interval from internal format to Stripe format.
+/// Stripe expects: month, year, week, day
+/// Internal format may be: monthly, yearly, weekly, daily
+fn convert_interval_to_stripe(interval: &str) -> &str {
+    match interval {
+        "monthly" => "month",
+        "yearly" => "year",
+        "weekly" => "week",
+        "daily" => "day",
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_interval_monthly_to_month() {
+        assert_eq!(convert_interval_to_stripe("monthly"), "month");
+    }
+
+    #[test]
+    fn test_convert_interval_yearly_to_year() {
+        assert_eq!(convert_interval_to_stripe("yearly"), "year");
+    }
+
+    #[test]
+    fn test_convert_interval_weekly_to_week() {
+        assert_eq!(convert_interval_to_stripe("weekly"), "week");
+    }
+
+    #[test]
+    fn test_convert_interval_daily_to_day() {
+        assert_eq!(convert_interval_to_stripe("daily"), "day");
+    }
+
+    #[test]
+    fn test_convert_interval_passthrough_month() {
+        assert_eq!(convert_interval_to_stripe("month"), "month");
+    }
+
+    #[test]
+    fn test_convert_interval_passthrough_year() {
+        assert_eq!(convert_interval_to_stripe("year"), "year");
+    }
+
+    #[test]
+    fn test_convert_interval_passthrough_unknown() {
+        assert_eq!(convert_interval_to_stripe("custom"), "custom");
     }
 }
