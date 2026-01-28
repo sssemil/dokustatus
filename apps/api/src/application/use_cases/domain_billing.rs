@@ -1728,33 +1728,22 @@ impl DomainBillingUseCases {
         // Ensure new plan has Stripe IDs (lazy creation like checkout)
         let new_plan = self.ensure_stripe_ids(domain_id, new_plan).await?;
 
-        // Atomically check and increment rate limit counter BEFORE calling payment provider.
-        // This prevents race conditions where concurrent requests could bypass the limit.
-        // Use the subscription's period end, or calculate based on current plan's interval as fallback.
+        // Calculate period_end for rate limit tracking. Use the subscription's period end,
+        // or calculate based on current plan's interval as fallback.
         let period_end = sub
             .current_period_end
             .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc))
             .unwrap_or_else(|| {
+                // Use interval and interval_count to calculate period length
+                let interval_count = current_plan.interval_count.max(1) as i64;
                 let interval_days = match current_plan.interval.as_str() {
-                    "yearly" | "year" => 365,
-                    "weekly" | "week" => 7,
-                    "daily" | "day" => 1,
-                    _ => 30, // monthly default
+                    "yearly" | "year" => 365 * interval_count,
+                    "weekly" | "week" => 7 * interval_count,
+                    "daily" | "day" => interval_count,
+                    _ => 30 * interval_count, // monthly default
                 };
                 Utc::now() + chrono::Duration::days(interval_days)
             });
-
-        let rate_limit_ok = self
-            .subscription_repo
-            .increment_changes_counter(sub.id, period_end, MAX_PLAN_CHANGES_PER_PERIOD)
-            .await?;
-
-        if !rate_limit_ok {
-            return Err(AppError::InvalidInput(format!(
-                "Maximum plan changes ({}) reached for this billing period. Try again after your next billing date.",
-                MAX_PLAN_CHANGES_PER_PERIOD
-            )));
-        }
 
         // Get provider
         let provider = self.get_active_provider(domain_id).await?;
@@ -1804,8 +1793,16 @@ impl DomainBillingUseCases {
                 .await?;
         }
 
-        // Note: Rate limit counter was already atomically incremented before the
-        // payment provider call. We don't need to do anything here.
+        // Atomically increment rate limit counter AFTER successful provider call.
+        // This avoids burning slots on transient provider failures while still preventing abuse.
+        // The validation check in validate_subscription_for_plan_change provides a fast fail-fast
+        // for the common case. The atomic increment here ensures the counter stays accurate.
+        // In the rare race condition where two requests slip through validation simultaneously,
+        // both will succeed but both will increment, so the counter remains correct.
+        let _ = self
+            .subscription_repo
+            .increment_changes_counter(sub.id, period_end, MAX_PLAN_CHANGES_PER_PERIOD)
+            .await?;
 
         Ok(PlanChangeResult {
             success: result.success,

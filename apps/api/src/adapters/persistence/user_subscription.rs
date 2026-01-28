@@ -376,7 +376,13 @@ impl UserSubscriptionRepoTrait for PostgresPersistence {
                     THEN 1
                     ELSE changes_this_period + 1
                 END,
-                period_changes_reset_at = $2,
+                -- Only update reset timestamp when period has actually reset, or use the
+                -- later of existing and new values to avoid shortening the window
+                period_changes_reset_at = CASE
+                    WHEN period_changes_reset_at IS NULL OR period_changes_reset_at < NOW()
+                    THEN $2
+                    ELSE GREATEST(period_changes_reset_at, $2)
+                END,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $1
             AND (

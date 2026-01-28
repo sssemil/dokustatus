@@ -712,7 +712,14 @@ impl UserSubscriptionRepoTrait for InMemoryUserSubscriptionRepo {
         } else if sub.changes_this_period < max_changes {
             // Under limit - allow and increment
             sub.changes_this_period += 1;
-            sub.period_changes_reset_at = Some(period_end);
+            // Use the later of existing and new values to avoid shortening the window
+            if let Some(existing) = sub.period_changes_reset_at {
+                if period_end > existing {
+                    sub.period_changes_reset_at = Some(period_end);
+                }
+            } else {
+                sub.period_changes_reset_at = Some(period_end);
+            }
             Ok(true)
         } else {
             // Rate limit exceeded
