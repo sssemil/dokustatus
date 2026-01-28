@@ -542,6 +542,9 @@ pub trait UserSubscriptionRepoTrait: Send + Sync {
         period_end: DateTime<Utc>,
         max_changes: i32,
     ) -> AppResult<bool>;
+    /// Decrement the plan change counter (used to release a reservation on failure).
+    /// This is a best-effort operation - if the counter is already 0, it stays at 0.
+    async fn decrement_changes_counter(&self, id: Uuid) -> AppResult<()>;
     async fn count_active_by_domain_and_mode(
         &self,
         domain_id: Uuid,
@@ -1745,15 +1748,41 @@ impl DomainBillingUseCases {
                 Utc::now() + chrono::Duration::days(interval_days)
             });
 
+        // Atomically reserve a rate limit slot BEFORE calling provider.
+        // This ensures strict enforcement even under concurrency.
+        let rate_limit_ok = self
+            .subscription_repo
+            .increment_changes_counter(sub.id, period_end, MAX_PLAN_CHANGES_PER_PERIOD)
+            .await?;
+
+        if !rate_limit_ok {
+            return Err(AppError::InvalidInput(format!(
+                "Maximum plan changes ({}) reached for this billing period. Try again after your next billing date.",
+                MAX_PLAN_CHANGES_PER_PERIOD
+            )));
+        }
+
         // Get provider
         let provider = self.get_active_provider(domain_id).await?;
         let subscription_id = SubscriptionId::new(stripe_subscription_id);
         let plan_info = Self::plan_to_port_info(&new_plan);
 
         // Execute plan change via provider
-        let result = provider
+        // If this fails, we release the rate limit reservation
+        let result = match provider
             .change_plan(&subscription_id, None, &plan_info)
-            .await?;
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => {
+                // Release the rate limit reservation on failure
+                let _ = self
+                    .subscription_repo
+                    .decrement_changes_counter(sub.id)
+                    .await;
+                return Err(e);
+            }
+        };
 
         // Convert change type
         let change_type = match result.change_type {
@@ -1793,16 +1822,8 @@ impl DomainBillingUseCases {
                 .await?;
         }
 
-        // Atomically increment rate limit counter AFTER successful provider call.
-        // This avoids burning slots on transient provider failures while still preventing abuse.
-        // The validation check in validate_subscription_for_plan_change provides a fast fail-fast
-        // for the common case. The atomic increment here ensures the counter stays accurate.
-        // In the rare race condition where two requests slip through validation simultaneously,
-        // both will succeed but both will increment, so the counter remains correct.
-        let _ = self
-            .subscription_repo
-            .increment_changes_counter(sub.id, period_end, MAX_PLAN_CHANGES_PER_PERIOD)
-            .await?;
+        // Rate limit slot was already reserved before the provider call.
+        // No need to increment again here.
 
         Ok(PlanChangeResult {
             success: result.success,

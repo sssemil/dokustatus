@@ -405,6 +405,23 @@ impl UserSubscriptionRepoTrait for PostgresPersistence {
         Ok(result.rows_affected() > 0)
     }
 
+    async fn decrement_changes_counter(&self, id: Uuid) -> AppResult<()> {
+        // Best-effort decrement - clamp at 0 to avoid negative values
+        sqlx::query(
+            r#"
+            UPDATE user_subscriptions SET
+                changes_this_period = GREATEST(changes_this_period - 1, 0),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .execute(&self.pool)
+        .await
+        .map_err(AppError::from)?;
+        Ok(())
+    }
+
     async fn count_active_by_domain_and_mode(
         &self,
         domain_id: Uuid,

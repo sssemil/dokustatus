@@ -727,6 +727,14 @@ impl UserSubscriptionRepoTrait for InMemoryUserSubscriptionRepo {
         }
     }
 
+    async fn decrement_changes_counter(&self, id: Uuid) -> AppResult<()> {
+        let mut subs = self.subscriptions.lock().unwrap();
+        let sub = subs.get_mut(&id).ok_or(AppError::NotFound)?;
+        // Best-effort decrement - clamp at 0
+        sub.changes_this_period = (sub.changes_this_period - 1).max(0);
+        Ok(())
+    }
+
     async fn count_active_by_domain_and_mode(
         &self,
         domain_id: Uuid,
