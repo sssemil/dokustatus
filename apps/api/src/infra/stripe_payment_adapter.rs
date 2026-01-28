@@ -272,7 +272,7 @@ impl PaymentProviderPort for StripePaymentAdapter {
                     &item_id,
                     new_price_id,
                     1,
-                    false,
+                    is_trial,
                     &idempotency_key,
                 )
                 .await?;
