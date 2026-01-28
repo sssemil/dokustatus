@@ -206,8 +206,8 @@ export function PlanChangeModal({
 
   const getConfirmLabel = () => {
     if (isUpgrade) return "Upgrade Now";
-    if (isImmediate) return "Confirm & End Trial";
     if (isLateral) return "Confirm Change";
+    if (isImmediate) return "Confirm Change";
     return "Confirm Downgrade";
   };
 
