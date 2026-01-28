@@ -533,12 +533,15 @@ pub trait UserSubscriptionRepoTrait: Send + Sync {
     ) -> AppResult<UserSubscriptionProfile>;
     async fn revoke(&self, id: Uuid) -> AppResult<()>;
     async fn delete(&self, id: Uuid) -> AppResult<()>;
-    /// Increment the plan change counter and update the reset timestamp
+    /// Atomically increment the plan change counter if under the limit.
+    /// Returns true if increment succeeded, false if rate limit exceeded.
+    /// This prevents race conditions where concurrent requests could bypass the limit.
     async fn increment_changes_counter(
         &self,
         id: Uuid,
         period_end: DateTime<Utc>,
-    ) -> AppResult<()>;
+        max_changes: i32,
+    ) -> AppResult<bool>;
     async fn count_active_by_domain_and_mode(
         &self,
         domain_id: Uuid,
@@ -1650,7 +1653,7 @@ impl DomainBillingUseCases {
         } else {
             0
         };
-        let changes_remaining = MAX_PLAN_CHANGES_PER_PERIOD - current_changes;
+        let changes_remaining = (MAX_PLAN_CHANGES_PER_PERIOD - current_changes).max(0);
 
         // Add warning if near rate limit
         if changes_remaining <= 2 && changes_remaining > 0 {
@@ -1725,6 +1728,34 @@ impl DomainBillingUseCases {
         // Ensure new plan has Stripe IDs (lazy creation like checkout)
         let new_plan = self.ensure_stripe_ids(domain_id, new_plan).await?;
 
+        // Atomically check and increment rate limit counter BEFORE calling payment provider.
+        // This prevents race conditions where concurrent requests could bypass the limit.
+        // Use the subscription's period end, or calculate based on current plan's interval as fallback.
+        let period_end = sub
+            .current_period_end
+            .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc))
+            .unwrap_or_else(|| {
+                let interval_days = match current_plan.interval.as_str() {
+                    "yearly" | "year" => 365,
+                    "weekly" | "week" => 7,
+                    "daily" | "day" => 1,
+                    _ => 30, // monthly default
+                };
+                Utc::now() + chrono::Duration::days(interval_days)
+            });
+
+        let rate_limit_ok = self
+            .subscription_repo
+            .increment_changes_counter(sub.id, period_end, MAX_PLAN_CHANGES_PER_PERIOD)
+            .await?;
+
+        if !rate_limit_ok {
+            return Err(AppError::InvalidInput(format!(
+                "Maximum plan changes ({}) reached for this billing period. Try again after your next billing date.",
+                MAX_PLAN_CHANGES_PER_PERIOD
+            )));
+        }
+
         // Get provider
         let provider = self.get_active_provider(domain_id).await?;
         let subscription_id = SubscriptionId::new(stripe_subscription_id);
@@ -1773,15 +1804,8 @@ impl DomainBillingUseCases {
                 .await?;
         }
 
-        // Increment rate limit counter
-        // Use the subscription's period end, or effective_at + 30 days as fallback
-        let period_end = sub
-            .current_period_end
-            .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc))
-            .unwrap_or_else(|| result.effective_at + chrono::Duration::days(30));
-        self.subscription_repo
-            .increment_changes_counter(sub.id, period_end)
-            .await?;
+        // Note: Rate limit counter was already atomically incremented before the
+        // payment provider call. We don't need to do anything here.
 
         Ok(PlanChangeResult {
             success: result.success,

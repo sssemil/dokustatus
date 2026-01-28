@@ -363,10 +363,12 @@ impl UserSubscriptionRepoTrait for PostgresPersistence {
         &self,
         id: Uuid,
         period_end: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<()> {
-        // If the reset timestamp has passed or is different, reset the counter to 1
-        // Otherwise increment the existing counter
-        sqlx::query(
+        max_changes: i32,
+    ) -> AppResult<bool> {
+        // Atomic check-and-increment: only increment if under the limit
+        // Returns true if increment succeeded, false if rate limit would be exceeded
+        // This prevents race conditions where concurrent requests could bypass the limit
+        let result = sqlx::query(
             r#"
             UPDATE user_subscriptions SET
                 changes_this_period = CASE
@@ -377,14 +379,24 @@ impl UserSubscriptionRepoTrait for PostgresPersistence {
                 period_changes_reset_at = $2,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = $1
+            AND (
+                -- Allow if period has reset
+                period_changes_reset_at IS NULL
+                OR period_changes_reset_at < NOW()
+                -- Or if under the limit
+                OR changes_this_period < $3
+            )
             "#,
         )
         .bind(id)
         .bind(period_end)
+        .bind(max_changes)
         .execute(&self.pool)
         .await
         .map_err(AppError::from)?;
-        Ok(())
+
+        // If no rows affected, the rate limit was exceeded
+        Ok(result.rows_affected() > 0)
     }
 
     async fn count_active_by_domain_and_mode(

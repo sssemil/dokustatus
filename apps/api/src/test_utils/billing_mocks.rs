@@ -694,23 +694,30 @@ impl UserSubscriptionRepoTrait for InMemoryUserSubscriptionRepo {
         &self,
         id: Uuid,
         period_end: chrono::DateTime<chrono::Utc>,
-    ) -> AppResult<()> {
+        max_changes: i32,
+    ) -> AppResult<bool> {
         let mut subs = self.subscriptions.lock().unwrap();
         let sub = subs.get_mut(&id).ok_or(AppError::NotFound)?;
 
-        // Reset counter if period has passed
+        // Atomic check-and-increment matching DB behavior
         let now = chrono::Utc::now();
-        if let Some(reset_at) = sub.period_changes_reset_at {
-            if reset_at < now {
-                sub.changes_this_period = 1;
-            } else {
-                sub.changes_this_period += 1;
-            }
-        } else {
+        let period_has_reset = sub.period_changes_reset_at.is_none()
+            || sub.period_changes_reset_at.map(|r| r < now).unwrap_or(true);
+
+        if period_has_reset {
+            // Period reset - allow and set counter to 1
             sub.changes_this_period = 1;
+            sub.period_changes_reset_at = Some(period_end);
+            Ok(true)
+        } else if sub.changes_this_period < max_changes {
+            // Under limit - allow and increment
+            sub.changes_this_period += 1;
+            sub.period_changes_reset_at = Some(period_end);
+            Ok(true)
+        } else {
+            // Rate limit exceeded
+            Ok(false)
         }
-        sub.period_changes_reset_at = Some(period_end);
-        Ok(())
     }
 
     async fn count_active_by_domain_and_mode(
