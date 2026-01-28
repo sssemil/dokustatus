@@ -285,12 +285,14 @@ pub trait PaymentProviderPort: Send + Sync {
         at_period_end: bool,
     ) -> AppResult<()>;
 
-    /// Execute a plan change (upgrade or downgrade)
+    /// Execute a plan change (upgrade or downgrade).
+    /// When `is_trial` is true, the change is always immediate (trial ends).
     async fn change_plan(
         &self,
         subscription_id: &SubscriptionId,
         subscription_item_id: Option<&str>,
         new_plan: &PlanInfo,
+        is_trial: bool,
     ) -> AppResult<PlanChangeResult>;
 
     // ========================================================================

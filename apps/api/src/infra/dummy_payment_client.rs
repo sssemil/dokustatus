@@ -343,6 +343,7 @@ impl PaymentProviderPort for DummyPaymentClient {
         subscription_id: &SubscriptionId,
         _subscription_item_id: Option<&str>,
         new_plan: &PlanInfo,
+        _is_trial: bool,
     ) -> AppResult<PlanChangeResult> {
         tracing::debug!(
             subscription_id = %subscription_id,

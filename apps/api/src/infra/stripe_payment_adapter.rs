@@ -218,6 +218,7 @@ impl PaymentProviderPort for StripePaymentAdapter {
         subscription_id: &SubscriptionId,
         subscription_item_id: Option<&str>,
         new_plan: &PlanInfo,
+        is_trial: bool,
     ) -> AppResult<PlanChangeResult> {
         let sub = self
             .client
@@ -236,6 +237,7 @@ impl PaymentProviderPort for StripePaymentAdapter {
         // Determine if upgrade, downgrade, or lateral (same price)
         // - Upgrade (new > current): immediate with proration
         // - Downgrade/Lateral (new <= current): scheduled for period end
+        // - During trial: ALL changes are immediate (trial ends)
         let current_amount = sub
             .items
             .data
@@ -244,10 +246,21 @@ impl PaymentProviderPort for StripePaymentAdapter {
             .unwrap_or(0);
         let new_amount = new_plan.price_cents as i64;
 
-        if new_amount > current_amount {
-            // Upgrade: immediate with proration
+        let is_upgrade = new_amount > current_amount;
+        let immediate = is_upgrade || is_trial;
+
+        if immediate {
+            // Immediate swap: upgrade, or any change during trial
+            let change_type = if is_upgrade {
+                PlanChangeType::Upgrade
+            } else if new_amount == current_amount {
+                PlanChangeType::Lateral
+            } else {
+                PlanChangeType::Downgrade
+            };
+
             let idempotency_key = format!(
-                "upgrade_{}_{}_{}",
+                "change_{}_{}_{}",
                 subscription_id,
                 new_plan.id,
                 Utc::now().timestamp()
@@ -266,7 +279,7 @@ impl PaymentProviderPort for StripePaymentAdapter {
 
             Ok(PlanChangeResult {
                 success: true,
-                change_type: PlanChangeType::Upgrade,
+                change_type,
                 invoice_id: upgraded.latest_invoice_id(),
                 amount_charged_cents: upgraded.latest_invoice_amount(),
                 currency: upgraded.latest_invoice_currency(),

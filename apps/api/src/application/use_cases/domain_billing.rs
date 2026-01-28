@@ -1603,8 +1603,9 @@ impl DomainBillingUseCases {
             PlanChangeType::Lateral
         };
 
-        // Effective date: upgrades are immediate, downgrades/laterals at period end
-        let effective_at = if change_type == PlanChangeType::Upgrade {
+        // Effective date: upgrades are immediate, downgrades/laterals at period end.
+        // Exception: during trial, ALL changes are immediate (trial ends).
+        let effective_at = if change_type == PlanChangeType::Upgrade || is_trial {
             now
         } else {
             period_end
@@ -1690,14 +1691,22 @@ impl DomainBillingUseCases {
         // Ensure new plan has Stripe IDs (lazy creation like checkout)
         let new_plan = self.ensure_stripe_ids(domain_id, new_plan).await?;
 
+        // Determine if subscription is on trial
+        let now = Utc::now();
+        let is_trial = sub
+            .trial_end
+            .map(|te| te.and_utc() > now)
+            .unwrap_or(false);
+
         // Get provider
         let provider = self.get_active_provider(domain_id).await?;
         let subscription_id = SubscriptionId::new(stripe_subscription_id);
         let plan_info = Self::plan_to_port_info(&new_plan);
 
         // Execute plan change via provider
+        // During trial, all changes are immediate (trial ends)
         let result = provider
-            .change_plan(&subscription_id, None, &plan_info)
+            .change_plan(&subscription_id, None, &plan_info, is_trial)
             .await?;
 
         // Convert change type
