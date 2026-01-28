@@ -575,8 +575,6 @@ impl UserSubscriptionRepoTrait for InMemoryUserSubscriptionRepo {
             granted_at: None,
             created_at: Some(now),
             updated_at: Some(now),
-            changes_this_period: 0,
-            period_changes_reset_at: None,
         };
 
         subs.insert(sub.id, sub.clone());
@@ -668,8 +666,6 @@ impl UserSubscriptionRepoTrait for InMemoryUserSubscriptionRepo {
             granted_at: Some(now),
             created_at: Some(now),
             updated_at: Some(now),
-            changes_this_period: 0,
-            period_changes_reset_at: None,
         };
 
         subs.insert(sub.id, sub.clone());
@@ -687,51 +683,6 @@ impl UserSubscriptionRepoTrait for InMemoryUserSubscriptionRepo {
 
     async fn delete(&self, id: Uuid) -> AppResult<()> {
         self.subscriptions.lock().unwrap().remove(&id);
-        Ok(())
-    }
-
-    async fn increment_changes_counter(
-        &self,
-        id: Uuid,
-        period_end: chrono::DateTime<chrono::Utc>,
-        max_changes: i32,
-    ) -> AppResult<bool> {
-        let mut subs = self.subscriptions.lock().unwrap();
-        let sub = subs.get_mut(&id).ok_or(AppError::NotFound)?;
-
-        // Atomic check-and-increment matching DB behavior
-        let now = chrono::Utc::now();
-        let period_has_reset = sub.period_changes_reset_at.is_none()
-            || sub.period_changes_reset_at.map(|r| r < now).unwrap_or(true);
-
-        if period_has_reset {
-            // Period reset - allow and set counter to 1
-            sub.changes_this_period = 1;
-            sub.period_changes_reset_at = Some(period_end);
-            Ok(true)
-        } else if sub.changes_this_period < max_changes {
-            // Under limit - allow and increment
-            sub.changes_this_period += 1;
-            // Use the later of existing and new values to avoid shortening the window
-            if let Some(existing) = sub.period_changes_reset_at {
-                if period_end > existing {
-                    sub.period_changes_reset_at = Some(period_end);
-                }
-            } else {
-                sub.period_changes_reset_at = Some(period_end);
-            }
-            Ok(true)
-        } else {
-            // Rate limit exceeded
-            Ok(false)
-        }
-    }
-
-    async fn decrement_changes_counter(&self, id: Uuid) -> AppResult<()> {
-        let mut subs = self.subscriptions.lock().unwrap();
-        let sub = subs.get_mut(&id).ok_or(AppError::NotFound)?;
-        // Best-effort decrement - clamp at 0
-        sub.changes_this_period = (sub.changes_this_period - 1).max(0);
         Ok(())
     }
 

@@ -38,8 +38,6 @@ fn row_to_profile(row: &sqlx::postgres::PgRow) -> UserSubscriptionProfile {
         granted_at: row.get("granted_at"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
-        changes_this_period: row.get("changes_this_period"),
-        period_changes_reset_at: row.get("period_changes_reset_at"),
     }
 }
 
@@ -48,7 +46,7 @@ const SELECT_COLS: &str = r#"
     end_user_id, plan_id, status, stripe_customer_id, stripe_subscription_id,
     current_period_start, current_period_end, trial_start, trial_end,
     cancel_at_period_end, canceled_at, manually_granted, granted_by, granted_at,
-    created_at, updated_at, changes_this_period, period_changes_reset_at
+    created_at, updated_at
 "#;
 
 #[async_trait]
@@ -356,69 +354,6 @@ impl UserSubscriptionRepoTrait for PostgresPersistence {
             .execute(&self.pool)
             .await
             .map_err(AppError::from)?;
-        Ok(())
-    }
-
-    async fn increment_changes_counter(
-        &self,
-        id: Uuid,
-        period_end: chrono::DateTime<chrono::Utc>,
-        max_changes: i32,
-    ) -> AppResult<bool> {
-        // Atomic check-and-increment: only increment if under the limit
-        // Returns true if increment succeeded, false if rate limit would be exceeded
-        // This prevents race conditions where concurrent requests could bypass the limit
-        let result = sqlx::query(
-            r#"
-            UPDATE user_subscriptions SET
-                changes_this_period = CASE
-                    WHEN period_changes_reset_at IS NULL OR period_changes_reset_at < NOW()
-                    THEN 1
-                    ELSE changes_this_period + 1
-                END,
-                -- Only update reset timestamp when period has actually reset, or use the
-                -- later of existing and new values to avoid shortening the window
-                period_changes_reset_at = CASE
-                    WHEN period_changes_reset_at IS NULL OR period_changes_reset_at < NOW()
-                    THEN $2
-                    ELSE GREATEST(period_changes_reset_at, $2)
-                END,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = $1
-            AND (
-                -- Allow if period has reset
-                period_changes_reset_at IS NULL
-                OR period_changes_reset_at < NOW()
-                -- Or if under the limit
-                OR changes_this_period < $3
-            )
-            "#,
-        )
-        .bind(id)
-        .bind(period_end)
-        .bind(max_changes)
-        .execute(&self.pool)
-        .await
-        .map_err(AppError::from)?;
-
-        // If no rows affected, the rate limit was exceeded
-        Ok(result.rows_affected() > 0)
-    }
-
-    async fn decrement_changes_counter(&self, id: Uuid) -> AppResult<()> {
-        // Best-effort decrement - clamp at 0 to avoid negative values
-        sqlx::query(
-            r#"
-            UPDATE user_subscriptions SET
-                changes_this_period = GREATEST(changes_this_period - 1, 0),
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .execute(&self.pool)
-        .await
-        .map_err(AppError::from)?;
         Ok(())
     }
 

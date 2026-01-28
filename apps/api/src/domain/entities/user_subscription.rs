@@ -92,9 +92,6 @@ pub struct UserSubscription {
     pub granted_at: Option<chrono::NaiveDateTime>,
     pub created_at: Option<chrono::NaiveDateTime>,
     pub updated_at: Option<chrono::NaiveDateTime>,
-    // Rate limiting for plan changes
-    pub changes_this_period: i32,
-    pub period_changes_reset_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Debug, Clone)]

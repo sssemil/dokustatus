@@ -28,9 +28,6 @@ use crate::{
 use super::domain::DomainRepoTrait;
 use crate::application::validators::is_valid_plan_code;
 
-/// Maximum number of plan changes allowed per billing period
-const MAX_PLAN_CHANGES_PER_PERIOD: i32 = 5;
-
 /// Number of months in a year, used for MRR calculations
 const MONTHS_PER_YEAR: i64 = 12;
 
@@ -165,9 +162,6 @@ pub struct UserSubscriptionProfile {
     pub granted_at: Option<NaiveDateTime>,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
-    // Rate limiting for plan changes
-    pub changes_this_period: i32,
-    pub period_changes_reset_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -394,8 +388,6 @@ pub struct PlanChangePreview {
     pub change_type: PlanChangeType,
     pub effective_at: i64,
     pub warnings: Vec<String>,
-    /// Number of plan changes remaining in current billing period
-    pub changes_remaining_this_period: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -533,18 +525,6 @@ pub trait UserSubscriptionRepoTrait: Send + Sync {
     ) -> AppResult<UserSubscriptionProfile>;
     async fn revoke(&self, id: Uuid) -> AppResult<()>;
     async fn delete(&self, id: Uuid) -> AppResult<()>;
-    /// Atomically increment the plan change counter if under the limit.
-    /// Returns true if increment succeeded, false if rate limit exceeded.
-    /// This prevents race conditions where concurrent requests could bypass the limit.
-    async fn increment_changes_counter(
-        &self,
-        id: Uuid,
-        period_end: DateTime<Utc>,
-        max_changes: i32,
-    ) -> AppResult<bool>;
-    /// Decrement the plan change counter (used to release a reservation on failure).
-    /// This is a best-effort operation - if the counter is already 0, it stays at 0.
-    async fn decrement_changes_counter(&self, id: Uuid) -> AppResult<()>;
     async fn count_active_by_domain_and_mode(
         &self,
         domain_id: Uuid,
@@ -1646,26 +1626,6 @@ impl DomainBillingUseCases {
             );
         }
 
-        // Calculate changes remaining in this period
-        let current_changes = if let Some(reset_at) = sub.period_changes_reset_at {
-            if reset_at < now {
-                0 // Period has passed, counter will reset
-            } else {
-                sub.changes_this_period
-            }
-        } else {
-            0
-        };
-        let changes_remaining = (MAX_PLAN_CHANGES_PER_PERIOD - current_changes).max(0);
-
-        // Add warning if near rate limit
-        if changes_remaining <= 2 && changes_remaining > 0 {
-            warnings.push(format!(
-                "You have {} plan change(s) remaining this billing period.",
-                changes_remaining
-            ));
-        }
-
         Ok(PlanChangePreview {
             prorated_amount_cents: prorated_amount,
             currency: current_plan.currency.clone(),
@@ -1675,7 +1635,6 @@ impl DomainBillingUseCases {
             change_type,
             effective_at: effective_at.timestamp(),
             warnings,
-            changes_remaining_this_period: changes_remaining,
         })
     }
 
@@ -1733,56 +1692,15 @@ impl DomainBillingUseCases {
 
         // Calculate period_end for rate limit tracking. Use the subscription's period end,
         // or calculate based on current plan's interval as fallback.
-        let period_end = sub
-            .current_period_end
-            .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc))
-            .unwrap_or_else(|| {
-                // Use interval and interval_count to calculate period length
-                let interval_count = current_plan.interval_count.max(1) as i64;
-                let interval_days = match current_plan.interval.as_str() {
-                    "yearly" | "year" => 365 * interval_count,
-                    "weekly" | "week" => 7 * interval_count,
-                    "daily" | "day" => interval_count,
-                    _ => 30 * interval_count, // monthly default
-                };
-                Utc::now() + chrono::Duration::days(interval_days)
-            });
-
-        // Atomically reserve a rate limit slot BEFORE calling provider.
-        // This ensures strict enforcement even under concurrency.
-        let rate_limit_ok = self
-            .subscription_repo
-            .increment_changes_counter(sub.id, period_end, MAX_PLAN_CHANGES_PER_PERIOD)
-            .await?;
-
-        if !rate_limit_ok {
-            return Err(AppError::InvalidInput(format!(
-                "Maximum plan changes ({}) reached for this billing period. Try again after your next billing date.",
-                MAX_PLAN_CHANGES_PER_PERIOD
-            )));
-        }
-
         // Get provider
         let provider = self.get_active_provider(domain_id).await?;
         let subscription_id = SubscriptionId::new(stripe_subscription_id);
         let plan_info = Self::plan_to_port_info(&new_plan);
 
         // Execute plan change via provider
-        // If this fails, we release the rate limit reservation
-        let result = match provider
+        let result = provider
             .change_plan(&subscription_id, None, &plan_info)
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                // Release the rate limit reservation on failure
-                let _ = self
-                    .subscription_repo
-                    .decrement_changes_counter(sub.id)
-                    .await;
-                return Err(e);
-            }
-        };
+            .await?;
 
         // Convert change type
         let change_type = match result.change_type {
@@ -1822,9 +1740,6 @@ impl DomainBillingUseCases {
                 .await?;
         }
 
-        // Rate limit slot was already reserved before the provider call.
-        // No need to increment again here.
-
         Ok(PlanChangeResult {
             success: result.success,
             change_type,
@@ -1857,25 +1772,6 @@ impl DomainBillingUseCases {
             return Err(AppError::InvalidInput(
                 "Cannot change plan: subscription not linked to Stripe".into(),
             ));
-        }
-
-        // Check rate limit - reset if period has passed
-        let changes_count = if let Some(reset_at) = sub.period_changes_reset_at {
-            if reset_at < Utc::now() {
-                // Period has passed, counter will be reset on next change
-                0
-            } else {
-                sub.changes_this_period
-            }
-        } else {
-            0
-        };
-
-        if changes_count >= MAX_PLAN_CHANGES_PER_PERIOD {
-            return Err(AppError::InvalidInput(format!(
-                "Maximum plan changes ({}) reached for this billing period. Try again after your next billing date.",
-                MAX_PLAN_CHANGES_PER_PERIOD
-            )));
         }
 
         // Validate status
@@ -2828,64 +2724,6 @@ mod classification_tests {
     fn test_free_to_free_is_lateral() {
         // Two different free plans
         assert_eq!(classify_change(0, 0), PlanChangeType::Lateral);
-    }
-}
-
-#[cfg(test)]
-mod rate_limit_tests {
-    use super::*;
-
-    #[test]
-    fn test_max_changes_constant() {
-        assert_eq!(MAX_PLAN_CHANGES_PER_PERIOD, 5);
-    }
-
-    #[test]
-    fn test_changes_remaining_calculation() {
-        // Test the calculation logic used in preview
-        let now = Utc::now();
-        let future_reset = now + chrono::Duration::days(15);
-        let past_reset = now - chrono::Duration::days(1);
-
-        // When reset is in future, use current count
-        let changes_count = 3;
-        let reset_at = Some(future_reset);
-        let current = if let Some(r) = reset_at {
-            if r < now { 0 } else { changes_count }
-        } else {
-            0
-        };
-        assert_eq!(current, 3);
-        assert_eq!(MAX_PLAN_CHANGES_PER_PERIOD - current, 2);
-
-        // When reset is in past, counter resets to 0
-        let reset_at = Some(past_reset);
-        let current = if let Some(r) = reset_at {
-            if r < now { 0 } else { changes_count }
-        } else {
-            0
-        };
-        assert_eq!(current, 0);
-        assert_eq!(MAX_PLAN_CHANGES_PER_PERIOD - current, 5);
-
-        // When no reset_at, treat as 0
-        let reset_at: Option<DateTime<Utc>> = None;
-        let current = if let Some(r) = reset_at {
-            if r < now { 0 } else { changes_count }
-        } else {
-            0
-        };
-        assert_eq!(current, 0);
-    }
-
-    #[test]
-    fn test_rate_limit_threshold() {
-        // Test that we correctly identify when limit is reached
-        let at_limit = MAX_PLAN_CHANGES_PER_PERIOD;
-        let below_limit = MAX_PLAN_CHANGES_PER_PERIOD - 1;
-
-        assert!(at_limit >= MAX_PLAN_CHANGES_PER_PERIOD);
-        assert!(below_limit < MAX_PLAN_CHANGES_PER_PERIOD);
     }
 }
 

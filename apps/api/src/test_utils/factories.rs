@@ -103,8 +103,6 @@ pub fn create_test_subscription(
         granted_at: None,
         created_at: Some(now),
         updated_at: Some(now),
-        changes_this_period: 0,
-        period_changes_reset_at: None,
     };
     overrides(&mut subscription);
     subscription
