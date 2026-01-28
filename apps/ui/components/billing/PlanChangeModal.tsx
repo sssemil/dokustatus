@@ -16,7 +16,7 @@ import {
   ArrowLeftRight,
   Loader2,
   CreditCard,
-  Info,
+  Calendar,
 } from "lucide-react";
 
 interface Plan {
@@ -72,7 +72,6 @@ export function PlanChangeModal({
     : false;
   const isImmediate = preview ? !isScheduled : false;
 
-  // Fetch preview when modal opens
   useEffect(() => {
     if (!open) {
       setState("loading");
@@ -141,7 +140,6 @@ export function PlanChangeModal({
       setResult(data);
 
       if (data.schedule_id) {
-        // Scheduled change (downgrade/lateral at period end)
         setState("success");
       } else if (data.payment_intent_status === "succeeded") {
         setState("success");
@@ -184,7 +182,6 @@ export function PlanChangeModal({
         );
         setState("error");
       } else {
-        // No schedule_id and no payment intent — immediate success ($0 or trial change)
         setState("success");
       }
     } catch {
@@ -201,22 +198,23 @@ export function PlanChangeModal({
   };
 
   const getChangeIcon = () => {
-    if (isUpgrade) return <ArrowUp className="w-5 h-5 text-green-400" />;
+    if (isUpgrade) return <ArrowUp className="w-4 h-4 text-green-400" />;
     if (isLateral)
-      return <ArrowLeftRight className="w-5 h-5 text-blue-400" />;
-    return <ArrowDown className="w-5 h-5 text-yellow-400" />;
-  };
-
-  const getChangeLabel = () => {
-    if (isUpgrade) return "Upgrade";
-    if (isLateral) return "Change";
-    return "Downgrade";
+      return <ArrowLeftRight className="w-4 h-4 text-blue-400" />;
+    return <ArrowDown className="w-4 h-4 text-yellow-400" />;
   };
 
   const getConfirmLabel = () => {
     if (isUpgrade) return "Upgrade Now";
+    if (isImmediate) return "Confirm & End Trial";
     if (isLateral) return "Confirm Change";
     return "Confirm Downgrade";
+  };
+
+  const getTitle = () => {
+    if (isUpgrade) return `Upgrade to ${newPlan.name}`;
+    if (isLateral) return `Change to ${newPlan.name}`;
+    return `Downgrade to ${newPlan.name}`;
   };
 
   const renderContent = () => {
@@ -232,18 +230,14 @@ export function PlanChangeModal({
       case "preview":
         return (
           <div className="space-y-4">
-            {/* Change summary */}
+            {/* From → To summary */}
             <div className="p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
-              <div className="flex items-center gap-2 mb-3">
-                {getChangeIcon()}
-                <span className="font-medium text-white">
-                  {getChangeLabel()} to {newPlan.name}
-                </span>
-              </div>
-
               <div className="space-y-2 text-sm">
                 <div className="flex justify-between text-zinc-400">
-                  <span>From</span>
+                  <span className="flex items-center gap-2">
+                    {getChangeIcon()}
+                    From
+                  </span>
                   <span>
                     {currentPlan.name} (
                     {formatPrice(currentPlan.price_cents, currentPlan.currency)}
@@ -251,7 +245,7 @@ export function PlanChangeModal({
                   </span>
                 </div>
                 <div className="flex justify-between text-zinc-400">
-                  <span>To</span>
+                  <span className="ml-6">To</span>
                   <span>
                     {newPlan.name} (
                     {formatPrice(newPlan.price_cents, newPlan.currency)})
@@ -260,7 +254,7 @@ export function PlanChangeModal({
               </div>
             </div>
 
-            {/* Warnings (shown for any change type) */}
+            {/* Warnings — only when backend sends them */}
             {preview && preview.warnings.length > 0 && (
               <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
                 <div className="flex items-center gap-2 mb-2">
@@ -277,8 +271,8 @@ export function PlanChangeModal({
               </div>
             )}
 
-            {/* Upgrade specifics */}
-            {isUpgrade && preview && (
+            {/* Immediate change — amount due today */}
+            {preview && isImmediate && (
               <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
                 <div className="flex items-center gap-2 mb-2">
                   <CreditCard className="w-4 h-4 text-blue-400" />
@@ -289,71 +283,43 @@ export function PlanChangeModal({
                 <p className="text-2xl font-bold text-white">
                   {formatPrice(preview.prorated_amount_cents, preview.currency)}
                 </p>
-                <p className="text-sm text-zinc-400 mt-1">
-                  Prorated for remaining time in your billing period
-                </p>
+                {preview.prorated_amount_cents > 0 && (
+                  <p className="text-sm text-zinc-400 mt-1">
+                    Prorated for remaining billing period
+                  </p>
+                )}
                 {preview.period_end > 0 && (
-                  <p className="text-sm text-zinc-400 mt-2">
-                    Next full payment on{" "}
-                    {formatEffectiveDate(preview.period_end)}
+                  <p className="text-sm text-zinc-400 mt-1">
+                    Next bill on {formatEffectiveDate(preview.period_end)} at{" "}
+                    {formatPrice(
+                      preview.new_plan_price_cents,
+                      preview.currency,
+                    )}
                   </p>
                 )}
               </div>
             )}
 
-            {/* Non-upgrade immediate (trial downgrade/lateral) */}
-            {!isUpgrade && preview && isImmediate && (
-              <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg space-y-2">
-                <div className="flex items-center gap-2">
-                  <Info className="w-4 h-4 text-blue-400" />
-                  <span className="font-medium text-blue-300">
-                    Immediate change
+            {/* Scheduled change — no charge now */}
+            {preview && isScheduled && (
+              <div className="p-4 bg-zinc-800/50 rounded-lg border border-zinc-600">
+                <div className="flex items-center gap-2 mb-2">
+                  <Calendar className="w-4 h-4 text-zinc-400" />
+                  <span className="font-medium text-zinc-300">
+                    Effective {formatEffectiveDate(preview.effective_at)}
                   </span>
                 </div>
-                <ul className="text-sm text-zinc-300 space-y-1 ml-6 list-disc">
-                  <li>
-                    Your plan will change immediately and you'll be billed right
-                    away
-                  </li>
-                  <li>
-                    You'll be charged{" "}
+                <div className="text-sm text-zinc-400 space-y-1">
+                  <p>
+                    Your {currentPlan.name} access continues until then.
+                  </p>
+                  <p>
+                    No charge today — starting{" "}
+                    {formatEffectiveDate(preview.effective_at)}, you'll pay{" "}
                     {formatPrice(newPlan.price_cents, newPlan.currency)} for{" "}
-                    {newPlan.name}
-                  </li>
-                  {preview.prorated_amount_cents > 0 && (
-                    <li>
-                      Prorated amount:{" "}
-                      {formatPrice(
-                        preview.prorated_amount_cents,
-                        preview.currency,
-                      )}
-                    </li>
-                  )}
-                </ul>
-              </div>
-            )}
-
-            {/* Non-upgrade scheduled (normal downgrade/lateral at period end) */}
-            {!isUpgrade && preview && isScheduled && (
-              <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg space-y-2">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-yellow-400" />
-                  <span className="font-medium text-yellow-300">
-                    Scheduled change
-                  </span>
+                    {newPlan.name}.
+                  </p>
                 </div>
-                <ul className="text-sm text-zinc-300 space-y-1 ml-6 list-disc">
-                  <li>
-                    Your {currentPlan.name} access continues until{" "}
-                    {formatEffectiveDate(preview.effective_at)}
-                  </li>
-                  <li>
-                    On {formatEffectiveDate(preview.effective_at)}, you'll be
-                    charged {formatPrice(newPlan.price_cents, newPlan.currency)}{" "}
-                    for {newPlan.name}
-                  </li>
-                  <li>No refund for the current billing period</li>
-                </ul>
               </div>
             )}
 
@@ -446,12 +412,6 @@ export function PlanChangeModal({
           </div>
         );
     }
-  };
-
-  const getTitle = () => {
-    if (isUpgrade) return `Upgrade to ${newPlan.name}`;
-    if (isLateral) return `Change to ${newPlan.name}`;
-    return `Downgrade to ${newPlan.name}`;
   };
 
   return (
