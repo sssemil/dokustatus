@@ -23,6 +23,7 @@ use crate::{
         payment_status::PaymentStatus, user_subscription::SubscriptionStatus,
     },
     infra::crypto::ProcessCipher,
+    infra::stripe_client::StripeClient,
 };
 
 use super::domain::DomainRepoTrait;
@@ -702,6 +703,64 @@ impl DomainBillingUseCases {
             external_price_id: plan.stripe_price_id.clone(),
             external_product_id: plan.stripe_product_id.clone(),
         }
+    }
+
+    /// Ensure a plan has Stripe product and price IDs, creating them lazily if needed.
+    /// This is used during checkout and plan changes to auto-create Stripe resources.
+    async fn ensure_stripe_ids(
+        &self,
+        domain_id: Uuid,
+        plan: SubscriptionPlanProfile,
+    ) -> AppResult<SubscriptionPlanProfile> {
+        if plan.stripe_product_id.is_some() && plan.stripe_price_id.is_some() {
+            return Ok(plan);
+        }
+
+        let secret_key = self.get_stripe_secret_key(domain_id).await?;
+        let stripe = StripeClient::new(secret_key);
+
+        // Create product if needed
+        let product_id = match &plan.stripe_product_id {
+            Some(id) => id.clone(),
+            None => {
+                let product = stripe
+                    .create_product(&plan.name, plan.description.as_deref())
+                    .await?;
+                product.id
+            }
+        };
+
+        // Create price if needed
+        let price_id = match &plan.stripe_price_id {
+            Some(id) => id.clone(),
+            None => {
+                let stripe_interval = match plan.interval.as_str() {
+                    "monthly" => "month",
+                    "yearly" => "year",
+                    other => other,
+                };
+                let price = stripe
+                    .create_price(
+                        &product_id,
+                        plan.price_cents as i64,
+                        &plan.currency,
+                        stripe_interval,
+                        plan.interval_count,
+                    )
+                    .await?;
+                price.id
+            }
+        };
+
+        // Persist to DB
+        self.set_stripe_ids(plan.id, &product_id, &price_id).await?;
+
+        // Return updated plan
+        Ok(SubscriptionPlanProfile {
+            stripe_product_id: Some(product_id),
+            stripe_price_id: Some(price_id),
+            ..plan
+        })
     }
 
     // ========================================================================
@@ -1481,6 +1540,9 @@ impl DomainBillingUseCases {
                     "Cannot preview change for manually granted subscription".into(),
                 ))?;
 
+        // Ensure new plan has Stripe IDs (lazy creation like checkout)
+        let new_plan = self.ensure_stripe_ids(domain_id, new_plan).await?;
+
         // Get provider and call preview
         let provider = self.get_active_provider(domain_id).await?;
         let subscription_id = SubscriptionId::new(stripe_subscription_id);
@@ -1555,6 +1617,9 @@ impl DomainBillingUseCases {
                 .ok_or(AppError::InvalidInput(
                     "Cannot change plan for manually granted subscription".into(),
                 ))?;
+
+        // Ensure new plan has Stripe IDs (lazy creation like checkout)
+        let new_plan = self.ensure_stripe_ids(domain_id, new_plan).await?;
 
         // Get provider
         let provider = self.get_active_provider(domain_id).await?;
