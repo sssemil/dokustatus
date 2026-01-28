@@ -23,7 +23,6 @@ use crate::{
         payment_status::PaymentStatus, user_subscription::SubscriptionStatus,
     },
     infra::crypto::ProcessCipher,
-    infra::stripe_client::StripeClient,
 };
 
 use super::domain::DomainRepoTrait;
@@ -707,6 +706,7 @@ impl DomainBillingUseCases {
 
     /// Ensure a plan has Stripe product and price IDs, creating them lazily if needed.
     /// This is used during checkout and plan changes to auto-create Stripe resources.
+    /// Uses the active payment provider (Stripe or Dummy) via the provider factory.
     async fn ensure_stripe_ids(
         &self,
         domain_id: Uuid,
@@ -716,41 +716,10 @@ impl DomainBillingUseCases {
             return Ok(plan);
         }
 
-        let secret_key = self.get_stripe_secret_key(domain_id).await?;
-        let stripe = StripeClient::new(secret_key);
-
-        // Create product if needed
-        let product_id = match &plan.stripe_product_id {
-            Some(id) => id.clone(),
-            None => {
-                let product = stripe
-                    .create_product(&plan.name, plan.description.as_deref())
-                    .await?;
-                product.id
-            }
-        };
-
-        // Create price if needed
-        let price_id = match &plan.stripe_price_id {
-            Some(id) => id.clone(),
-            None => {
-                let stripe_interval = match plan.interval.as_str() {
-                    "monthly" => "month",
-                    "yearly" => "year",
-                    other => other,
-                };
-                let price = stripe
-                    .create_price(
-                        &product_id,
-                        plan.price_cents as i64,
-                        &plan.currency,
-                        stripe_interval,
-                        plan.interval_count,
-                    )
-                    .await?;
-                price.id
-            }
-        };
+        // Use the active provider (Stripe in production, Dummy in tests)
+        let provider = self.get_active_provider(domain_id).await?;
+        let plan_info = Self::plan_to_port_info(&plan);
+        let (product_id, price_id) = provider.ensure_product_and_price(&plan_info).await?;
 
         // Persist to DB
         self.set_stripe_ids(plan.id, &product_id, &price_id).await?;
@@ -7833,6 +7802,327 @@ mod billing_integration_tests {
 
         assert!(
             matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Cannot switch between"))
+        );
+    }
+
+    // ========================================================================
+    // ensure_stripe_ids Tests (uses provider abstraction)
+    // ========================================================================
+
+    /// Helper to create test use cases with access to enabled_providers_repo for provider setup.
+    fn create_test_use_cases_with_providers() -> (
+        DomainBillingUseCases,
+        Arc<InMemoryDomainRepo>,
+        Arc<InMemorySubscriptionPlanRepo>,
+        Arc<InMemoryUserSubscriptionRepo>,
+        Arc<InMemorySubscriptionEventRepo>,
+        Arc<InMemoryEnabledPaymentProvidersRepo>,
+    ) {
+        let domain_repo = Arc::new(InMemoryDomainRepo::new());
+        let stripe_config_repo = Arc::new(InMemoryBillingStripeConfigRepo::new());
+        let enabled_providers_repo = Arc::new(InMemoryEnabledPaymentProvidersRepo::new());
+        let plan_repo = Arc::new(InMemorySubscriptionPlanRepo::new());
+        let subscription_repo =
+            Arc::new(InMemoryUserSubscriptionRepo::new().with_plan_repo(plan_repo.clone()));
+        let event_repo = Arc::new(InMemorySubscriptionEventRepo::new());
+        let payment_repo = Arc::new(InMemoryBillingPaymentRepo::new());
+
+        let cipher = ProcessCipher::new_from_base64(TEST_KEY_B64).unwrap();
+        let factory = Arc::new(PaymentProviderFactory::new(
+            cipher.clone(),
+            stripe_config_repo.clone() as Arc<dyn BillingStripeConfigRepoTrait>,
+        ));
+
+        let use_cases = DomainBillingUseCases::new(
+            domain_repo.clone() as Arc<dyn super::super::domain::DomainRepoTrait>,
+            stripe_config_repo as Arc<dyn BillingStripeConfigRepoTrait>,
+            enabled_providers_repo.clone() as Arc<dyn EnabledPaymentProvidersRepoTrait>,
+            plan_repo.clone() as Arc<dyn SubscriptionPlanRepoTrait>,
+            subscription_repo.clone() as Arc<dyn UserSubscriptionRepoTrait>,
+            event_repo.clone() as Arc<dyn SubscriptionEventRepoTrait>,
+            payment_repo as Arc<dyn BillingPaymentRepoTrait>,
+            cipher,
+            factory,
+        );
+
+        (
+            use_cases,
+            domain_repo,
+            plan_repo,
+            subscription_repo,
+            event_repo,
+            enabled_providers_repo,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_ensure_stripe_ids_skips_when_ids_present() {
+        let (use_cases, domain_repo, plan_repo, _, _, enabled_providers_repo) =
+            create_test_use_cases_with_providers();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Enable Dummy provider for this domain
+        enabled_providers_repo
+            .enable(domain.id, PaymentProvider::Dummy, PaymentMode::Test, 0)
+            .await
+            .unwrap();
+
+        // Create a plan WITH existing Stripe IDs
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.stripe_product_id = Some("prod_existing".to_string());
+            p.stripe_price_id = Some("price_existing".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        // Call ensure_stripe_ids - should return early without changing anything
+        let result = use_cases.ensure_stripe_ids(domain.id, plan.clone()).await;
+
+        assert!(result.is_ok());
+        let returned_plan = result.unwrap();
+
+        // IDs should remain unchanged (the originals)
+        assert_eq!(
+            returned_plan.stripe_product_id,
+            Some("prod_existing".to_string())
+        );
+        assert_eq!(
+            returned_plan.stripe_price_id,
+            Some("price_existing".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ensure_stripe_ids_creates_ids_when_missing() {
+        let (use_cases, domain_repo, plan_repo, _, _, enabled_providers_repo) =
+            create_test_use_cases_with_providers();
+
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Enable Dummy provider for this domain
+        enabled_providers_repo
+            .enable(domain.id, PaymentProvider::Dummy, PaymentMode::Test, 0)
+            .await
+            .unwrap();
+
+        // Create a plan WITHOUT Stripe IDs
+        let plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.stripe_product_id = None;
+            p.stripe_price_id = None;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(plan.id, plan.clone());
+
+        // Call ensure_stripe_ids - should create IDs via DummyPaymentClient
+        let result = use_cases.ensure_stripe_ids(domain.id, plan.clone()).await;
+
+        assert!(result.is_ok());
+        let returned_plan = result.unwrap();
+
+        // IDs should now be set (DummyPaymentClient returns "dummy_prod_{id}" and "dummy_price_{id}")
+        assert!(returned_plan.stripe_product_id.is_some());
+        assert!(returned_plan.stripe_price_id.is_some());
+
+        // Verify IDs were persisted to the repository
+        let stored_plan = plan_repo.plans.lock().unwrap().get(&plan.id).cloned();
+        assert!(stored_plan.is_some());
+        let stored_plan = stored_plan.unwrap();
+        assert!(stored_plan.stripe_product_id.is_some());
+        assert!(stored_plan.stripe_price_id.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_preview_plan_change_creates_stripe_ids_when_missing() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _, enabled_providers_repo) =
+            create_test_use_cases_with_providers();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Enable Dummy provider for this domain
+        enabled_providers_repo
+            .enable(domain.id, PaymentProvider::Dummy, PaymentMode::Test, 0)
+            .await
+            .unwrap();
+
+        // Create current plan WITH Stripe IDs (user is subscribed to this)
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.price_cents = 999;
+            p.stripe_product_id = Some("prod_existing".to_string());
+            p.stripe_price_id = Some("price_existing".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        // Create target plan WITHOUT Stripe IDs
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+            p.price_cents = 1999;
+            p.stripe_product_id = None;
+            p.stripe_price_id = None;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        // Create subscription for user on current plan
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        // Act: preview plan change to the plan without Stripe IDs
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        // Assert: Should succeed (Stripe IDs auto-created via DummyPaymentClient)
+        assert!(result.is_ok());
+
+        // Verify the target plan now has Stripe IDs in repository
+        let updated_plan = plan_repo.plans.lock().unwrap().get(&new_plan.id).cloned();
+        assert!(updated_plan.is_some());
+        let updated_plan = updated_plan.unwrap();
+        assert!(
+            updated_plan.stripe_product_id.is_some(),
+            "stripe_product_id should be set after preview_plan_change"
+        );
+        assert!(
+            updated_plan.stripe_price_id.is_some(),
+            "stripe_price_id should be set after preview_plan_change"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_change_plan_creates_stripe_ids_when_missing() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _, enabled_providers_repo) =
+            create_test_use_cases_with_providers();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        // Enable Dummy provider for this domain
+        enabled_providers_repo
+            .enable(domain.id, PaymentProvider::Dummy, PaymentMode::Test, 0)
+            .await
+            .unwrap();
+
+        // Create current plan WITH Stripe IDs (user is subscribed to this)
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.price_cents = 999;
+            p.stripe_product_id = Some("prod_existing".to_string());
+            p.stripe_price_id = Some("price_existing".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        // Create target plan WITHOUT Stripe IDs
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+            p.price_cents = 1999;
+            p.stripe_product_id = None;
+            p.stripe_price_id = None;
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        // Create subscription for user on current plan
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Active;
+            s.stripe_subscription_id = Some("sub_test123".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        // Act: change plan to the plan without Stripe IDs
+        let result = use_cases.change_plan(domain.id, user_id, "premium").await;
+
+        // Assert: Should succeed (Stripe IDs auto-created via DummyPaymentClient)
+        assert!(result.is_ok());
+
+        // Verify the target plan now has Stripe IDs in repository
+        let updated_plan = plan_repo.plans.lock().unwrap().get(&new_plan.id).cloned();
+        assert!(updated_plan.is_some());
+        let updated_plan = updated_plan.unwrap();
+        assert!(
+            updated_plan.stripe_product_id.is_some(),
+            "stripe_product_id should be set after change_plan"
+        );
+        assert!(
+            updated_plan.stripe_price_id.is_some(),
+            "stripe_price_id should be set after change_plan"
         );
     }
 }
