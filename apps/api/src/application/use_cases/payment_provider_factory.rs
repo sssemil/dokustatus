@@ -22,6 +22,8 @@ use super::domain_billing::BillingStripeConfigRepoTrait;
 pub struct PaymentProviderFactory {
     cipher: ProcessCipher,
     config_repo: Arc<dyn BillingStripeConfigRepoTrait>,
+    #[cfg(test)]
+    test_provider_override: Option<Arc<dyn PaymentProviderPort>>,
 }
 
 impl PaymentProviderFactory {
@@ -29,7 +31,15 @@ impl PaymentProviderFactory {
         Self {
             cipher,
             config_repo,
+            #[cfg(test)]
+            test_provider_override: None,
         }
+    }
+
+    #[cfg(test)]
+    pub fn with_provider_override(mut self, provider: Arc<dyn PaymentProviderPort>) -> Self {
+        self.test_provider_override = Some(provider);
+        self
     }
 
     /// Get a payment provider instance for the given domain, provider, and mode.
@@ -52,6 +62,11 @@ impl PaymentProviderFactory {
         provider: PaymentProvider,
         mode: PaymentMode,
     ) -> AppResult<Arc<dyn PaymentProviderPort>> {
+        #[cfg(test)]
+        if let Some(ref override_provider) = self.test_provider_override {
+            return Ok(override_provider.clone());
+        }
+
         // Validate that the provider supports this mode
         if !provider.supports_mode(mode) {
             return Err(AppError::InvalidInput(format!(

@@ -8511,4 +8511,523 @@ mod billing_integration_tests {
             "stripe_price_id should be set after change_plan"
         );
     }
+
+    // ========================================================================
+    // Trial billing cycle reset tests
+    // ========================================================================
+
+    fn create_test_use_cases_trialing() -> (
+        DomainBillingUseCases,
+        Arc<InMemoryDomainRepo>,
+        Arc<InMemorySubscriptionPlanRepo>,
+        Arc<InMemoryUserSubscriptionRepo>,
+        Arc<InMemorySubscriptionEventRepo>,
+    ) {
+        use crate::infra::dummy_payment_client::DummyPaymentClient;
+
+        let domain_repo = Arc::new(InMemoryDomainRepo::new());
+        let stripe_config_repo = Arc::new(InMemoryBillingStripeConfigRepo::new());
+        let enabled_providers_repo = Arc::new(InMemoryEnabledPaymentProvidersRepo::new());
+        let plan_repo = Arc::new(InMemorySubscriptionPlanRepo::new());
+        let subscription_repo =
+            Arc::new(InMemoryUserSubscriptionRepo::new().with_plan_repo(plan_repo.clone()));
+        let event_repo = Arc::new(InMemorySubscriptionEventRepo::new());
+        let payment_repo = Arc::new(InMemoryBillingPaymentRepo::new());
+
+        let cipher = ProcessCipher::new_from_base64(TEST_KEY_B64).unwrap();
+        let trialing_provider = Arc::new(DummyPaymentClient::new_trialing());
+        let factory = Arc::new(
+            PaymentProviderFactory::new(
+                cipher.clone(),
+                stripe_config_repo.clone() as Arc<dyn BillingStripeConfigRepoTrait>,
+            )
+            .with_provider_override(trialing_provider),
+        );
+
+        let use_cases = DomainBillingUseCases::new(
+            domain_repo.clone() as Arc<dyn super::super::domain::DomainRepoTrait>,
+            stripe_config_repo as Arc<dyn BillingStripeConfigRepoTrait>,
+            enabled_providers_repo as Arc<dyn EnabledPaymentProvidersRepoTrait>,
+            plan_repo.clone() as Arc<dyn SubscriptionPlanRepoTrait>,
+            subscription_repo.clone() as Arc<dyn UserSubscriptionRepoTrait>,
+            event_repo.clone() as Arc<dyn SubscriptionEventRepoTrait>,
+            payment_repo as Arc<dyn BillingPaymentRepoTrait>,
+            cipher,
+            factory,
+        );
+
+        (
+            use_cases,
+            domain_repo,
+            plan_repo,
+            subscription_repo,
+            event_repo,
+        )
+    }
+
+    #[tokio::test]
+    async fn test_preview_trial_upgrade_charges_full_new_price() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) =
+            create_test_use_cases_trialing();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.price_cents = 1000;
+            p.interval = "monthly".to_string();
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_basic".to_string());
+            p.stripe_price_id = Some("price_basic".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+            p.price_cents = 5000;
+            p.interval = "monthly".to_string();
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_premium".to_string());
+            p.stripe_price_id = Some("price_premium".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Trialing;
+            s.stripe_subscription_id = Some("sub_trial".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let preview = result.unwrap();
+        assert_eq!(preview.change_type, PlanChangeType::Upgrade);
+        assert_eq!(
+            preview.prorated_amount_cents, 5000,
+            "Trial upgrade should charge full new plan price, not prorated"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preview_trial_downgrade_charges_full_new_price_and_is_immediate() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) =
+            create_test_use_cases_trialing();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+            p.price_cents = 5000;
+            p.interval = "monthly".to_string();
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_premium".to_string());
+            p.stripe_price_id = Some("price_premium".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.price_cents = 1000;
+            p.interval = "monthly".to_string();
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_basic".to_string());
+            p.stripe_price_id = Some("price_basic".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Trialing;
+            s.stripe_subscription_id = Some("sub_trial".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "basic")
+            .await;
+
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let preview = result.unwrap();
+        assert_eq!(preview.change_type, PlanChangeType::Downgrade);
+        assert_eq!(
+            preview.prorated_amount_cents, 1000,
+            "Trial downgrade should charge full new plan price, not prorated"
+        );
+        // Trial changes are always immediate — effective_at should be close to now and before period_end
+        let now = Utc::now().timestamp();
+        assert!(
+            (preview.effective_at - now).abs() < 5,
+            "Trial downgrade effective_at should be ~now, got {} vs now {}",
+            preview.effective_at,
+            now,
+        );
+        assert!(
+            preview.effective_at < preview.period_end,
+            "Trial downgrade effective_at ({}) should be before period_end ({})",
+            preview.effective_at,
+            preview.period_end,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preview_trial_period_end_is_now_plus_monthly_interval() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) =
+            create_test_use_cases_trialing();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.price_cents = 1000;
+            p.interval = "monthly".to_string();
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_basic".to_string());
+            p.stripe_price_id = Some("price_basic".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+            p.price_cents = 5000;
+            p.interval = "monthly".to_string();
+            p.interval_count = 1;
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_premium".to_string());
+            p.stripe_price_id = Some("price_premium".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Trialing;
+            s.stripe_subscription_id = Some("sub_trial".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let preview = result.unwrap();
+        let now = Utc::now().timestamp();
+        // period_end should be roughly now + 1 month (~30 days = ~2592000 seconds)
+        let expected_min = now + 28 * 86400; // 28 days
+        let expected_max = now + 32 * 86400; // 32 days
+        assert!(
+            preview.period_end >= expected_min && preview.period_end <= expected_max,
+            "Trial preview period_end should be ~1 month from now, got {} (expected between {} and {})",
+            preview.period_end,
+            expected_min,
+            expected_max,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preview_trial_period_end_is_now_plus_yearly_interval() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) =
+            create_test_use_cases_trialing();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.price_cents = 1000;
+            p.interval = "monthly".to_string();
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_basic".to_string());
+            p.stripe_price_id = Some("price_basic".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "yearly_premium".to_string();
+            p.price_cents = 50000;
+            p.interval = "yearly".to_string();
+            p.interval_count = 1;
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_yearly".to_string());
+            p.stripe_price_id = Some("price_yearly".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Trialing;
+            s.stripe_subscription_id = Some("sub_trial".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "yearly_premium")
+            .await;
+
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let preview = result.unwrap();
+        let now = Utc::now().timestamp();
+        // period_end should be roughly now + 12 months (~365 days = ~31536000 seconds)
+        let expected_min = now + 360 * 86400;
+        let expected_max = now + 370 * 86400;
+        assert!(
+            preview.period_end >= expected_min && preview.period_end <= expected_max,
+            "Trial preview period_end should be ~1 year from now, got {} (expected between {} and {})",
+            preview.period_end,
+            expected_min,
+            expected_max,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preview_trial_includes_trial_ending_warning() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) =
+            create_test_use_cases_trialing();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.price_cents = 1000;
+            p.interval = "monthly".to_string();
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_basic".to_string());
+            p.stripe_price_id = Some("price_basic".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "premium".to_string();
+            p.price_cents = 5000;
+            p.interval = "monthly".to_string();
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_premium".to_string());
+            p.stripe_price_id = Some("price_premium".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Trialing;
+            s.stripe_subscription_id = Some("sub_trial".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "premium")
+            .await;
+
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let preview = result.unwrap();
+        assert!(
+            preview.warnings.iter().any(|w| w.contains("trial")),
+            "Trial plan change should include a warning about trial ending, got: {:?}",
+            preview.warnings,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_preview_trial_period_end_respects_interval_count() {
+        let (use_cases, domain_repo, plan_repo, subscription_repo, _) =
+            create_test_use_cases_trialing();
+
+        let owner_id = Uuid::new_v4();
+        let user_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.active_payment_mode = PaymentMode::Test;
+        });
+        domain_repo
+            .domains
+            .lock()
+            .unwrap()
+            .insert(domain.id, domain.clone());
+
+        let current_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "basic".to_string();
+            p.price_cents = 1000;
+            p.interval = "monthly".to_string();
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_basic".to_string());
+            p.stripe_price_id = Some("price_basic".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(current_plan.id, current_plan.clone());
+
+        // Quarterly plan: 3 months
+        let new_plan = create_test_plan(domain.id, |p| {
+            p.payment_mode = PaymentMode::Test;
+            p.code = "quarterly".to_string();
+            p.price_cents = 2500;
+            p.interval = "monthly".to_string();
+            p.interval_count = 3;
+            p.is_public = true;
+            p.stripe_product_id = Some("prod_quarterly".to_string());
+            p.stripe_price_id = Some("price_quarterly".to_string());
+        });
+        plan_repo
+            .plans
+            .lock()
+            .unwrap()
+            .insert(new_plan.id, new_plan.clone());
+
+        let subscription = create_test_subscription(domain.id, user_id, current_plan.id, |s| {
+            s.payment_mode = PaymentMode::Test;
+            s.status = SubscriptionStatus::Trialing;
+            s.stripe_subscription_id = Some("sub_trial".to_string());
+        });
+        subscription_repo
+            .subscriptions
+            .lock()
+            .unwrap()
+            .insert(subscription.id, subscription.clone());
+
+        let result = use_cases
+            .preview_plan_change(domain.id, user_id, "quarterly")
+            .await;
+
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let preview = result.unwrap();
+        assert_eq!(
+            preview.prorated_amount_cents, 2500,
+            "Trial change to quarterly should charge full price"
+        );
+        let now = Utc::now().timestamp();
+        // period_end should be roughly now + 3 months (~90 days)
+        let expected_min = now + 85 * 86400;
+        let expected_max = now + 95 * 86400;
+        assert!(
+            preview.period_end >= expected_min && preview.period_end <= expected_max,
+            "Trial preview period_end should be ~3 months from now, got {} (expected between {} and {})",
+            preview.period_end,
+            expected_min,
+            expected_max,
+        );
+    }
 }

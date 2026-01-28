@@ -34,11 +34,18 @@ use crate::{
 /// any external API calls. It supports different payment scenarios to
 /// test various outcomes (success, decline, 3DS, etc.).
 #[derive(Clone)]
-pub struct DummyPaymentClient;
+pub struct DummyPaymentClient {
+    trialing: bool,
+}
 
 impl DummyPaymentClient {
     pub fn new(_domain_id: Uuid) -> Self {
-        Self
+        Self { trialing: false }
+    }
+
+    #[cfg(test)]
+    pub fn new_trialing() -> Self {
+        Self { trialing: true }
     }
 
     /// Generate a deterministic customer ID
@@ -307,14 +314,24 @@ impl PaymentProviderPort for DummyPaymentClient {
         let period_start = now - Duration::days(15);
         let period_end = period_start + Duration::days(30);
 
+        let (status, trial_start, trial_end) = if self.trialing {
+            (
+                SubscriptionStatus::Trialing,
+                Some(period_start),
+                Some(period_end),
+            )
+        } else {
+            (SubscriptionStatus::Active, None, None)
+        };
+
         Ok(Some(SubscriptionInfo {
             subscription_id: subscription_id.clone(),
             customer_id: CustomerId::new("dummy_cus"),
-            status: SubscriptionStatus::Active,
+            status,
             current_period_start: Some(period_start),
             current_period_end: Some(period_end),
-            trial_start: None,
-            trial_end: None,
+            trial_start,
+            trial_end,
             cancel_at_period_end: false,
             canceled_at: None,
             price_id: None,
