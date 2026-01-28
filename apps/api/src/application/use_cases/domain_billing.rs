@@ -1574,10 +1574,8 @@ impl DomainBillingUseCases {
         let now = Utc::now();
 
         // Determine if subscription is on trial
-        let is_trial = sub_info
-            .trial_end
-            .map(|te| te > now)
-            .unwrap_or(false);
+        let is_trial = sub_info.trial_end.map(|te| te > now).unwrap_or(false)
+            || sub_info.status == SubscriptionStatus::Trialing;
 
         // Calculate proration internally (provider-agnostic)
         let current_price_cents = current_plan.price_cents as i64;
@@ -1697,12 +1695,12 @@ impl DomainBillingUseCases {
 
         // Determine if subscription is on trial from provider (authoritative source)
         let now = Utc::now();
-        let sub_info = provider.get_subscription(&subscription_id).await?;
-        let is_trial = sub_info
-            .as_ref()
-            .and_then(|s| s.trial_end)
-            .map(|te| te > now)
-            .unwrap_or(false);
+        let sub_info = provider
+            .get_subscription(&subscription_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        let is_trial = sub_info.trial_end.map(|te| te > now).unwrap_or(false)
+            || sub_info.status == SubscriptionStatus::Trialing;
 
         let plan_info = Self::plan_to_port_info(&new_plan);
 
