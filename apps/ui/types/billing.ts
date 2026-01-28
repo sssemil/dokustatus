@@ -348,7 +348,7 @@ export function formatPaymentDateTime(timestamp: number | null): string {
 // Plan Change Types (Upgrade/Downgrade)
 // ============================================================================
 
-export type PlanChangeType = "upgrade" | "downgrade";
+export type PlanChangeType = "upgrade" | "downgrade" | "lateral";
 
 export interface PlanChangePreview {
   prorated_amount_cents: number;
@@ -358,6 +358,7 @@ export interface PlanChangePreview {
   new_plan_price_cents: number;
   change_type: PlanChangeType;
   effective_at: number; // Unix timestamp
+  warnings: string[];
 }
 
 export interface PlanChangeNewPlan {
@@ -390,7 +391,14 @@ export interface PlanChangeResult {
 
 // Plan change helper functions
 export function getPlanChangeTypeLabel(changeType: PlanChangeType): string {
-  return changeType === "upgrade" ? "Upgrade" : "Downgrade";
+  switch (changeType) {
+    case "upgrade":
+      return "Upgrade";
+    case "downgrade":
+      return "Downgrade";
+    case "lateral":
+      return "Change Plan";
+  }
 }
 
 export function formatEffectiveDate(timestamp: number): string {

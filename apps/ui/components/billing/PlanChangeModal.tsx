@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { loadStripe } from "@stripe/stripe-js";
-import { Modal, Button, Badge } from "@/components/ui";
+import { Modal, Button } from "@/components/ui";
 import {
   PlanChangePreview,
   PlanChangeResult,
@@ -13,9 +13,10 @@ import {
   AlertTriangle,
   ArrowUp,
   ArrowDown,
+  ArrowLeftRight,
   Loader2,
   CreditCard,
-  ExternalLink,
+  Info,
 } from "lucide-react";
 
 interface Plan {
@@ -60,13 +61,20 @@ export function PlanChangeModal({
   const [result, setResult] = useState<PlanChangeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const isUpgrade = newPlan.price_cents > currentPlan.price_cents;
-  const changeType = isUpgrade ? "upgrade" : "downgrade";
+  const localIsUpgrade = newPlan.price_cents > currentPlan.price_cents;
+
+  const isUpgrade = preview
+    ? preview.change_type === "upgrade"
+    : localIsUpgrade;
+  const isLateral = preview?.change_type === "lateral";
+  const isScheduled = preview
+    ? preview.effective_at === preview.period_end
+    : false;
+  const isImmediate = preview ? !isScheduled : false;
 
   // Fetch preview when modal opens
   useEffect(() => {
     if (!open) {
-      // Reset state when modal closes
       setState("loading");
       setPreview(null);
       setResult(null);
@@ -132,20 +140,16 @@ export function PlanChangeModal({
 
       setResult(data);
 
-      // Handle different outcomes
-      if (data.change_type === "downgrade") {
-        // Downgrade scheduled successfully
+      if (data.schedule_id) {
+        // Scheduled change (downgrade/lateral at period end)
         setState("success");
       } else if (data.payment_intent_status === "succeeded") {
-        // Upgrade completed immediately
         setState("success");
       } else if (
         data.payment_intent_status === "requires_action" &&
         data.client_secret
       ) {
-        // SCA/3DS required - use Stripe.js
         if (!stripePublishableKey) {
-          // Fallback to hosted invoice URL
           if (data.hosted_invoice_url) {
             window.location.href = data.hosted_invoice_url;
           } else {
@@ -157,7 +161,6 @@ export function PlanChangeModal({
 
         setState("requires_action");
 
-        // Load Stripe and confirm payment
         const stripe = await loadStripe(stripePublishableKey);
         if (!stripe) {
           setError("Failed to load payment processor");
@@ -176,13 +179,12 @@ export function PlanChangeModal({
           setState("success");
         }
       } else if (data.payment_intent_status === "requires_payment_method") {
-        // No valid payment method
         setError(
           "Your payment method was declined. Please update your payment method and try again.",
         );
         setState("error");
       } else {
-        // Unknown state - treat as success since request succeeded
+        // No schedule_id and no payment intent — immediate success ($0 or trial change)
         setState("success");
       }
     } catch {
@@ -196,6 +198,25 @@ export function PlanChangeModal({
       onSuccess();
     }
     onClose();
+  };
+
+  const getChangeIcon = () => {
+    if (isUpgrade) return <ArrowUp className="w-5 h-5 text-green-400" />;
+    if (isLateral)
+      return <ArrowLeftRight className="w-5 h-5 text-blue-400" />;
+    return <ArrowDown className="w-5 h-5 text-yellow-400" />;
+  };
+
+  const getChangeLabel = () => {
+    if (isUpgrade) return "Upgrade";
+    if (isLateral) return "Change";
+    return "Downgrade";
+  };
+
+  const getConfirmLabel = () => {
+    if (isUpgrade) return "Upgrade Now";
+    if (isLateral) return "Confirm Change";
+    return "Confirm Downgrade";
   };
 
   const renderContent = () => {
@@ -214,13 +235,9 @@ export function PlanChangeModal({
             {/* Change summary */}
             <div className="p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
               <div className="flex items-center gap-2 mb-3">
-                {isUpgrade ? (
-                  <ArrowUp className="w-5 h-5 text-green-400" />
-                ) : (
-                  <ArrowDown className="w-5 h-5 text-yellow-400" />
-                )}
+                {getChangeIcon()}
                 <span className="font-medium text-white">
-                  {isUpgrade ? "Upgrade" : "Downgrade"} to {newPlan.name}
+                  {getChangeLabel()} to {newPlan.name}
                 </span>
               </div>
 
@@ -242,6 +259,23 @@ export function PlanChangeModal({
                 </div>
               </div>
             </div>
+
+            {/* Warnings (shown for any change type) */}
+            {preview && preview.warnings.length > 0 && (
+              <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                <div className="flex items-center gap-2 mb-2">
+                  <AlertTriangle className="w-4 h-4 text-yellow-400" />
+                  <span className="font-medium text-yellow-300">
+                    Important
+                  </span>
+                </div>
+                <ul className="text-sm text-zinc-300 space-y-1 ml-6 list-disc">
+                  {preview.warnings.map((warning, i) => (
+                    <li key={i}>{warning}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
 
             {/* Upgrade specifics */}
             {isUpgrade && preview && (
@@ -267,8 +301,40 @@ export function PlanChangeModal({
               </div>
             )}
 
-            {/* Downgrade specifics */}
-            {!isUpgrade && preview && (
+            {/* Non-upgrade immediate (trial downgrade/lateral) */}
+            {!isUpgrade && preview && isImmediate && (
+              <div className="p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg space-y-2">
+                <div className="flex items-center gap-2">
+                  <Info className="w-4 h-4 text-blue-400" />
+                  <span className="font-medium text-blue-300">
+                    Immediate change
+                  </span>
+                </div>
+                <ul className="text-sm text-zinc-300 space-y-1 ml-6 list-disc">
+                  <li>
+                    Your plan will change immediately and you'll be billed right
+                    away
+                  </li>
+                  <li>
+                    You'll be charged{" "}
+                    {formatPrice(newPlan.price_cents, newPlan.currency)} for{" "}
+                    {newPlan.name}
+                  </li>
+                  {preview.prorated_amount_cents > 0 && (
+                    <li>
+                      Prorated amount:{" "}
+                      {formatPrice(
+                        preview.prorated_amount_cents,
+                        preview.currency,
+                      )}
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
+
+            {/* Non-upgrade scheduled (normal downgrade/lateral at period end) */}
+            {!isUpgrade && preview && isScheduled && (
               <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg space-y-2">
                 <div className="flex items-center gap-2">
                   <AlertTriangle className="w-4 h-4 text-yellow-400" />
@@ -301,7 +367,7 @@ export function PlanChangeModal({
                 onClick={handleConfirm}
                 className="flex-1"
               >
-                {isUpgrade ? "Upgrade Now" : "Confirm Downgrade"}
+                {getConfirmLabel()}
               </Button>
             </div>
           </div>
@@ -326,11 +392,11 @@ export function PlanChangeModal({
             <div className="p-4 bg-green-500/10 border border-green-500/30 rounded-lg text-center">
               <div className="text-green-400 text-4xl mb-2">✓</div>
               <p className="font-medium text-green-300">
-                {result?.change_type === "upgrade"
-                  ? "Plan upgraded successfully!"
-                  : "Plan change scheduled!"}
+                {result?.schedule_id
+                  ? "Plan change scheduled!"
+                  : "Plan changed successfully!"}
               </p>
-              {result?.change_type === "downgrade" && result.effective_at && (
+              {result?.schedule_id && result.effective_at && (
                 <p className="text-sm text-zinc-400 mt-2">
                   Your plan will change on{" "}
                   {formatEffectiveDate(result.effective_at)}
@@ -382,9 +448,11 @@ export function PlanChangeModal({
     }
   };
 
-  const title = isUpgrade
-    ? `Upgrade to ${newPlan.name}`
-    : `Downgrade to ${newPlan.name}`;
+  const getTitle = () => {
+    if (isUpgrade) return `Upgrade to ${newPlan.name}`;
+    if (isLateral) return `Change to ${newPlan.name}`;
+    return `Downgrade to ${newPlan.name}`;
+  };
 
   return (
     <Modal
@@ -394,7 +462,7 @@ export function PlanChangeModal({
           ? () => {}
           : handleClose
       }
-      title={title}
+      title={getTitle()}
       size="md"
     >
       {renderContent()}
