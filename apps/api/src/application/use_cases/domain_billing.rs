@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Months, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -1577,17 +1577,22 @@ impl DomainBillingUseCases {
         let is_trial = sub_info.trial_end.map(|te| te > now).unwrap_or(false)
             || sub_info.status == SubscriptionStatus::Trialing;
 
-        // Calculate proration internally (provider-agnostic)
+        // Calculate amount due
         let current_price_cents = current_plan.price_cents as i64;
         let new_price_cents = new_plan.price_cents as i64;
-        let prorated_amount = calculate_proration(
-            current_price_cents,
-            new_price_cents,
-            period_start,
-            period_end,
-            now,
-            is_trial,
-        );
+        let prorated_amount = if is_trial {
+            // Trial plan changes reset the billing cycle — full price, no proration
+            new_price_cents
+        } else {
+            calculate_proration(
+                current_price_cents,
+                new_price_cents,
+                period_start,
+                period_end,
+                now,
+                false,
+            )
+        };
 
         // Determine change type based on price
         // - Higher price = Upgrade (immediate)
@@ -1625,10 +1630,22 @@ impl DomainBillingUseCases {
             );
         }
 
+        // When on trial, billing cycle resets to now — compute new period end
+        let display_period_end = if is_trial {
+            let months = match new_plan.interval.as_str() {
+                "yearly" | "year" => (new_plan.interval_count * 12) as u32,
+                _ => new_plan.interval_count as u32,
+            };
+            now.checked_add_months(Months::new(months))
+                .unwrap_or(period_end)
+        } else {
+            period_end
+        };
+
         Ok(PlanChangePreview {
             prorated_amount_cents: prorated_amount,
             currency: current_plan.currency.clone(),
-            period_end: period_end.timestamp(),
+            period_end: display_period_end.timestamp(),
             new_plan_name: new_plan.name.clone(),
             new_plan_price_cents: new_price_cents,
             change_type,

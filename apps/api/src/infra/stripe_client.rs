@@ -298,6 +298,7 @@ impl StripeClient {
 
         if end_trial {
             params.push(("trial_end".to_string(), "now".to_string()));
+            params.push(("billing_cycle_anchor".to_string(), "now".to_string()));
         }
 
         let response = self
