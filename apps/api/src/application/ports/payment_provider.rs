@@ -153,25 +153,6 @@ pub enum PlanChangeType {
     Downgrade,
 }
 
-/// Preview of a plan change (proration info)
-#[derive(Debug, Clone, Serialize)]
-pub struct PlanChangePreview {
-    /// Prorated amount to charge (positive for upgrade, negative for credit)
-    pub prorated_amount_cents: i64,
-    /// Currency of the proration
-    pub currency: String,
-    /// End of current billing period
-    pub period_end: DateTime<Utc>,
-    /// New plan name
-    pub new_plan_name: String,
-    /// New plan price
-    pub new_plan_price_cents: i64,
-    /// Type of change
-    pub change_type: PlanChangeType,
-    /// When the change takes effect
-    pub effective_at: DateTime<Utc>,
-}
-
 /// Subscription status information
 #[derive(Debug, Clone, Serialize)]
 pub struct SubscriptionInfo {
@@ -301,13 +282,6 @@ pub trait PaymentProviderPort: Send + Sync {
         subscription_id: &SubscriptionId,
         at_period_end: bool,
     ) -> AppResult<()>;
-
-    /// Preview a plan change (proration calculation)
-    async fn preview_plan_change(
-        &self,
-        subscription_id: &SubscriptionId,
-        new_plan: &PlanInfo,
-    ) -> AppResult<PlanChangePreview>;
 
     /// Execute a plan change (upgrade or downgrade)
     async fn change_plan(

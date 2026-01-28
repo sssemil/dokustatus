@@ -266,40 +266,6 @@ impl StripeClient {
         }
     }
 
-    /// Preview the cost of upgrading/changing a subscription using Stripe's upcoming invoice API
-    pub async fn preview_subscription_change(
-        &self,
-        customer_id: &str,
-        subscription_id: &str,
-        subscription_item_id: &str,
-        new_price_id: &str,
-    ) -> AppResult<StripeUpcomingInvoice> {
-        let params: Vec<(&str, String)> = vec![
-            ("customer", customer_id.to_string()),
-            ("subscription", subscription_id.to_string()),
-            (
-                "subscription_items[0][id]",
-                subscription_item_id.to_string(),
-            ),
-            ("subscription_items[0][price]", new_price_id.to_string()),
-            (
-                "subscription_proration_behavior",
-                "always_invoice".to_string(),
-            ),
-        ];
-
-        let response = self
-            .client
-            .get(format!("{}/invoices/upcoming", STRIPE_API_BASE))
-            .header("Authorization", self.auth_header())
-            .query(&params)
-            .send()
-            .await
-            .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
-
-        self.handle_response(response).await
-    }
-
     /// Upgrade subscription immediately with proration
     pub async fn upgrade_subscription(
         &self,
@@ -903,36 +869,6 @@ impl StripeWebhookEvent {
     pub fn get_invoice(&self) -> Option<StripeInvoice> {
         serde_json::from_value(self.data.object.clone()).ok()
     }
-}
-
-// ============================================================================
-// Upcoming Invoice (for proration preview)
-// ============================================================================
-
-#[derive(Debug, Deserialize)]
-pub struct StripeUpcomingInvoice {
-    pub amount_due: i64,
-    pub amount_remaining: i64,
-    pub currency: String,
-    pub customer: String,
-    pub subscription: Option<String>,
-    pub lines: StripeInvoiceLines,
-    pub total: i64,
-    pub subtotal: i64,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct StripeInvoiceLines {
-    pub data: Vec<StripeInvoiceLine>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct StripeInvoiceLine {
-    pub id: String,
-    pub amount: i64,
-    pub description: Option<String>,
-    pub proration: bool,
-    pub price: Option<StripePrice>,
 }
 
 // ============================================================================

@@ -111,6 +111,7 @@ struct PlanChangePreviewResponse {
     new_plan_price_cents: i64,
     change_type: String,
     effective_at: i64,
+    warnings: Vec<String>,
 }
 
 /// Request body for plan change
@@ -518,6 +519,7 @@ async fn preview_plan_change(
         new_plan_price_cents: preview.new_plan_price_cents,
         change_type: preview.change_type.as_ref().to_string(),
         effective_at: preview.effective_at,
+        warnings: preview.warnings,
     }))
 }
 

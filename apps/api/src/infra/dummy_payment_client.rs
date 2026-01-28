@@ -19,8 +19,8 @@ use crate::{
     app_error::{AppError, AppResult},
     application::ports::payment_provider::{
         CheckoutResult, CheckoutUrls, CustomerId, CustomerInfo, InvoiceInfo, InvoicePdfResult,
-        PaymentProviderPort, PlanChangePreview, PlanChangeResult, PlanChangeType, PlanInfo,
-        SubscriptionId, SubscriptionInfo, SubscriptionResult,
+        PaymentProviderPort, PlanChangeResult, PlanChangeType, PlanInfo, SubscriptionId,
+        SubscriptionInfo, SubscriptionResult,
     },
     domain::entities::{
         payment_mode::PaymentMode, payment_provider::PaymentProvider,
@@ -301,10 +301,25 @@ impl PaymentProviderPort for DummyPaymentClient {
 
     async fn get_subscription(
         &self,
-        _subscription_id: &SubscriptionId,
+        subscription_id: &SubscriptionId,
     ) -> AppResult<Option<SubscriptionInfo>> {
-        tracing::trace!("Dummy provider: get_subscription not supported, use database");
-        Ok(None)
+        let now = Utc::now();
+        let period_start = now - Duration::days(15);
+        let period_end = period_start + Duration::days(30);
+
+        Ok(Some(SubscriptionInfo {
+            subscription_id: subscription_id.clone(),
+            customer_id: CustomerId::new("dummy_cus"),
+            status: SubscriptionStatus::Active,
+            current_period_start: Some(period_start),
+            current_period_end: Some(period_end),
+            trial_start: None,
+            trial_end: None,
+            cancel_at_period_end: false,
+            canceled_at: None,
+            price_id: None,
+            subscription_item_id: Some("dummy_si".to_string()),
+        }))
     }
 
     async fn cancel_subscription(
@@ -321,33 +336,6 @@ impl PaymentProviderPort for DummyPaymentClient {
         // Dummy provider just logs the cancellation
         // Actual state update happens in the database
         Ok(())
-    }
-
-    async fn preview_plan_change(
-        &self,
-        _subscription_id: &SubscriptionId,
-        new_plan: &PlanInfo,
-    ) -> AppResult<PlanChangePreview> {
-        let now = Utc::now();
-        let period_end = now + Duration::days(30);
-
-        // For dummy provider, just return a simple preview
-        // Assume current plan is cheaper (upgrade scenario)
-        let prorated_amount = (new_plan.price_cents / 2) as i64; // Simplified proration
-
-        Ok(PlanChangePreview {
-            prorated_amount_cents: prorated_amount,
-            currency: new_plan.currency.clone(),
-            period_end,
-            new_plan_name: new_plan.name.clone(),
-            new_plan_price_cents: new_plan.price_cents as i64,
-            change_type: if prorated_amount > 0 {
-                PlanChangeType::Upgrade
-            } else {
-                PlanChangeType::Downgrade
-            },
-            effective_at: now,
-        })
     }
 
     async fn change_plan(
@@ -491,7 +479,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_subscription_returns_none() {
+    async fn test_get_subscription_returns_synthetic_data() {
         let client = DummyPaymentClient::new(Uuid::new_v4());
 
         let result = client
@@ -499,7 +487,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert!(result.is_none());
+        assert!(result.is_some());
+        let info = result.unwrap();
+        assert_eq!(info.subscription_id.as_str(), "dummy_sub_test");
+        assert!(info.current_period_start.is_some());
+        assert!(info.current_period_end.is_some());
     }
 
     #[tokio::test]

@@ -60,6 +60,44 @@ fn calculate_monthly_amount_cents(price_cents: i64, interval: &str, interval_cou
     price_cents as f64 / divisor as f64
 }
 
+/// Calculates the prorated amount for a plan change (upgrade or downgrade).
+///
+/// Standard proration formula:
+/// - remaining_ratio = remaining_seconds / total_seconds
+/// - credit = current_price * remaining_ratio (0 if on trial)
+/// - charge = new_price * remaining_ratio
+/// - proration = charge - credit
+///
+/// For upgrades, result is positive (user pays the difference).
+/// For downgrades, result is negative (user would get credit, but we schedule instead).
+/// For trials, no credit is given since nothing was paid yet.
+fn calculate_proration(
+    current_price_cents: i64,
+    new_price_cents: i64,
+    period_start: DateTime<Utc>,
+    period_end: DateTime<Utc>,
+    now: DateTime<Utc>,
+    is_trial: bool,
+) -> i64 {
+    let total_seconds = (period_end - period_start).num_seconds() as f64;
+    let remaining_seconds = (period_end - now).num_seconds() as f64;
+
+    if total_seconds <= 0.0 || remaining_seconds <= 0.0 {
+        return 0;
+    }
+
+    let ratio = remaining_seconds / total_seconds;
+
+    let credit = if is_trial {
+        0.0
+    } else {
+        current_price_cents as f64 * ratio
+    };
+    let charge = new_price_cents as f64 * ratio;
+
+    (charge - credit).round() as i64
+}
+
 // ============================================================================
 // Profile Types
 // ============================================================================
@@ -348,6 +386,7 @@ pub struct PlanChangePreview {
     pub new_plan_price_cents: i64,
     pub change_type: PlanChangeType,
     pub effective_at: i64,
+    pub warnings: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1461,6 +1500,10 @@ impl DomainBillingUseCases {
     // ========================================================================
 
     /// Preview a plan change (proration calculation)
+    ///
+    /// Calculates proration internally (provider-agnostic) instead of relying on
+    /// provider-specific preview APIs which may fail for edge cases like
+    /// subscriptions with `cancel_at_period_end=true`.
     pub async fn preview_plan_change(
         &self,
         domain_id: Uuid,
@@ -1469,7 +1512,7 @@ impl DomainBillingUseCases {
     ) -> AppResult<PlanChangePreview> {
         let mode = self.get_active_mode(domain_id).await?;
 
-        // Get user's current subscription
+        // Get user's current subscription from local DB
         let sub = self
             .subscription_repo
             .get_by_user_and_mode(domain_id, mode, user_id)
@@ -1501,40 +1544,91 @@ impl DomainBillingUseCases {
         // Validate new plan
         self.validate_new_plan(&current_plan, &new_plan)?;
 
-        // Get subscription ID
-        let stripe_subscription_id =
+        // Get subscription ID for provider lookup
+        let external_subscription_id =
             sub.stripe_subscription_id
                 .as_ref()
                 .ok_or(AppError::InvalidInput(
                     "Cannot preview change for manually granted subscription".into(),
                 ))?;
 
-        // Ensure new plan has Stripe IDs (lazy creation like checkout)
+        // Ensure new plan has external IDs (lazy creation like checkout)
         let new_plan = self.ensure_stripe_ids(domain_id, new_plan).await?;
 
-        // Get provider and call preview
+        // Get subscription info from provider for period data
         let provider = self.get_active_provider(domain_id).await?;
-        let subscription_id = SubscriptionId::new(stripe_subscription_id);
-        let plan_info = Self::plan_to_port_info(&new_plan);
+        let subscription_id = SubscriptionId::new(external_subscription_id);
+        let sub_info = provider
+            .get_subscription(&subscription_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
 
-        let preview = provider
-            .preview_plan_change(&subscription_id, &plan_info)
-            .await?;
+        // Extract period info
+        let period_start = sub_info.current_period_start.ok_or(AppError::Internal(
+            "Subscription missing period start".into(),
+        ))?;
+        let period_end = sub_info.current_period_end.ok_or(AppError::Internal(
+            "Subscription missing period end".into(),
+        ))?;
+        let now = Utc::now();
 
-        // Convert port type to domain type
-        let change_type = match preview.change_type {
-            PortPlanChangeType::Upgrade => PlanChangeType::Upgrade,
-            PortPlanChangeType::Downgrade => PlanChangeType::Downgrade,
+        // Determine if subscription is on trial
+        let is_trial = sub_info
+            .trial_end
+            .map(|te| te > now)
+            .unwrap_or(false);
+
+        // Calculate proration internally (provider-agnostic)
+        let current_price_cents = current_plan.price_cents as i64;
+        let new_price_cents = new_plan.price_cents as i64;
+        let prorated_amount = calculate_proration(
+            current_price_cents,
+            new_price_cents,
+            period_start,
+            period_end,
+            now,
+            is_trial,
+        );
+
+        // Determine change type based on price
+        let change_type = if new_price_cents >= current_price_cents {
+            PlanChangeType::Upgrade
+        } else {
+            PlanChangeType::Downgrade
         };
 
+        // Effective date: upgrades are immediate, downgrades at period end
+        let effective_at = if change_type == PlanChangeType::Upgrade {
+            now
+        } else {
+            period_end
+        };
+
+        // Generate warnings based on subscription state
+        let mut warnings = Vec::new();
+
+        if sub_info.cancel_at_period_end {
+            warnings.push(
+                "If you proceed, your subscription will be reactivated (cancellation removed)."
+                    .to_string(),
+            );
+        }
+
+        if is_trial {
+            warnings.push(
+                "Your trial will end immediately and you will be charged.".to_string(),
+            );
+        }
+
         Ok(PlanChangePreview {
-            prorated_amount_cents: preview.prorated_amount_cents,
-            currency: preview.currency,
-            period_end: preview.period_end.timestamp(),
-            new_plan_name: preview.new_plan_name,
-            new_plan_price_cents: preview.new_plan_price_cents,
+            prorated_amount_cents: prorated_amount,
+            currency: current_plan.currency.clone(),
+            period_end: period_end.timestamp(),
+            new_plan_name: new_plan.name.clone(),
+            new_plan_price_cents: new_price_cents,
             change_type,
-            effective_at: preview.effective_at.timestamp(),
+            effective_at: effective_at.timestamp(),
+            warnings,
         })
     }
 
@@ -2369,6 +2463,207 @@ mod mrr_calculation_tests {
         assert_eq!(total.round() as i64, 991667);
 
         // Old integer math: 1000 * 991 = 991000 (loses $6.67)
+    }
+}
+
+#[cfg(test)]
+mod proration_calculation_tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn make_period(days: i64) -> (DateTime<Utc>, DateTime<Utc>) {
+        let start = Utc::now() - Duration::days(days / 2);
+        let end = start + Duration::days(days);
+        (start, end)
+    }
+
+    #[test]
+    fn test_upgrade_midway_through_period() {
+        // Upgrade from $20 to $100, 5 days used out of 30
+        let period_start = Utc::now() - Duration::days(5);
+        let period_end = period_start + Duration::days(30);
+        let now = Utc::now();
+
+        let result = calculate_proration(
+            2000, // $20 current
+            10000, // $100 new
+            period_start,
+            period_end,
+            now,
+            false, // not trial
+        );
+
+        // remaining = 25/30 = 0.833
+        // credit = 2000 * 0.833 = 1666.67
+        // charge = 10000 * 0.833 = 8333.33
+        // net = 8333.33 - 1666.67 = 6666.67 ≈ 6667
+        assert!(result > 6600 && result < 6700, "Expected ~6667, got {}", result);
+    }
+
+    #[test]
+    fn test_downgrade_midway_through_period() {
+        // Downgrade from $100 to $20, 5 days used out of 30
+        let period_start = Utc::now() - Duration::days(5);
+        let period_end = period_start + Duration::days(30);
+        let now = Utc::now();
+
+        let result = calculate_proration(
+            10000, // $100 current
+            2000,  // $20 new
+            period_start,
+            period_end,
+            now,
+            false,
+        );
+
+        // remaining = 25/30 = 0.833
+        // credit = 10000 * 0.833 = 8333.33
+        // charge = 2000 * 0.833 = 1666.67
+        // net = 1666.67 - 8333.33 = -6666.67 ≈ -6667 (negative = credit)
+        assert!(result < -6600 && result > -6700, "Expected ~-6667, got {}", result);
+    }
+
+    #[test]
+    fn test_upgrade_during_trial_no_credit() {
+        // During trial, user hasn't paid, so no credit for current plan
+        let period_start = Utc::now() - Duration::days(1);
+        let period_end = period_start + Duration::days(30);
+        let now = Utc::now();
+
+        let result = calculate_proration(
+            2000,  // $20 current (but on trial)
+            10000, // $100 new
+            period_start,
+            period_end,
+            now,
+            true, // ON TRIAL
+        );
+
+        // remaining = 29/30 = 0.967
+        // credit = 0 (trial)
+        // charge = 10000 * 0.967 = 9667
+        // net = 9667
+        assert!(result > 9600 && result < 9700, "Expected ~9667, got {}", result);
+    }
+
+    #[test]
+    fn test_same_price_no_proration() {
+        // Same price = 0 proration
+        let period_start = Utc::now() - Duration::days(5);
+        let period_end = period_start + Duration::days(30);
+        let now = Utc::now();
+
+        let result = calculate_proration(
+            2000, // $20
+            2000, // $20
+            period_start,
+            period_end,
+            now,
+            false,
+        );
+
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_period_already_ended_returns_zero() {
+        // If we're past period end, no proration
+        let period_start = Utc::now() - Duration::days(35);
+        let period_end = period_start + Duration::days(30); // ended 5 days ago
+        let now = Utc::now();
+
+        let result = calculate_proration(2000, 10000, period_start, period_end, now, false);
+
+        assert_eq!(result, 0);
+    }
+
+    #[test]
+    fn test_period_just_started_full_proration() {
+        // Right at start of period = full remaining time
+        let period_start = Utc::now();
+        let period_end = period_start + Duration::days(30);
+        let now = period_start + Duration::seconds(1); // 1 second in
+
+        let result = calculate_proration(
+            2000,
+            10000,
+            period_start,
+            period_end,
+            now,
+            false,
+        );
+
+        // Nearly full period remaining
+        // charge ≈ 10000, credit ≈ 2000, net ≈ 8000
+        assert!(result > 7900 && result < 8100, "Expected ~8000, got {}", result);
+    }
+
+    #[test]
+    fn test_period_about_to_end_minimal_proration() {
+        // Almost end of period = minimal proration
+        let period_start = Utc::now() - Duration::days(29);
+        let period_end = period_start + Duration::days(30);
+        let now = Utc::now(); // 1 day remaining
+
+        let result = calculate_proration(
+            2000,
+            10000,
+            period_start,
+            period_end,
+            now,
+            false,
+        );
+
+        // remaining = 1/30 = 0.033
+        // charge = 10000 * 0.033 = 333
+        // credit = 2000 * 0.033 = 67
+        // net = 333 - 67 = 267
+        assert!(result > 200 && result < 350, "Expected ~267, got {}", result);
+    }
+
+    #[test]
+    fn test_free_to_paid_upgrade() {
+        // Free plan ($0) to paid plan ($100)
+        let period_start = Utc::now() - Duration::days(15);
+        let period_end = period_start + Duration::days(30);
+        let now = Utc::now();
+
+        let result = calculate_proration(
+            0,     // Free plan
+            10000, // $100 new
+            period_start,
+            period_end,
+            now,
+            false,
+        );
+
+        // remaining = 15/30 = 0.5
+        // credit = 0 (free plan)
+        // charge = 10000 * 0.5 = 5000
+        assert_eq!(result, 5000);
+    }
+
+    #[test]
+    fn test_paid_to_free_downgrade() {
+        // Paid plan ($100) to free plan ($0)
+        let period_start = Utc::now() - Duration::days(15);
+        let period_end = period_start + Duration::days(30);
+        let now = Utc::now();
+
+        let result = calculate_proration(
+            10000, // $100 current
+            0,     // Free plan
+            period_start,
+            period_end,
+            now,
+            false,
+        );
+
+        // remaining = 15/30 = 0.5
+        // credit = 10000 * 0.5 = 5000
+        // charge = 0
+        // net = -5000 (credit)
+        assert_eq!(result, -5000);
     }
 }
 

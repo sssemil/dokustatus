@@ -7,8 +7,8 @@ use crate::{
     app_error::{AppError, AppResult},
     application::ports::payment_provider::{
         CheckoutResult, CheckoutUrls, CustomerId, CustomerInfo, InvoiceInfo, InvoicePdfResult,
-        PaymentProviderPort, PlanChangePreview, PlanChangeResult, PlanChangeType, PlanInfo,
-        SubscriptionId, SubscriptionInfo, SubscriptionResult,
+        PaymentProviderPort, PlanChangeResult, PlanChangeType, PlanInfo, SubscriptionId,
+        SubscriptionInfo, SubscriptionResult,
     },
     domain::entities::{
         payment_mode::PaymentMode, payment_provider::PaymentProvider,
@@ -211,65 +211,6 @@ impl PaymentProviderPort for StripePaymentAdapter {
             .cancel_subscription(subscription_id.as_str(), at_period_end)
             .await?;
         Ok(())
-    }
-
-    async fn preview_plan_change(
-        &self,
-        subscription_id: &SubscriptionId,
-        new_plan: &PlanInfo,
-    ) -> AppResult<PlanChangePreview> {
-        let sub = self
-            .client
-            .get_subscription(subscription_id.as_str())
-            .await?;
-
-        let subscription_item_id = sub
-            .subscription_item_id()
-            .ok_or_else(|| AppError::InvalidInput("No subscription item found".to_string()))?;
-
-        let new_price_id = new_plan.external_price_id.as_ref().ok_or_else(|| {
-            AppError::InvalidInput("New plan missing Stripe price ID".to_string())
-        })?;
-
-        let preview = self
-            .client
-            .preview_subscription_change(
-                &sub.customer,
-                subscription_id.as_str(),
-                &subscription_item_id,
-                new_price_id,
-            )
-            .await?;
-
-        // Determine if upgrade or downgrade based on price comparison
-        let current_amount = sub
-            .items
-            .data
-            .first()
-            .and_then(|item| item.price.unit_amount)
-            .unwrap_or(0);
-        let new_amount = new_plan.price_cents as i64;
-        let change_type = if new_amount > current_amount {
-            PlanChangeType::Upgrade
-        } else {
-            PlanChangeType::Downgrade
-        };
-
-        let effective_at = if change_type == PlanChangeType::Upgrade {
-            Utc::now()
-        } else {
-            Self::timestamp_to_datetime(sub.current_period_end)
-        };
-
-        Ok(PlanChangePreview {
-            prorated_amount_cents: preview.amount_due,
-            currency: preview.currency,
-            period_end: Self::timestamp_to_datetime(sub.current_period_end),
-            new_plan_name: new_plan.name.clone(),
-            new_plan_price_cents: new_plan.price_cents as i64,
-            change_type,
-            effective_at,
-        })
     }
 
     async fn change_plan(
