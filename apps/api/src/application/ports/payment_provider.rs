@@ -151,6 +151,8 @@ pub enum PlanChangeType {
     Upgrade,
     /// Scheduled change at period end
     Downgrade,
+    /// Same price, scheduled change at period end
+    Lateral,
 }
 
 /// Subscription status information

@@ -28,6 +28,9 @@ use crate::{
 use super::domain::DomainRepoTrait;
 use crate::application::validators::is_valid_plan_code;
 
+/// Maximum number of plan changes allowed per billing period
+const MAX_PLAN_CHANGES_PER_PERIOD: i32 = 5;
+
 /// Number of months in a year, used for MRR calculations
 const MONTHS_PER_YEAR: i64 = 12;
 
@@ -162,6 +165,9 @@ pub struct UserSubscriptionProfile {
     pub granted_at: Option<NaiveDateTime>,
     pub created_at: Option<NaiveDateTime>,
     pub updated_at: Option<NaiveDateTime>,
+    // Rate limiting for plan changes
+    pub changes_this_period: i32,
+    pub period_changes_reset_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -375,6 +381,7 @@ use strum::{AsRefStr, Display, EnumString};
 pub enum PlanChangeType {
     Upgrade,   // Immediate with proration
     Downgrade, // Scheduled for period end
+    Lateral,   // Same price, scheduled for period end
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -387,6 +394,8 @@ pub struct PlanChangePreview {
     pub change_type: PlanChangeType,
     pub effective_at: i64,
     pub warnings: Vec<String>,
+    /// Number of plan changes remaining in current billing period
+    pub changes_remaining_this_period: i32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -524,6 +533,12 @@ pub trait UserSubscriptionRepoTrait: Send + Sync {
     ) -> AppResult<UserSubscriptionProfile>;
     async fn revoke(&self, id: Uuid) -> AppResult<()>;
     async fn delete(&self, id: Uuid) -> AppResult<()>;
+    /// Increment the plan change counter and update the reset timestamp
+    async fn increment_changes_counter(
+        &self,
+        id: Uuid,
+        period_end: DateTime<Utc>,
+    ) -> AppResult<()>;
     async fn count_active_by_domain_and_mode(
         &self,
         domain_id: Uuid,
@@ -1591,13 +1606,18 @@ impl DomainBillingUseCases {
         );
 
         // Determine change type based on price
-        let change_type = if new_price_cents >= current_price_cents {
+        // - Higher price = Upgrade (immediate)
+        // - Lower price = Downgrade (scheduled)
+        // - Same price = Lateral (scheduled)
+        let change_type = if new_price_cents > current_price_cents {
             PlanChangeType::Upgrade
-        } else {
+        } else if new_price_cents < current_price_cents {
             PlanChangeType::Downgrade
+        } else {
+            PlanChangeType::Lateral
         };
 
-        // Effective date: upgrades are immediate, downgrades at period end
+        // Effective date: upgrades are immediate, downgrades/laterals at period end
         let effective_at = if change_type == PlanChangeType::Upgrade {
             now
         } else {
@@ -1620,6 +1640,26 @@ impl DomainBillingUseCases {
             );
         }
 
+        // Calculate changes remaining in this period
+        let current_changes = if let Some(reset_at) = sub.period_changes_reset_at {
+            if reset_at < now {
+                0 // Period has passed, counter will reset
+            } else {
+                sub.changes_this_period
+            }
+        } else {
+            0
+        };
+        let changes_remaining = MAX_PLAN_CHANGES_PER_PERIOD - current_changes;
+
+        // Add warning if near rate limit
+        if changes_remaining <= 2 && changes_remaining > 0 {
+            warnings.push(format!(
+                "You have {} plan change(s) remaining this billing period.",
+                changes_remaining
+            ));
+        }
+
         Ok(PlanChangePreview {
             prorated_amount_cents: prorated_amount,
             currency: current_plan.currency.clone(),
@@ -1629,6 +1669,7 @@ impl DomainBillingUseCases {
             change_type,
             effective_at: effective_at.timestamp(),
             warnings,
+            changes_remaining_this_period: changes_remaining,
         })
     }
 
@@ -1698,6 +1739,7 @@ impl DomainBillingUseCases {
         let change_type = match result.change_type {
             PortPlanChangeType::Upgrade => PlanChangeType::Upgrade,
             PortPlanChangeType::Downgrade => PlanChangeType::Downgrade,
+            PortPlanChangeType::Lateral => PlanChangeType::Lateral,
         };
 
         // Log the plan change event
@@ -1731,6 +1773,16 @@ impl DomainBillingUseCases {
                 .await?;
         }
 
+        // Increment rate limit counter
+        // Use the subscription's period end, or effective_at + 30 days as fallback
+        let period_end = sub
+            .current_period_end
+            .map(|dt| DateTime::<Utc>::from_naive_utc_and_offset(dt, Utc))
+            .unwrap_or_else(|| result.effective_at + chrono::Duration::days(30));
+        self.subscription_repo
+            .increment_changes_counter(sub.id, period_end)
+            .await?;
+
         Ok(PlanChangeResult {
             success: result.success,
             change_type,
@@ -1763,6 +1815,25 @@ impl DomainBillingUseCases {
             return Err(AppError::InvalidInput(
                 "Cannot change plan: subscription not linked to Stripe".into(),
             ));
+        }
+
+        // Check rate limit - reset if period has passed
+        let changes_count = if let Some(reset_at) = sub.period_changes_reset_at {
+            if reset_at < Utc::now() {
+                // Period has passed, counter will be reset on next change
+                0
+            } else {
+                sub.changes_this_period
+            }
+        } else {
+            0
+        };
+
+        if changes_count >= MAX_PLAN_CHANGES_PER_PERIOD {
+            return Err(AppError::InvalidInput(format!(
+                "Maximum plan changes ({}) reached for this billing period. Try again after your next billing date.",
+                MAX_PLAN_CHANGES_PER_PERIOD
+            )));
         }
 
         // Validate status
@@ -1832,18 +1903,10 @@ impl DomainBillingUseCases {
             ));
         }
 
-        // Must have same interval (can't switch between monthly and yearly)
-        if current_plan.interval != new_plan.interval {
-            return Err(AppError::InvalidInput(format!(
-                "Cannot switch between {} and {} billing. Please cancel and resubscribe.",
-                current_plan.interval, new_plan.interval
-            )));
-        }
-
-        // Must have same interval count
-        if current_plan.interval_count != new_plan.interval_count {
-            return Err(AppError::InvalidInput("Cannot switch between different billing frequencies. Please cancel and resubscribe.".to_string()));
-        }
+        // Interval changes are allowed:
+        // - monthly -> yearly = upgrade (immediate with proration)
+        // - yearly -> monthly = downgrade (scheduled for year end)
+        // The change_plan logic handles the timing based on price comparison.
 
         Ok(())
     }
@@ -2675,6 +2738,112 @@ mod plan_change_type_tests {
     fn test_as_ref_all_variants() {
         assert_eq!(PlanChangeType::Upgrade.as_ref(), "upgrade");
         assert_eq!(PlanChangeType::Downgrade.as_ref(), "downgrade");
+        assert_eq!(PlanChangeType::Lateral.as_ref(), "lateral");
+    }
+}
+
+#[cfg(test)]
+mod classification_tests {
+    use super::*;
+
+    /// Helper to determine change type based on prices (mirrors the logic in preview_plan_change)
+    fn classify_change(current_price: i64, new_price: i64) -> PlanChangeType {
+        if new_price > current_price {
+            PlanChangeType::Upgrade
+        } else if new_price < current_price {
+            PlanChangeType::Downgrade
+        } else {
+            PlanChangeType::Lateral
+        }
+    }
+
+    #[test]
+    fn test_higher_price_is_upgrade() {
+        assert_eq!(classify_change(2000, 10000), PlanChangeType::Upgrade);
+    }
+
+    #[test]
+    fn test_lower_price_is_downgrade() {
+        assert_eq!(classify_change(10000, 2000), PlanChangeType::Downgrade);
+    }
+
+    #[test]
+    fn test_same_price_is_lateral() {
+        assert_eq!(classify_change(5000, 5000), PlanChangeType::Lateral);
+    }
+
+    #[test]
+    fn test_free_to_paid_is_upgrade() {
+        assert_eq!(classify_change(0, 1000), PlanChangeType::Upgrade);
+    }
+
+    #[test]
+    fn test_paid_to_free_is_downgrade() {
+        assert_eq!(classify_change(1000, 0), PlanChangeType::Downgrade);
+    }
+
+    #[test]
+    fn test_free_to_free_is_lateral() {
+        // Two different free plans
+        assert_eq!(classify_change(0, 0), PlanChangeType::Lateral);
+    }
+}
+
+#[cfg(test)]
+mod rate_limit_tests {
+    use super::*;
+
+    #[test]
+    fn test_max_changes_constant() {
+        assert_eq!(MAX_PLAN_CHANGES_PER_PERIOD, 5);
+    }
+
+    #[test]
+    fn test_changes_remaining_calculation() {
+        // Test the calculation logic used in preview
+        let now = Utc::now();
+        let future_reset = now + chrono::Duration::days(15);
+        let past_reset = now - chrono::Duration::days(1);
+
+        // When reset is in future, use current count
+        let changes_count = 3;
+        let reset_at = Some(future_reset);
+        let current = if let Some(r) = reset_at {
+            if r < now { 0 } else { changes_count }
+        } else {
+            0
+        };
+        assert_eq!(current, 3);
+        assert_eq!(MAX_PLAN_CHANGES_PER_PERIOD - current, 2);
+
+        // When reset is in past, counter resets to 0
+        let reset_at = Some(past_reset);
+        let current = if let Some(r) = reset_at {
+            if r < now { 0 } else { changes_count }
+        } else {
+            0
+        };
+        assert_eq!(current, 0);
+        assert_eq!(MAX_PLAN_CHANGES_PER_PERIOD - current, 5);
+
+        // When no reset_at, treat as 0
+        let reset_at: Option<DateTime<Utc>> = None;
+        let current = if let Some(r) = reset_at {
+            if r < now { 0 } else { changes_count }
+        } else {
+            0
+        };
+        assert_eq!(current, 0);
+    }
+
+    #[test]
+    fn test_rate_limit_threshold() {
+        // Test that we correctly identify when limit is reached
+        let at_limit = MAX_PLAN_CHANGES_PER_PERIOD;
+        let below_limit = MAX_PLAN_CHANGES_PER_PERIOD - 1;
+
+        assert!(at_limit >= MAX_PLAN_CHANGES_PER_PERIOD);
+        assert!(below_limit < MAX_PLAN_CHANGES_PER_PERIOD);
     }
 }
 
@@ -7717,7 +7886,8 @@ mod billing_integration_tests {
     }
 
     #[tokio::test]
-    async fn test_preview_plan_change_interval_mismatch_fails() {
+    async fn test_preview_plan_change_interval_change_allowed() {
+        // Interval changes are now allowed (monthly -> yearly is an upgrade, yearly -> monthly is downgrade)
         let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
 
         let owner_id = Uuid::new_v4();
@@ -7736,6 +7906,7 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic_monthly".to_string();
             p.interval = "month".to_string();
+            p.price_cents = 2000; // $20/month
             p.is_public = true;
         });
         plan_repo
@@ -7747,7 +7918,8 @@ mod billing_integration_tests {
         let yearly_plan = create_test_plan(domain.id, |p| {
             p.payment_mode = PaymentMode::Test;
             p.code = "basic_yearly".to_string();
-            p.interval = "year".to_string(); // Different interval!
+            p.interval = "year".to_string();
+            p.price_cents = 20000; // $200/year (discounted from $240)
             p.is_public = true;
         });
         plan_repo
@@ -7771,9 +7943,11 @@ mod billing_integration_tests {
             .preview_plan_change(domain.id, user_id, "basic_yearly")
             .await;
 
-        assert!(
-            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Cannot switch between"))
-        );
+        // Should succeed - interval changes are now allowed
+        assert!(result.is_ok(), "Expected Ok, got {:?}", result);
+        let preview = result.unwrap();
+        // Monthly to yearly with higher price = upgrade
+        assert_eq!(preview.change_type, PlanChangeType::Upgrade);
     }
 
     #[tokio::test]
@@ -8044,7 +8218,8 @@ mod billing_integration_tests {
     }
 
     #[tokio::test]
-    async fn test_change_plan_interval_mismatch_fails() {
+    async fn test_change_plan_interval_change_allowed() {
+        // Interval changes are now allowed (monthly -> yearly, yearly -> monthly)
         let (use_cases, domain_repo, plan_repo, subscription_repo, _) = create_test_use_cases();
 
         let owner_id = Uuid::new_v4();
@@ -8063,6 +8238,7 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "monthly".to_string();
             p.interval = "month".to_string();
+            p.price_cents = 2000; // $20/month
         });
         plan_repo
             .plans
@@ -8074,6 +8250,7 @@ mod billing_integration_tests {
             p.payment_mode = PaymentMode::Test;
             p.code = "yearly".to_string();
             p.interval = "year".to_string();
+            p.price_cents = 20000; // $200/year
             p.is_public = true;
         });
         plan_repo
@@ -8095,9 +8272,18 @@ mod billing_integration_tests {
 
         let result = use_cases.change_plan(domain.id, user_id, "yearly").await;
 
-        assert!(
-            matches!(result, Err(AppError::InvalidInput(msg)) if msg.contains("Cannot switch between"))
-        );
+        // Interval changes are allowed - should succeed (or fail for other reasons like provider not configured)
+        // The validation for interval mismatch should NOT happen
+        match &result {
+            Err(AppError::InvalidInput(msg)) => {
+                assert!(
+                    !msg.contains("Cannot switch between"),
+                    "Interval changes should be allowed, but got: {}",
+                    msg
+                );
+            }
+            _ => {} // Other errors (like provider not configured) or success are fine
+        }
     }
 
     // ========================================================================

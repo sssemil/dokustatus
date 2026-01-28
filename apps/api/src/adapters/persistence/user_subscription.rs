@@ -38,6 +38,8 @@ fn row_to_profile(row: &sqlx::postgres::PgRow) -> UserSubscriptionProfile {
         granted_at: row.get("granted_at"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        changes_this_period: row.get("changes_this_period"),
+        period_changes_reset_at: row.get("period_changes_reset_at"),
     }
 }
 
@@ -46,7 +48,7 @@ const SELECT_COLS: &str = r#"
     end_user_id, plan_id, status, stripe_customer_id, stripe_subscription_id,
     current_period_start, current_period_end, trial_start, trial_end,
     cancel_at_period_end, canceled_at, manually_granted, granted_by, granted_at,
-    created_at, updated_at
+    created_at, updated_at, changes_this_period, period_changes_reset_at
 "#;
 
 #[async_trait]
@@ -354,6 +356,34 @@ impl UserSubscriptionRepoTrait for PostgresPersistence {
             .execute(&self.pool)
             .await
             .map_err(AppError::from)?;
+        Ok(())
+    }
+
+    async fn increment_changes_counter(
+        &self,
+        id: Uuid,
+        period_end: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        // If the reset timestamp has passed or is different, reset the counter to 1
+        // Otherwise increment the existing counter
+        sqlx::query(
+            r#"
+            UPDATE user_subscriptions SET
+                changes_this_period = CASE
+                    WHEN period_changes_reset_at IS NULL OR period_changes_reset_at < NOW()
+                    THEN 1
+                    ELSE changes_this_period + 1
+                END,
+                period_changes_reset_at = $2,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .bind(period_end)
+        .execute(&self.pool)
+        .await
+        .map_err(AppError::from)?;
         Ok(())
     }
 

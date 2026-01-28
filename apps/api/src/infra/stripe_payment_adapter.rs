@@ -233,7 +233,9 @@ impl PaymentProviderPort for StripePaymentAdapter {
             AppError::InvalidInput("New plan missing Stripe price ID".to_string())
         })?;
 
-        // Determine if upgrade or downgrade
+        // Determine if upgrade, downgrade, or lateral (same price)
+        // - Upgrade (new > current): immediate with proration
+        // - Downgrade/Lateral (new <= current): scheduled for period end
         let current_amount = sub
             .items
             .data
@@ -242,7 +244,7 @@ impl PaymentProviderPort for StripePaymentAdapter {
             .unwrap_or(0);
         let new_amount = new_plan.price_cents as i64;
 
-        if new_amount >= current_amount {
+        if new_amount > current_amount {
             // Upgrade: immediate with proration
             let idempotency_key = format!(
                 "upgrade_{}_{}_{}",
@@ -275,10 +277,18 @@ impl PaymentProviderPort for StripePaymentAdapter {
                 schedule_id: None,
             })
         } else {
-            // Downgrade: scheduled for period end
+            // Downgrade or Lateral: scheduled for period end
+            let is_lateral = new_amount == current_amount;
+            let change_type = if is_lateral {
+                PlanChangeType::Lateral
+            } else {
+                PlanChangeType::Downgrade
+            };
+
             let current_price_id = sub.price_id();
             let idempotency_key = format!(
-                "downgrade_{}_{}_{}",
+                "{}_{}_{}_{}",
+                if is_lateral { "lateral" } else { "downgrade" },
                 subscription_id,
                 new_plan.id,
                 Utc::now().timestamp()
@@ -297,7 +307,7 @@ impl PaymentProviderPort for StripePaymentAdapter {
 
             Ok(PlanChangeResult {
                 success: true,
-                change_type: PlanChangeType::Downgrade,
+                change_type,
                 invoice_id: None,
                 amount_charged_cents: None,
                 currency: None,

@@ -575,6 +575,8 @@ impl UserSubscriptionRepoTrait for InMemoryUserSubscriptionRepo {
             granted_at: None,
             created_at: Some(now),
             updated_at: Some(now),
+            changes_this_period: 0,
+            period_changes_reset_at: None,
         };
 
         subs.insert(sub.id, sub.clone());
@@ -666,6 +668,8 @@ impl UserSubscriptionRepoTrait for InMemoryUserSubscriptionRepo {
             granted_at: Some(now),
             created_at: Some(now),
             updated_at: Some(now),
+            changes_this_period: 0,
+            period_changes_reset_at: None,
         };
 
         subs.insert(sub.id, sub.clone());
@@ -683,6 +687,29 @@ impl UserSubscriptionRepoTrait for InMemoryUserSubscriptionRepo {
 
     async fn delete(&self, id: Uuid) -> AppResult<()> {
         self.subscriptions.lock().unwrap().remove(&id);
+        Ok(())
+    }
+
+    async fn increment_changes_counter(
+        &self,
+        id: Uuid,
+        period_end: chrono::DateTime<chrono::Utc>,
+    ) -> AppResult<()> {
+        let mut subs = self.subscriptions.lock().unwrap();
+        let sub = subs.get_mut(&id).ok_or(AppError::NotFound)?;
+
+        // Reset counter if period has passed
+        let now = chrono::Utc::now();
+        if let Some(reset_at) = sub.period_changes_reset_at {
+            if reset_at < now {
+                sub.changes_this_period = 1;
+            } else {
+                sub.changes_this_period += 1;
+            }
+        } else {
+            sub.changes_this_period = 1;
+        }
+        sub.period_changes_reset_at = Some(period_end);
         Ok(())
     }
 
