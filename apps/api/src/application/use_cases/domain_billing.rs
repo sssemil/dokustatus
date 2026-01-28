@@ -1691,16 +1691,19 @@ impl DomainBillingUseCases {
         // Ensure new plan has Stripe IDs (lazy creation like checkout)
         let new_plan = self.ensure_stripe_ids(domain_id, new_plan).await?;
 
-        // Determine if subscription is on trial
-        let now = Utc::now();
-        let is_trial = sub
-            .trial_end
-            .map(|te| te.and_utc() > now)
-            .unwrap_or(false);
-
-        // Get provider
+        // Get provider and fetch fresh subscription state
         let provider = self.get_active_provider(domain_id).await?;
         let subscription_id = SubscriptionId::new(stripe_subscription_id);
+
+        // Determine if subscription is on trial from provider (authoritative source)
+        let now = Utc::now();
+        let sub_info = provider.get_subscription(&subscription_id).await?;
+        let is_trial = sub_info
+            .as_ref()
+            .and_then(|s| s.trial_end)
+            .map(|te| te > now)
+            .unwrap_or(false);
+
         let plan_info = Self::plan_to_port_info(&new_plan);
 
         // Execute plan change via provider
