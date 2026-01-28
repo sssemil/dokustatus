@@ -171,12 +171,23 @@ export function PlanChangeModal({
         );
 
         if (stripeError) {
+          const isPaymentError =
+            stripeError.type === "card_error" ||
+            stripeError.type === "validation_error";
+          if (isPaymentError && data.hosted_invoice_url) {
+            window.location.href = data.hosted_invoice_url;
+            return;
+          }
           setError(stripeError.message || "Payment failed");
           setState("error");
         } else {
           setState("success");
         }
       } else if (data.payment_intent_status === "requires_payment_method") {
+        if (data.hosted_invoice_url) {
+          window.location.href = data.hosted_invoice_url;
+          return;
+        }
         setError(
           "Your payment method was declined. Please update your payment method and try again.",
         );
