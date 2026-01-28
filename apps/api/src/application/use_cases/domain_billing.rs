@@ -1690,8 +1690,6 @@ impl DomainBillingUseCases {
         // Ensure new plan has Stripe IDs (lazy creation like checkout)
         let new_plan = self.ensure_stripe_ids(domain_id, new_plan).await?;
 
-        // Calculate period_end for rate limit tracking. Use the subscription's period end,
-        // or calculate based on current plan's interval as fallback.
         // Get provider
         let provider = self.get_active_provider(domain_id).await?;
         let subscription_id = SubscriptionId::new(stripe_subscription_id);
