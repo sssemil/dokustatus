@@ -4,6 +4,7 @@ export default defineConfig({
   entry: {
     index: 'src/index.ts',
     server: 'src/server.ts',
+    webhooks: 'src/webhooks.ts',
     'react/index': 'src/react/index.ts',
   },
   format: ['cjs', 'esm'],

@@ -15,6 +15,10 @@ use crate::{
     },
     application::use_cases::domain_roles::DomainRolesUseCases,
     application::use_cases::payment_provider_factory::PaymentProviderFactory,
+    application::use_cases::webhook::{
+        WebhookDeliveryRepoTrait, WebhookEndpointRepoTrait, WebhookEventRepoTrait,
+        WebhookUseCases,
+    },
     infra::{
         InfraError, RateLimiterTrait, config::AppConfig, crypto::ProcessCipher,
         domain_email::DomainEmailSender, domain_magic_links::DomainMagicLinkStore,
@@ -74,7 +78,7 @@ pub async fn init_app_state() -> Result<AppState, InfraError> {
     // Initialize cipher for domain auth
     let cipher = ProcessCipher::from_env()?;
 
-    let domain_auth_use_cases = DomainAuthUseCases::new(
+    let mut domain_auth_use_cases = DomainAuthUseCases::new(
         domain_repo_arc.clone(),
         auth_config_repo_arc,
         magic_link_config_repo_arc,
@@ -98,7 +102,7 @@ pub async fn init_app_state() -> Result<AppState, InfraError> {
         api_key_cipher,
     );
 
-    let domain_roles_use_cases =
+    let mut domain_roles_use_cases =
         DomainRolesUseCases::new(domain_repo_arc.clone(), role_repo_arc, end_user_repo_arc);
 
     // Billing use cases
@@ -109,6 +113,20 @@ pub async fn init_app_state() -> Result<AppState, InfraError> {
     let subscription_event_repo = postgres_arc.clone() as Arc<dyn SubscriptionEventRepoTrait>;
     let billing_payment_repo = postgres_arc.clone() as Arc<dyn BillingPaymentRepoTrait>;
 
+    // Webhook repos
+    let webhook_endpoint_repo = postgres_arc.clone() as Arc<dyn WebhookEndpointRepoTrait>;
+    let webhook_event_repo = postgres_arc.clone() as Arc<dyn WebhookEventRepoTrait>;
+    let webhook_delivery_repo = postgres_arc.clone() as Arc<dyn WebhookDeliveryRepoTrait>;
+
+    let webhook_cipher = ProcessCipher::from_env()?;
+    let webhook_use_cases = WebhookUseCases::new(
+        domain_repo_arc.clone(),
+        webhook_endpoint_repo,
+        webhook_event_repo,
+        webhook_delivery_repo,
+        webhook_cipher,
+    );
+
     let billing_cipher = ProcessCipher::from_env()?;
 
     // Create payment provider factory
@@ -118,7 +136,7 @@ pub async fn init_app_state() -> Result<AppState, InfraError> {
     ));
 
     // NOTE: No fallback Stripe credentials - each domain must configure their own Stripe account.
-    let billing_use_cases = DomainBillingUseCases::new(
+    let mut billing_use_cases = DomainBillingUseCases::new(
         domain_repo_arc,
         billing_stripe_config_repo,
         enabled_providers_repo,
@@ -130,6 +148,12 @@ pub async fn init_app_state() -> Result<AppState, InfraError> {
         provider_factory,
     );
 
+    // Wire webhook emitter into use cases that emit events
+    let webhook_use_cases_arc = Arc::new(webhook_use_cases);
+    domain_auth_use_cases.set_webhook_emitter(Arc::clone(&webhook_use_cases_arc));
+    domain_roles_use_cases.set_webhook_emitter(Arc::clone(&webhook_use_cases_arc));
+    billing_use_cases.set_webhook_emitter(Arc::clone(&webhook_use_cases_arc));
+
     Ok(AppState {
         config: Arc::new(config),
         domain_use_cases: Arc::new(domain_use_cases),
@@ -137,6 +161,7 @@ pub async fn init_app_state() -> Result<AppState, InfraError> {
         api_key_use_cases: Arc::new(api_key_use_cases),
         domain_roles_use_cases: Arc::new(domain_roles_use_cases),
         billing_use_cases: Arc::new(billing_use_cases),
+        webhook_use_cases: webhook_use_cases_arc,
         rate_limiter,
     })
 }

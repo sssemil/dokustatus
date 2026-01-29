@@ -28,6 +28,7 @@ use crate::{
         domain_billing::DomainBillingUseCases,
         domain_roles::DomainRolesUseCases,
         payment_provider_factory::PaymentProviderFactory,
+        webhook::WebhookUseCases,
     },
     domain::entities::domain_role::DomainRole,
     infra::{RateLimiterTrait, config::AppConfig, crypto::ProcessCipher},
@@ -38,6 +39,7 @@ use crate::{
         InMemoryOAuthStateStore, InMemoryRateLimiter, InMemorySubscriptionEventRepo,
         InMemorySubscriptionPlanRepo, InMemoryUserSubscriptionRepo, StubEmailSender,
         StubGoogleOAuthConfigRepo, StubMagicLinkConfigRepo, StubMagicLinkStore,
+        StubWebhookDeliveryRepo, StubWebhookEndpointRepo, StubWebhookEventRepo,
     },
 };
 
@@ -293,15 +295,23 @@ impl TestAppStateBuilder {
         ));
 
         let billing_use_cases = Arc::new(DomainBillingUseCases::new(
-            domain_repo,
+            domain_repo.clone(),
             stripe_config_repo,
             enabled_providers_repo,
             plan_repo,
             subscription_repo,
             event_repo,
             payment_repo,
-            self.cipher,
+            self.cipher.clone(),
             provider_factory,
+        ));
+
+        let webhook_use_cases = Arc::new(WebhookUseCases::new(
+            domain_repo,
+            Arc::new(StubWebhookEndpointRepo),
+            Arc::new(StubWebhookEventRepo),
+            Arc::new(StubWebhookDeliveryRepo),
+            self.cipher,
         ));
 
         // Create minimal config for testing
@@ -337,6 +347,7 @@ impl TestAppStateBuilder {
             api_key_use_cases,
             domain_roles_use_cases,
             billing_use_cases,
+            webhook_use_cases,
             rate_limiter,
         }
     }

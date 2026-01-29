@@ -4,7 +4,9 @@ use crate::{
     application::use_cases::api_key::ApiKeyUseCases,
     application::use_cases::domain_auth::DomainAuthUseCases,
     application::use_cases::domain_billing::DomainBillingUseCases,
-    application::use_cases::domain_roles::DomainRolesUseCases, infra::RateLimiterTrait,
+    application::use_cases::domain_roles::DomainRolesUseCases,
+    application::use_cases::webhook::WebhookUseCases,
+    infra::RateLimiterTrait,
     infra::config::AppConfig, use_cases::domain::DomainUseCases,
 };
 
@@ -16,5 +18,6 @@ pub struct AppState {
     pub api_key_use_cases: Arc<ApiKeyUseCases>,
     pub domain_roles_use_cases: Arc<DomainRolesUseCases>,
     pub billing_use_cases: Arc<DomainBillingUseCases>,
+    pub webhook_use_cases: Arc<WebhookUseCases>,
     pub rate_limiter: Arc<dyn RateLimiterTrait>,
 }

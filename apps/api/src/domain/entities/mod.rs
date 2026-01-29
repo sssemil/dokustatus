@@ -13,3 +13,4 @@ pub mod payment_scenario;
 pub mod payment_status;
 pub mod subscription_plan;
 pub mod user_subscription;
+pub mod webhook;

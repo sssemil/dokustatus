@@ -59,6 +59,9 @@ pub mod enabled_payment_providers;
 pub mod subscription_event;
 pub mod subscription_plan;
 pub mod user_subscription;
+pub mod webhook_delivery;
+pub mod webhook_endpoint;
+pub mod webhook_event;
 
 #[derive(Clone)]
 pub struct PostgresPersistence {

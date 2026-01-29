@@ -626,8 +626,7 @@ pub struct DomainBillingUseCases {
     payment_repo: Arc<dyn BillingPaymentRepoTrait>,
     cipher: ProcessCipher,
     provider_factory: Arc<PaymentProviderFactory>,
-    // NOTE: No fallback Stripe credentials - we cannot accept payments on behalf of other developers.
-    // Each domain must configure their own Stripe account.
+    webhook_emitter: Option<Arc<crate::application::use_cases::webhook::WebhookUseCases>>,
 }
 
 impl DomainBillingUseCases {
@@ -652,6 +651,34 @@ impl DomainBillingUseCases {
             payment_repo,
             cipher,
             provider_factory,
+            webhook_emitter: None,
+        }
+    }
+
+    pub fn set_webhook_emitter(
+        &mut self,
+        emitter: Arc<crate::application::use_cases::webhook::WebhookUseCases>,
+    ) {
+        self.webhook_emitter = Some(emitter);
+    }
+
+    fn emit_webhook(
+        &self,
+        domain_id: Uuid,
+        event_type: crate::domain::entities::webhook::WebhookEventType,
+        data: serde_json::Value,
+    ) {
+        if let Some(emitter) = &self.webhook_emitter {
+            let emitter = Arc::clone(emitter);
+            tokio::spawn(async move {
+                if let Err(e) = emitter.emit_event(domain_id, event_type, data).await {
+                    tracing::error!(
+                        error = %e,
+                        event_type = %event_type,
+                        "Failed to emit webhook event"
+                    );
+                }
+            });
         }
     }
 
@@ -1463,6 +1490,16 @@ impl DomainBillingUseCases {
             })
             .await?;
 
+        self.emit_webhook(
+            domain_id,
+            crate::domain::entities::webhook::WebhookEventType::SubscriptionCreated,
+            serde_json::json!({
+                "user_id": user_id,
+                "plan_id": plan_id,
+                "status": "active",
+            }),
+        );
+
         Ok(sub)
     }
 
@@ -1493,7 +1530,18 @@ impl DomainBillingUseCases {
             })
             .await?;
 
-        self.subscription_repo.revoke(sub.id).await
+        self.subscription_repo.revoke(sub.id).await?;
+
+        self.emit_webhook(
+            domain_id,
+            crate::domain::entities::webhook::WebhookEventType::SubscriptionCanceled,
+            serde_json::json!({
+                "user_id": user_id,
+                "subscription_id": sub.id,
+            }),
+        );
+
+        Ok(())
     }
 
     // ========================================================================
@@ -1765,6 +1813,17 @@ impl DomainBillingUseCases {
                 .await?;
         }
 
+        self.emit_webhook(
+            domain_id,
+            crate::domain::entities::webhook::WebhookEventType::SubscriptionUpdated,
+            serde_json::json!({
+                "user_id": user_id,
+                "from_plan_code": current_plan.code,
+                "to_plan_code": new_plan.code,
+                "change_type": change_type.as_ref(),
+            }),
+        );
+
         Ok(PlanChangeResult {
             success: result.success,
             change_type,
@@ -2009,6 +2068,7 @@ impl DomainBillingUseCases {
             .get_by_user_and_mode(input.domain_id, input.payment_mode, input.end_user_id)
             .await?
         {
+            let old_status = existing.status;
             // Update existing subscription with new plan and Stripe IDs
             let update = StripeSubscriptionUpdate {
                 status: input.status,
@@ -2021,11 +2081,37 @@ impl DomainBillingUseCases {
                 trial_start: input.trial_start,
                 trial_end: input.trial_end,
             };
-            self.subscription_repo
+            let sub = self
+                .subscription_repo
                 .update_from_stripe(existing.id, &update)
-                .await
+                .await?;
+
+            self.emit_webhook(
+                input.domain_id,
+                crate::domain::entities::webhook::WebhookEventType::SubscriptionUpdated,
+                serde_json::json!({
+                    "user_id": input.end_user_id,
+                    "plan_id": input.plan_id,
+                    "old_status": old_status.as_str(),
+                    "new_status": input.status.as_str(),
+                }),
+            );
+
+            Ok(sub)
         } else {
-            self.subscription_repo.create(input).await
+            let sub = self.subscription_repo.create(input).await?;
+
+            self.emit_webhook(
+                input.domain_id,
+                crate::domain::entities::webhook::WebhookEventType::SubscriptionCreated,
+                serde_json::json!({
+                    "user_id": input.end_user_id,
+                    "plan_id": input.plan_id,
+                    "status": input.status.as_str(),
+                }),
+            );
+
+            Ok(sub)
         }
     }
 
@@ -2138,7 +2224,30 @@ impl DomainBillingUseCases {
             payment_date,
         };
 
-        self.payment_repo.upsert_from_stripe(&input).await
+        let payment = self.payment_repo.upsert_from_stripe(&input).await?;
+
+        let webhook_event_type = if status == PaymentStatus::Paid {
+            Some(crate::domain::entities::webhook::WebhookEventType::PaymentSucceeded)
+        } else if status == PaymentStatus::Failed {
+            Some(crate::domain::entities::webhook::WebhookEventType::PaymentFailed)
+        } else {
+            None
+        };
+
+        if let Some(event_type) = webhook_event_type {
+            self.emit_webhook(
+                domain_id,
+                event_type,
+                serde_json::json!({
+                    "user_id": end_user_id,
+                    "amount_cents": input.amount_cents,
+                    "currency": input.currency,
+                    "invoice_id": stripe_invoice_id,
+                }),
+            );
+        }
+
+        Ok(payment)
     }
 
     /// Create a payment record for dummy provider checkout

@@ -132,6 +132,42 @@ pub fn router() -> Router<AppState> {
             "/{domain_id}/billing/providers/{provider}/{mode}/active",
             patch(set_provider_active),
         )
+        // Webhooks
+        .route("/{domain_id}/webhooks", post(create_webhook_endpoint))
+        .route("/{domain_id}/webhooks", get(list_webhook_endpoints))
+        .route(
+            "/{domain_id}/webhooks/{webhook_id}",
+            get(get_webhook_endpoint),
+        )
+        .route(
+            "/{domain_id}/webhooks/{webhook_id}",
+            patch(update_webhook_endpoint),
+        )
+        .route(
+            "/{domain_id}/webhooks/{webhook_id}",
+            delete(delete_webhook_endpoint),
+        )
+        .route(
+            "/{domain_id}/webhooks/{webhook_id}/rotate-secret",
+            post(rotate_webhook_secret),
+        )
+        .route(
+            "/{domain_id}/webhooks/{webhook_id}/test",
+            post(test_webhook_endpoint),
+        )
+        .route(
+            "/{domain_id}/webhooks/{webhook_id}/deliveries",
+            get(list_endpoint_deliveries),
+        )
+        .route("/{domain_id}/webhook-events", get(list_webhook_events))
+        .route(
+            "/{domain_id}/webhook-events/{event_id}",
+            get(get_webhook_event),
+        )
+        .route(
+            "/{domain_id}/webhook-events/{event_id}/deliveries",
+            get(list_event_deliveries),
+        )
 }
 
 #[derive(Deserialize)]
@@ -1786,6 +1822,303 @@ async fn set_provider_active(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ============================================================================
+// Webhook Endpoints
+// ============================================================================
+
+#[derive(Deserialize)]
+struct WebhookPathParams {
+    domain_id: Uuid,
+    webhook_id: Uuid,
+}
+
+#[derive(Deserialize)]
+struct CreateWebhookPayload {
+    url: String,
+    description: Option<String>,
+    event_types: Option<Vec<String>>,
+}
+
+#[derive(Serialize)]
+struct WebhookEndpointResponse {
+    id: Uuid,
+    domain_id: Uuid,
+    url: String,
+    description: Option<String>,
+    event_types: serde_json::Value,
+    is_active: bool,
+    consecutive_failures: i32,
+    last_success_at: Option<chrono::NaiveDateTime>,
+    last_failure_at: Option<chrono::NaiveDateTime>,
+    created_at: Option<chrono::NaiveDateTime>,
+    updated_at: Option<chrono::NaiveDateTime>,
+}
+
+#[derive(Serialize)]
+struct CreateWebhookResponse {
+    #[serde(flatten)]
+    endpoint: WebhookEndpointResponse,
+    secret: String,
+}
+
+fn endpoint_to_response(
+    ep: &crate::application::use_cases::webhook::WebhookEndpointProfile,
+) -> WebhookEndpointResponse {
+    WebhookEndpointResponse {
+        id: ep.id,
+        domain_id: ep.domain_id,
+        url: ep.url.clone(),
+        description: ep.description.clone(),
+        event_types: ep.event_types.clone(),
+        is_active: ep.is_active,
+        consecutive_failures: ep.consecutive_failures,
+        last_success_at: ep.last_success_at,
+        last_failure_at: ep.last_failure_at,
+        created_at: ep.created_at,
+        updated_at: ep.updated_at,
+    }
+}
+
+async fn create_webhook_endpoint(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Json(payload): Json<CreateWebhookPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let (endpoint, secret) = app_state
+        .webhook_use_cases
+        .create_endpoint(
+            domain_id,
+            &payload.url,
+            payload.description.as_deref(),
+            payload.event_types,
+        )
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateWebhookResponse {
+            endpoint: endpoint_to_response(&endpoint),
+            secret,
+        }),
+    ))
+}
+
+async fn list_webhook_endpoints(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let endpoints = app_state
+        .webhook_use_cases
+        .list_endpoints(domain_id)
+        .await?;
+
+    let response: Vec<_> = endpoints.iter().map(endpoint_to_response).collect();
+    Ok(Json(response))
+}
+
+async fn get_webhook_endpoint(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<WebhookPathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let endpoint = app_state
+        .webhook_use_cases
+        .get_endpoint(params.webhook_id, params.domain_id)
+        .await?;
+
+    Ok(Json(endpoint_to_response(&endpoint)))
+}
+
+#[derive(Deserialize)]
+struct UpdateWebhookPayload {
+    url: Option<String>,
+    description: Option<Option<String>>,
+    event_types: Option<Vec<String>>,
+    is_active: Option<bool>,
+}
+
+async fn update_webhook_endpoint(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<WebhookPathParams>,
+    Json(payload): Json<UpdateWebhookPayload>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let description_ref = payload
+        .description
+        .as_ref()
+        .map(|d| d.as_deref());
+
+    let endpoint = app_state
+        .webhook_use_cases
+        .update_endpoint(
+            params.webhook_id,
+            params.domain_id,
+            payload.url.as_deref(),
+            description_ref,
+            payload.event_types,
+            payload.is_active,
+        )
+        .await?;
+
+    Ok(Json(endpoint_to_response(&endpoint)))
+}
+
+async fn delete_webhook_endpoint(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<WebhookPathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    app_state
+        .webhook_use_cases
+        .delete_endpoint(params.webhook_id, params.domain_id)
+        .await?;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn rotate_webhook_secret(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<WebhookPathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let new_secret = app_state
+        .webhook_use_cases
+        .rotate_secret(params.webhook_id, params.domain_id)
+        .await?;
+
+    Ok(Json(serde_json::json!({ "secret": new_secret })))
+}
+
+async fn test_webhook_endpoint(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<WebhookPathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let event = app_state
+        .webhook_use_cases
+        .send_test_event(params.webhook_id, params.domain_id)
+        .await?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "event_id": event.id,
+            "event_type": event.event_type,
+        })),
+    ))
+}
+
+async fn list_endpoint_deliveries(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<WebhookPathParams>,
+    Query(pagination): Query<PaginationParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let limit = pagination.limit.unwrap_or(50).min(100);
+    let offset = pagination.offset.unwrap_or(0);
+
+    let deliveries = app_state
+        .webhook_use_cases
+        .list_deliveries_for_endpoint(params.webhook_id, params.domain_id, limit, offset)
+        .await?;
+
+    Ok(Json(deliveries))
+}
+
+// ============================================================================
+// Webhook Event Endpoints
+// ============================================================================
+
+#[derive(Deserialize)]
+struct WebhookEventPathParams {
+    domain_id: Uuid,
+    event_id: Uuid,
+}
+
+#[derive(Deserialize)]
+struct WebhookEventsQuery {
+    event_type: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+#[derive(Deserialize)]
+struct PaginationParams {
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+async fn list_webhook_events(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(domain_id): Path<Uuid>,
+    Query(query): Query<WebhookEventsQuery>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let limit = query.limit.unwrap_or(50).min(100);
+    let offset = query.offset.unwrap_or(0);
+
+    let events = app_state
+        .webhook_use_cases
+        .list_events(domain_id, query.event_type.as_deref(), limit, offset)
+        .await?;
+
+    Ok(Json(events))
+}
+
+async fn get_webhook_event(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<WebhookEventPathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let event = app_state
+        .webhook_use_cases
+        .get_event(params.event_id, params.domain_id)
+        .await?;
+
+    Ok(Json(event))
+}
+
+async fn list_event_deliveries(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<WebhookEventPathParams>,
+    Query(pagination): Query<PaginationParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+
+    let limit = pagination.limit.unwrap_or(50).min(100);
+    let offset = pagination.offset.unwrap_or(0);
+
+    let deliveries = app_state
+        .webhook_use_cases
+        .list_deliveries_for_event(params.event_id, params.domain_id, limit, offset)
+        .await?;
+
+    Ok(Json(deliveries))
 }
 
 #[cfg(test)]

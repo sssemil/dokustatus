@@ -4,7 +4,7 @@ use tracing::{error, info};
 
 use reauth_api::infra::{
     InfraError, app::create_app, domain_verifier::run_domain_verification_loop,
-    setup::init_app_state,
+    setup::init_app_state, webhook_delivery_worker::run_webhook_delivery_loop,
 };
 use std::net::SocketAddr;
 
@@ -32,6 +32,12 @@ async fn run() -> Result<(), InfraError> {
     let domain_use_cases = app_state.domain_use_cases.clone();
     tokio::spawn(async move {
         run_domain_verification_loop(domain_use_cases).await;
+    });
+
+    // Spawn webhook delivery background worker
+    let webhook_use_cases = app_state.webhook_use_cases.clone();
+    tokio::spawn(async move {
+        run_webhook_delivery_loop(webhook_use_cases).await;
     });
 
     let listener = tokio::net::TcpListener::bind(&bind_addr)

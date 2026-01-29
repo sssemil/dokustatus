@@ -28,6 +28,15 @@ import {
   Search,
   X,
   TestTube,
+  Webhook,
+  Send,
+  RotateCcw,
+  Clock,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import {
   StripeConfigStatus,
@@ -126,13 +135,74 @@ type ApiKey = {
   created_at: string | null;
 };
 
-type Tab = "overview" | "auth" | "users" | "api" | "billing" | "settings";
+type WebhookEndpoint = {
+  id: string;
+  domain_id: string;
+  url: string;
+  description: string | null;
+  event_types: string[];
+  is_active: boolean;
+  consecutive_failures: number;
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+};
+
+type WebhookEvent = {
+  id: string;
+  domain_id: string;
+  event_type: string;
+  payload: Record<string, unknown>;
+  created_at: string | null;
+};
+
+type WebhookDelivery = {
+  id: string;
+  webhook_event_id: string;
+  webhook_endpoint_id: string;
+  status: string;
+  attempt_count: number;
+  last_response_status: number | null;
+  last_error: string | null;
+  completed_at: string | null;
+  created_at: string | null;
+};
+
+const WEBHOOK_EVENT_TYPES = [
+  { value: "*", label: "All events" },
+  { value: "user.created", label: "User created" },
+  { value: "user.login", label: "User login" },
+  { value: "user.deleted", label: "User deleted" },
+  { value: "user.frozen", label: "User frozen" },
+  { value: "user.unfrozen", label: "User unfrozen" },
+  { value: "user.whitelisted", label: "User whitelisted" },
+  { value: "user.unwhitelisted", label: "User unwhitelisted" },
+  { value: "user.invited", label: "User invited" },
+  { value: "user.roles_changed", label: "User roles changed" },
+  { value: "subscription.created", label: "Subscription created" },
+  { value: "subscription.updated", label: "Subscription updated" },
+  { value: "subscription.canceled", label: "Subscription canceled" },
+  { value: "payment.succeeded", label: "Payment succeeded" },
+  { value: "payment.failed", label: "Payment failed" },
+  { value: "webhook.test", label: "Test event" },
+];
+
+type Tab =
+  | "overview"
+  | "auth"
+  | "users"
+  | "api"
+  | "billing"
+  | "webhooks"
+  | "settings";
 const VALID_TABS: Tab[] = [
   "overview",
   "auth",
   "users",
   "api",
   "billing",
+  "webhooks",
   "settings",
 ];
 
@@ -265,6 +335,31 @@ export default function DomainDetailPage() {
   const [stripeConfigModal, setStripeConfigModal] = useState<
     "test" | "live" | null
   >(null);
+
+  // Webhook state
+  const [webhookEndpoints, setWebhookEndpoints] = useState<WebhookEndpoint[]>(
+    [],
+  );
+  const [loadingWebhooks, setLoadingWebhooks] = useState(false);
+  const [showCreateWebhookModal, setShowCreateWebhookModal] = useState(false);
+  const [editingWebhook, setEditingWebhook] = useState<WebhookEndpoint | null>(
+    null,
+  );
+  const [webhookUrl, setWebhookUrl] = useState("");
+  const [webhookDescription, setWebhookDescription] = useState("");
+  const [webhookEventTypes, setWebhookEventTypes] = useState<string[]>(["*"]);
+  const [savingWebhook, setSavingWebhook] = useState(false);
+  const [webhookSecret, setWebhookSecret] = useState<string | null>(null);
+  const [webhookEvents, setWebhookEvents] = useState<WebhookEvent[]>([]);
+  const [loadingWebhookEvents, setLoadingWebhookEvents] = useState(false);
+  const [webhookEventsView, setWebhookEventsView] = useState<
+    "endpoints" | "events"
+  >("endpoints");
+  const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
+  const [eventDeliveries, setEventDeliveries] = useState<
+    Record<string, WebhookDelivery[]>
+  >({});
+  const [testingWebhookId, setTestingWebhookId] = useState<string | null>(null);
 
   // Tab change handler
   const handleTabChange = useCallback(
@@ -575,6 +670,225 @@ export default function DomainDetailPage() {
     paymentFilters,
     fetchEnabledProviders,
   ]);
+
+  // Webhook data fetching
+  const fetchWebhookEndpoints = useCallback(async () => {
+    try {
+      setLoadingWebhooks(true);
+      const res = await fetch(`/api/domains/${domainId}/webhooks`, {
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWebhookEndpoints(data);
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLoadingWebhooks(false);
+    }
+  }, [domainId]);
+
+  const fetchWebhookEvents = useCallback(async () => {
+    try {
+      setLoadingWebhookEvents(true);
+      const res = await fetch(
+        `/api/domains/${domainId}/webhook-events?limit=50`,
+        {
+          credentials: "include",
+        },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setWebhookEvents(data);
+      }
+    } catch {
+      /* ignore */
+    } finally {
+      setLoadingWebhookEvents(false);
+    }
+  }, [domainId]);
+
+  useEffect(() => {
+    if (activeTab === "webhooks" && domain) {
+      fetchWebhookEndpoints();
+      fetchWebhookEvents();
+    }
+  }, [activeTab, domain, fetchWebhookEndpoints, fetchWebhookEvents]);
+
+  const handleCreateWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingWebhook(true);
+    try {
+      const res = await fetch(`/api/domains/${domainId}/webhooks`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          url: webhookUrl,
+          description: webhookDescription || null,
+          event_types: webhookEventTypes,
+        }),
+        credentials: "include",
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setWebhookSecret(data.secret);
+        addToast("Webhook endpoint created", "success");
+        setShowCreateWebhookModal(false);
+        setWebhookUrl("");
+        setWebhookDescription("");
+        setWebhookEventTypes(["*"]);
+        fetchWebhookEndpoints();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || "Failed to create webhook", "error");
+      }
+    } catch {
+      addToast("Network error", "error");
+    } finally {
+      setSavingWebhook(false);
+    }
+  };
+
+  const handleUpdateWebhook = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingWebhook) return;
+    setSavingWebhook(true);
+    try {
+      const res = await fetch(
+        `/api/domains/${domainId}/webhooks/${editingWebhook.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            url: webhookUrl,
+            description: webhookDescription || null,
+            event_types: webhookEventTypes,
+          }),
+          credentials: "include",
+        },
+      );
+      if (res.ok) {
+        addToast("Webhook updated", "success");
+        setEditingWebhook(null);
+        fetchWebhookEndpoints();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        addToast(err.message || "Failed to update webhook", "error");
+      }
+    } catch {
+      addToast("Network error", "error");
+    } finally {
+      setSavingWebhook(false);
+    }
+  };
+
+  const handleDeleteWebhook = async (webhookId: string) => {
+    try {
+      const res = await fetch(
+        `/api/domains/${domainId}/webhooks/${webhookId}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        },
+      );
+      if (res.ok) {
+        addToast("Webhook deleted", "success");
+        fetchWebhookEndpoints();
+      } else {
+        addToast("Failed to delete webhook", "error");
+      }
+    } catch {
+      addToast("Network error", "error");
+    }
+  };
+
+  const handleRotateSecret = async (webhookId: string) => {
+    try {
+      const res = await fetch(
+        `/api/domains/${domainId}/webhooks/${webhookId}/rotate-secret`,
+        {
+          method: "POST",
+          credentials: "include",
+        },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setWebhookSecret(data.secret);
+        addToast("Secret rotated", "success");
+      } else {
+        addToast("Failed to rotate secret", "error");
+      }
+    } catch {
+      addToast("Network error", "error");
+    }
+  };
+
+  const handleTestWebhook = async (webhookId: string) => {
+    setTestingWebhookId(webhookId);
+    try {
+      const res = await fetch(
+        `/api/domains/${domainId}/webhooks/${webhookId}/test`,
+        {
+          method: "POST",
+          credentials: "include",
+        },
+      );
+      if (res.ok) {
+        addToast("Test event queued", "success");
+      } else {
+        addToast("Failed to send test event", "error");
+      }
+    } catch {
+      addToast("Network error", "error");
+    } finally {
+      setTestingWebhookId(null);
+    }
+  };
+
+  const handleToggleWebhookActive = async (
+    webhook: WebhookEndpoint,
+  ) => {
+    try {
+      const res = await fetch(
+        `/api/domains/${domainId}/webhooks/${webhook.id}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ is_active: !webhook.is_active }),
+          credentials: "include",
+        },
+      );
+      if (res.ok) {
+        addToast(
+          webhook.is_active ? "Webhook disabled" : "Webhook enabled",
+          "success",
+        );
+        fetchWebhookEndpoints();
+      } else {
+        addToast("Failed to update webhook", "error");
+      }
+    } catch {
+      addToast("Network error", "error");
+    }
+  };
+
+  const fetchEventDeliveries = async (eventId: string) => {
+    try {
+      const res = await fetch(
+        `/api/domains/${domainId}/webhook-events/${eventId}/deliveries`,
+        {
+          credentials: "include",
+        },
+      );
+      if (res.ok) {
+        const data = await res.json();
+        setEventDeliveries((prev) => ({ ...prev, [eventId]: data }));
+      }
+    } catch {
+      /* ignore */
+    }
+  };
 
   // Poll for verification status
   useEffect(() => {
@@ -1206,6 +1520,7 @@ export default function DomainDetailPage() {
     { id: "users" as Tab, label: "Users" },
     { id: "api" as Tab, label: "API" },
     { id: "billing" as Tab, label: "Billing" },
+    { id: "webhooks" as Tab, label: "Webhooks" },
     { id: "settings" as Tab, label: "Settings" },
   ];
 
@@ -2403,6 +2718,342 @@ export default function DomainDetailPage() {
             </div>
           )}
 
+          {/* Webhooks Tab */}
+          {activeTab === "webhooks" && (
+            <div className="space-y-6">
+              {/* Sub-navigation */}
+              <div className="flex items-center justify-between">
+                <div className="flex gap-2">
+                  <Button
+                    variant={
+                      webhookEventsView === "endpoints" ? "primary" : "ghost"
+                    }
+                    size="sm"
+                    onClick={() => setWebhookEventsView("endpoints")}
+                  >
+                    <Webhook size={14} className="mr-1" /> Endpoints
+                  </Button>
+                  <Button
+                    variant={
+                      webhookEventsView === "events" ? "primary" : "ghost"
+                    }
+                    size="sm"
+                    onClick={() => setWebhookEventsView("events")}
+                  >
+                    <Clock size={14} className="mr-1" /> Event Log
+                  </Button>
+                </div>
+                {webhookEventsView === "endpoints" && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    onClick={() => {
+                      setEditingWebhook(null);
+                      setWebhookUrl("");
+                      setWebhookDescription("");
+                      setWebhookEventTypes(["*"]);
+                      setShowCreateWebhookModal(true);
+                    }}
+                  >
+                    <Plus size={14} className="mr-1" /> Add Endpoint
+                  </Button>
+                )}
+              </div>
+
+              {/* Endpoints List */}
+              {webhookEventsView === "endpoints" && (
+                <>
+                  {loadingWebhooks ? (
+                    <div className="flex justify-center py-8">
+                      <div className="w-6 h-6 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+                    </div>
+                  ) : webhookEndpoints.length === 0 ? (
+                    <EmptyState
+                      icon={Webhook}
+                      title="No webhook endpoints"
+                      description="Add a webhook endpoint to receive HTTP callbacks when events occur."
+                      action={
+                        <Button
+                          variant="primary"
+                          onClick={() => {
+                            setEditingWebhook(null);
+                            setWebhookUrl("");
+                            setWebhookDescription("");
+                            setWebhookEventTypes(["*"]);
+                            setShowCreateWebhookModal(true);
+                          }}
+                        >
+                          <Plus size={14} className="mr-1" /> Add Endpoint
+                        </Button>
+                      }
+                    />
+                  ) : (
+                    <div className="space-y-3">
+                      {webhookEndpoints.map((endpoint) => (
+                        <Card key={endpoint.id} className="p-4">
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 mb-1">
+                                <code className="text-sm text-white font-mono truncate block">
+                                  {endpoint.url}
+                                </code>
+                                <Badge
+                                  variant={
+                                    endpoint.is_active ? "success" : "warning"
+                                  }
+                                >
+                                  {endpoint.is_active ? "Active" : "Disabled"}
+                                </Badge>
+                                {endpoint.consecutive_failures > 0 && (
+                                  <Badge variant="error">
+                                    {endpoint.consecutive_failures} failures
+                                  </Badge>
+                                )}
+                              </div>
+                              {endpoint.description && (
+                                <p className="text-sm text-zinc-400 mb-1">
+                                  {endpoint.description}
+                                </p>
+                              )}
+                              <div className="flex items-center gap-3 text-xs text-zinc-500">
+                                <span>
+                                  Events:{" "}
+                                  {endpoint.event_types.includes("*")
+                                    ? "All"
+                                    : endpoint.event_types.join(", ")}
+                                </span>
+                                {endpoint.last_success_at && (
+                                  <span className="text-green-500">
+                                    Last success:{" "}
+                                    {new Date(
+                                      endpoint.last_success_at,
+                                    ).toLocaleDateString()}
+                                  </span>
+                                )}
+                                {endpoint.last_failure_at && (
+                                  <span className="text-red-400">
+                                    Last failure:{" "}
+                                    {new Date(
+                                      endpoint.last_failure_at,
+                                    ).toLocaleDateString()}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-1 shrink-0">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() =>
+                                  handleToggleWebhookActive(endpoint)
+                                }
+                                title={
+                                  endpoint.is_active ? "Disable" : "Enable"
+                                }
+                              >
+                                {endpoint.is_active ? (
+                                  <EyeOff size={14} />
+                                ) : (
+                                  <Eye size={14} />
+                                )}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => handleTestWebhook(endpoint.id)}
+                                disabled={testingWebhookId === endpoint.id}
+                                title="Send test event"
+                              >
+                                {testingWebhookId === endpoint.id ? (
+                                  <div className="w-3.5 h-3.5 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+                                ) : (
+                                  <Send size={14} />
+                                )}
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() =>
+                                  handleRotateSecret(endpoint.id)
+                                }
+                                title="Rotate secret"
+                              >
+                                <RotateCcw size={14} />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={() => {
+                                  setEditingWebhook(endpoint);
+                                  setWebhookUrl(endpoint.url);
+                                  setWebhookDescription(
+                                    endpoint.description || "",
+                                  );
+                                  setWebhookEventTypes(endpoint.event_types);
+                                  setShowCreateWebhookModal(true);
+                                }}
+                                title="Edit"
+                              >
+                                <Settings size={14} />
+                              </Button>
+                              <HoldButton
+                                variant="danger"
+                                duration={2000}
+                                onComplete={() =>
+                                  handleDeleteWebhook(endpoint.id)
+                                }
+                              >
+                                <Trash2 size={14} />
+                              </HoldButton>
+                            </div>
+                          </div>
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* Event Log */}
+              {webhookEventsView === "events" && (
+                <>
+                  {loadingWebhookEvents ? (
+                    <div className="flex justify-center py-8">
+                      <div className="w-6 h-6 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+                    </div>
+                  ) : webhookEvents.length === 0 ? (
+                    <EmptyState
+                      icon={Clock}
+                      title="No events yet"
+                      description="Events will appear here when webhook-emitting actions occur."
+                    />
+                  ) : (
+                    <div className="space-y-2">
+                      {webhookEvents.map((event) => (
+                        <Card key={event.id} className="p-3">
+                          <div
+                            className="flex items-center justify-between cursor-pointer"
+                            onClick={() => {
+                              if (expandedEventId === event.id) {
+                                setExpandedEventId(null);
+                              } else {
+                                setExpandedEventId(event.id);
+                                if (!eventDeliveries[event.id]) {
+                                  fetchEventDeliveries(event.id);
+                                }
+                              }
+                            }}
+                          >
+                            <div className="flex items-center gap-3">
+                              <Badge variant="info">
+                                {event.event_type}
+                              </Badge>
+                              <span className="text-xs text-zinc-500 font-mono">
+                                {event.id.slice(0, 8)}
+                              </span>
+                            </div>
+                            <span className="text-xs text-zinc-400">
+                              {event.created_at
+                                ? new Date(
+                                    event.created_at,
+                                  ).toLocaleString()
+                                : "—"}
+                            </span>
+                          </div>
+
+                          {expandedEventId === event.id && (
+                            <div className="mt-3 space-y-3">
+                              <div className="bg-zinc-900 rounded p-3">
+                                <div className="text-xs text-zinc-400 mb-1">
+                                  Payload
+                                </div>
+                                <pre className="text-xs text-zinc-300 overflow-auto max-h-40">
+                                  {JSON.stringify(event.payload, null, 2)}
+                                </pre>
+                              </div>
+
+                              {eventDeliveries[event.id] && (
+                                <div>
+                                  <div className="text-xs text-zinc-400 mb-2">
+                                    Deliveries
+                                  </div>
+                                  {eventDeliveries[event.id].length === 0 ? (
+                                    <p className="text-xs text-zinc-500">
+                                      No deliveries for this event.
+                                    </p>
+                                  ) : (
+                                    <div className="space-y-1">
+                                      {eventDeliveries[event.id].map(
+                                        (delivery) => (
+                                          <div
+                                            key={delivery.id}
+                                            className="flex items-center justify-between bg-zinc-900 rounded p-2 text-xs"
+                                          >
+                                            <div className="flex items-center gap-2">
+                                              {delivery.status ===
+                                              "succeeded" ? (
+                                                <CheckCircle2
+                                                  size={12}
+                                                  className="text-green-400"
+                                                />
+                                              ) : delivery.status ===
+                                                  "failed" ||
+                                                delivery.status ===
+                                                  "abandoned" ? (
+                                                <XCircle
+                                                  size={12}
+                                                  className="text-red-400"
+                                                />
+                                              ) : (
+                                                <AlertCircle
+                                                  size={12}
+                                                  className="text-yellow-400"
+                                                />
+                                              )}
+                                              <span className="text-zinc-300">
+                                                {delivery.status}
+                                              </span>
+                                              {delivery.last_response_status && (
+                                                <span className="text-zinc-500">
+                                                  HTTP{" "}
+                                                  {
+                                                    delivery.last_response_status
+                                                  }
+                                                </span>
+                                              )}
+                                            </div>
+                                            <div className="flex items-center gap-3 text-zinc-500">
+                                              <span>
+                                                Attempts:{" "}
+                                                {delivery.attempt_count}
+                                              </span>
+                                              {delivery.last_error && (
+                                                <span
+                                                  className="text-red-400 truncate max-w-[200px]"
+                                                  title={delivery.last_error}
+                                                >
+                                                  {delivery.last_error}
+                                                </span>
+                                              )}
+                                            </div>
+                                          </div>
+                                        ),
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </Card>
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          )}
+
           {/* Settings Tab */}
           {activeTab === "settings" && (
             <div className="space-y-6">
@@ -3186,6 +3837,141 @@ export default function DomainDetailPage() {
               }
             >
               {savingBillingConfig ? "Saving..." : "Save Configuration"}
+            </Button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Create/Edit Webhook Modal */}
+      <Modal
+        open={showCreateWebhookModal}
+        onClose={() => {
+          setShowCreateWebhookModal(false);
+          setEditingWebhook(null);
+        }}
+        title={editingWebhook ? "Edit Webhook Endpoint" : "Add Webhook Endpoint"}
+      >
+        <form
+          onSubmit={editingWebhook ? handleUpdateWebhook : handleCreateWebhook}
+          className="space-y-4"
+        >
+          <div className="space-y-2">
+            <label className="text-sm text-zinc-400">URL (HTTPS only)</label>
+            <Input
+              type="url"
+              value={webhookUrl}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                setWebhookUrl(e.target.value)
+              }
+              placeholder="https://example.com/webhooks/reauth"
+              autoFocus
+              required
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-zinc-400">
+              Description (optional)
+            </label>
+            <Input
+              value={webhookDescription}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                setWebhookDescription(e.target.value)
+              }
+              placeholder="Production webhook handler"
+            />
+          </div>
+          <div className="space-y-2">
+            <label className="text-sm text-zinc-400">Event Types</label>
+            <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto p-2 bg-zinc-900 rounded">
+              {WEBHOOK_EVENT_TYPES.map((eventType) => (
+                <label
+                  key={eventType.value}
+                  className="flex items-center gap-2 cursor-pointer text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={webhookEventTypes.includes(eventType.value)}
+                    onChange={(e) => {
+                      if (eventType.value === "*") {
+                        setWebhookEventTypes(
+                          e.target.checked ? ["*"] : [],
+                        );
+                      } else {
+                        const filtered = webhookEventTypes.filter(
+                          (t) => t !== "*",
+                        );
+                        if (e.target.checked) {
+                          setWebhookEventTypes([
+                            ...filtered,
+                            eventType.value,
+                          ]);
+                        } else {
+                          setWebhookEventTypes(
+                            filtered.filter(
+                              (t) => t !== eventType.value,
+                            ),
+                          );
+                        }
+                      }
+                    }}
+                    className="rounded border-zinc-600"
+                  />
+                  <span className="text-zinc-300">{eventType.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+          <div className="flex justify-end gap-2">
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setShowCreateWebhookModal(false);
+                setEditingWebhook(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              disabled={savingWebhook || !webhookUrl.trim()}
+            >
+              {savingWebhook
+                ? "Saving..."
+                : editingWebhook
+                  ? "Update"
+                  : "Create"}
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Webhook Secret Display Modal */}
+      <Modal
+        open={webhookSecret !== null}
+        onClose={() => setWebhookSecret(null)}
+        title="Webhook Signing Secret"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-zinc-400">
+            Copy this secret now. It will not be shown again.
+          </p>
+          <div className="flex items-center gap-2 bg-zinc-900 rounded p-3">
+            <code className="text-sm text-green-400 flex-1 break-all font-mono">
+              {webhookSecret}
+            </code>
+            <CopyButton text={webhookSecret || ""} />
+          </div>
+          <p className="text-xs text-zinc-500">
+            Use this secret to verify webhook signatures in your application.
+            See the SDK documentation for verification examples.
+          </p>
+          <div className="flex justify-end">
+            <Button
+              variant="primary"
+              onClick={() => setWebhookSecret(null)}
+            >
+              Done
             </Button>
           </div>
         </div>

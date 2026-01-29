@@ -327,6 +327,7 @@ pub struct DomainAuthUseCases {
     fallback_email_domain: String,
     fallback_google_client_id: String,
     fallback_google_client_secret: String,
+    webhook_emitter: Option<Arc<crate::application::use_cases::webhook::WebhookUseCases>>,
 }
 
 impl DomainAuthUseCases {
@@ -360,6 +361,34 @@ impl DomainAuthUseCases {
             fallback_email_domain,
             fallback_google_client_id,
             fallback_google_client_secret,
+            webhook_emitter: None,
+        }
+    }
+
+    pub fn set_webhook_emitter(
+        &mut self,
+        emitter: Arc<crate::application::use_cases::webhook::WebhookUseCases>,
+    ) {
+        self.webhook_emitter = Some(emitter);
+    }
+
+    fn emit_webhook(
+        &self,
+        domain_id: Uuid,
+        event_type: crate::domain::entities::webhook::WebhookEventType,
+        data: serde_json::Value,
+    ) {
+        if let Some(emitter) = &self.webhook_emitter {
+            let emitter = Arc::clone(emitter);
+            tokio::spawn(async move {
+                if let Err(e) = emitter.emit_event(domain_id, event_type, data).await {
+                    tracing::error!(
+                        error = %e,
+                        event_type = %event_type,
+                        "Failed to emit webhook event"
+                    );
+                }
+            });
         }
     }
 
@@ -541,6 +570,27 @@ impl DomainAuthUseCases {
                     .send(&api_key, &from_email, &end_user.email, &subject, &html)
                     .await;
             }
+
+            // Emit webhook events
+            use crate::domain::entities::webhook::WebhookEventType;
+            if is_first_login {
+                self.emit_webhook(
+                    data.domain_id,
+                    WebhookEventType::UserCreated,
+                    serde_json::json!({
+                        "user_id": end_user.id.to_string(),
+                        "auth_method": "magic_link",
+                    }),
+                );
+            }
+            self.emit_webhook(
+                data.domain_id,
+                WebhookEventType::UserLogin,
+                serde_json::json!({
+                    "user_id": end_user.id.to_string(),
+                    "auth_method": "magic_link",
+                }),
+            );
 
             return Ok(Some(end_user));
         }
@@ -791,7 +841,15 @@ impl DomainAuthUseCases {
             return Err(AppError::NotFound);
         }
 
-        self.end_user_repo.delete(user_id).await
+        self.end_user_repo.delete(user_id).await?;
+
+        self.emit_webhook(
+            domain_id,
+            crate::domain::entities::webhook::WebhookEventType::UserDeleted,
+            serde_json::json!({ "user_id": user_id.to_string() }),
+        );
+
+        Ok(())
     }
 
     /// Freeze an end-user account (domain owner only)
@@ -823,16 +881,23 @@ impl DomainAuthUseCases {
         self.end_user_repo.set_frozen(user_id, true).await?;
 
         // Send suspension email
-        if was_not_frozen
-            && let Ok((api_key, from_email, _)) =
+        if was_not_frozen {
+            if let Ok((api_key, from_email, _)) =
                 self.get_email_config(domain_id, &domain.domain).await
-        {
-            let app_origin = format!("https://reauth.{}", domain.domain);
-            let (subject, html) = account_frozen_email(&app_origin, &domain.domain);
-            let _ = self
-                .email_sender
-                .send(&api_key, &from_email, &user.email, &subject, &html)
-                .await;
+            {
+                let app_origin = format!("https://reauth.{}", domain.domain);
+                let (subject, html) = account_frozen_email(&app_origin, &domain.domain);
+                let _ = self
+                    .email_sender
+                    .send(&api_key, &from_email, &user.email, &subject, &html)
+                    .await;
+            }
+
+            self.emit_webhook(
+                domain_id,
+                crate::domain::entities::webhook::WebhookEventType::UserFrozen,
+                serde_json::json!({ "user_id": user_id.to_string() }),
+            );
         }
 
         Ok(())
@@ -867,17 +932,25 @@ impl DomainAuthUseCases {
         self.end_user_repo.set_frozen(user_id, false).await?;
 
         // Send restoration email
-        if was_frozen
-            && let Ok((api_key, from_email, _)) =
+        if was_frozen {
+            if let Ok((api_key, from_email, _)) =
                 self.get_email_config(domain_id, &domain.domain).await
-        {
-            let app_origin = format!("https://reauth.{}", domain.domain);
-            let login_url = format!("https://reauth.{}/", domain.domain);
-            let (subject, html) = account_unfrozen_email(&app_origin, &domain.domain, &login_url);
-            let _ = self
-                .email_sender
-                .send(&api_key, &from_email, &user.email, &subject, &html)
-                .await;
+            {
+                let app_origin = format!("https://reauth.{}", domain.domain);
+                let login_url = format!("https://reauth.{}/", domain.domain);
+                let (subject, html) =
+                    account_unfrozen_email(&app_origin, &domain.domain, &login_url);
+                let _ = self
+                    .email_sender
+                    .send(&api_key, &from_email, &user.email, &subject, &html)
+                    .await;
+            }
+
+            self.emit_webhook(
+                domain_id,
+                crate::domain::entities::webhook::WebhookEventType::UserUnfrozen,
+                serde_json::json!({ "user_id": user_id.to_string() }),
+            );
         }
 
         Ok(())
@@ -912,18 +985,25 @@ impl DomainAuthUseCases {
         self.end_user_repo.set_whitelisted(user_id, true).await?;
 
         // Send approval email
-        if was_not_whitelisted
-            && let Ok((api_key, from_email, _)) =
+        if was_not_whitelisted {
+            if let Ok((api_key, from_email, _)) =
                 self.get_email_config(domain_id, &domain.domain).await
-        {
-            let app_origin = format!("https://reauth.{}", domain.domain);
-            let login_url = format!("https://reauth.{}/", domain.domain);
-            let (subject, html) =
-                account_whitelisted_email(&app_origin, &domain.domain, &login_url);
-            let _ = self
-                .email_sender
-                .send(&api_key, &from_email, &user.email, &subject, &html)
-                .await;
+            {
+                let app_origin = format!("https://reauth.{}", domain.domain);
+                let login_url = format!("https://reauth.{}/", domain.domain);
+                let (subject, html) =
+                    account_whitelisted_email(&app_origin, &domain.domain, &login_url);
+                let _ = self
+                    .email_sender
+                    .send(&api_key, &from_email, &user.email, &subject, &html)
+                    .await;
+            }
+
+            self.emit_webhook(
+                domain_id,
+                crate::domain::entities::webhook::WebhookEventType::UserWhitelisted,
+                serde_json::json!({ "user_id": user_id.to_string() }),
+            );
         }
 
         Ok(())
@@ -950,7 +1030,15 @@ impl DomainAuthUseCases {
             return Err(AppError::NotFound);
         }
 
-        self.end_user_repo.set_whitelisted(user_id, false).await
+        self.end_user_repo.set_whitelisted(user_id, false).await?;
+
+        self.emit_webhook(
+            domain_id,
+            crate::domain::entities::webhook::WebhookEventType::UserUnwhitelisted,
+            serde_json::json!({ "user_id": user_id.to_string() }),
+        );
+
+        Ok(())
     }
 
     /// Invite a user to the domain (domain owner only)
@@ -996,6 +1084,14 @@ impl DomainAuthUseCases {
                 .send(&api_key, &from_email, email, &subject, &html)
                 .await;
         }
+
+        self.emit_webhook(
+            domain_id,
+            crate::domain::entities::webhook::WebhookEventType::UserInvited,
+            serde_json::json!({
+                "user_id": user.id.to_string(),
+            }),
+        );
 
         // Return user with updated whitelist status
         self.end_user_repo
@@ -1253,6 +1349,14 @@ impl DomainAuthUseCases {
         {
             // Existing linked account - update last login and return
             self.end_user_repo.update_last_login(user.id).await?;
+            self.emit_webhook(
+                domain_id,
+                crate::domain::entities::webhook::WebhookEventType::UserLogin,
+                serde_json::json!({
+                    "user_id": user.id.to_string(),
+                    "auth_method": "google_oauth",
+                }),
+            );
             return Ok(GoogleLoginResult::LoggedIn(user));
         }
 
@@ -1284,6 +1388,24 @@ impl DomainAuthUseCases {
             .upsert_with_google_id(domain_id, email, google_id)
             .await?;
         self.end_user_repo.update_last_login(user.id).await?;
+
+        use crate::domain::entities::webhook::WebhookEventType;
+        self.emit_webhook(
+            domain_id,
+            WebhookEventType::UserCreated,
+            serde_json::json!({
+                "user_id": user.id.to_string(),
+                "auth_method": "google_oauth",
+            }),
+        );
+        self.emit_webhook(
+            domain_id,
+            WebhookEventType::UserLogin,
+            serde_json::json!({
+                "user_id": user.id.to_string(),
+                "auth_method": "google_oauth",
+            }),
+        );
 
         Ok(GoogleLoginResult::LoggedIn(user))
     }

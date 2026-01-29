@@ -7,7 +7,9 @@ use crate::adapters::persistence::domain_role::{DomainRoleRepoTrait, DomainRoleW
 use crate::app_error::{AppError, AppResult};
 use crate::application::use_cases::domain::DomainRepoTrait;
 use crate::application::use_cases::domain_auth::DomainEndUserRepoTrait;
+use crate::application::use_cases::webhook::WebhookUseCases;
 use crate::domain::entities::domain_role::DomainRole;
+use crate::domain::entities::webhook::WebhookEventType;
 
 // ============================================================================
 // Use Cases
@@ -18,6 +20,7 @@ pub struct DomainRolesUseCases {
     domain_repo: Arc<dyn DomainRepoTrait>,
     role_repo: Arc<dyn DomainRoleRepoTrait>,
     end_user_repo: Arc<dyn DomainEndUserRepoTrait>,
+    webhook_emitter: Option<Arc<WebhookUseCases>>,
 }
 
 impl DomainRolesUseCases {
@@ -30,6 +33,31 @@ impl DomainRolesUseCases {
             domain_repo,
             role_repo,
             end_user_repo,
+            webhook_emitter: None,
+        }
+    }
+
+    pub fn set_webhook_emitter(&mut self, emitter: Arc<WebhookUseCases>) {
+        self.webhook_emitter = Some(emitter);
+    }
+
+    fn emit_webhook(
+        &self,
+        domain_id: Uuid,
+        event_type: WebhookEventType,
+        data: serde_json::Value,
+    ) {
+        if let Some(emitter) = &self.webhook_emitter {
+            let emitter = Arc::clone(emitter);
+            tokio::spawn(async move {
+                if let Err(e) = emitter.emit_event(domain_id, event_type, data).await {
+                    tracing::error!(
+                        error = %e,
+                        event_type = %event_type,
+                        "Failed to emit webhook event"
+                    );
+                }
+            });
         }
     }
 
@@ -153,7 +181,22 @@ impl DomainRolesUseCases {
             }
         }
 
-        self.end_user_repo.set_roles(user_id, &roles).await
+        // Capture old roles before updating
+        let old_roles: Vec<String> = user.roles.clone();
+
+        self.end_user_repo.set_roles(user_id, &roles).await?;
+
+        self.emit_webhook(
+            domain_id,
+            WebhookEventType::UserRolesChanged,
+            serde_json::json!({
+                "user_id": user_id,
+                "old_roles": old_roles,
+                "new_roles": roles,
+            }),
+        );
+
+        Ok(())
     }
 
     /// Get list of roles available for a domain (for role selection UI)
