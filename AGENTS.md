@@ -93,6 +93,7 @@ This project is in rapid development phase with no real users yet. Backward comp
 - Naming: Rust modules `snake_case`; types and traits `PascalCase`; functions `snake_case`; constants `SCREAMING_SNAKE_CASE`.
 - Error handling uses `anyhow` for main and typed errors in `application`; propagate via `?` and map to HTTP errors in adapters.
 - Prefer enums for error codes and variant propagation; avoid free-form strings for error types.
+- **Never use `serde_json::json!()` for structured data.** Always define typed Rust structs with `#[derive(Serialize)]` (and `Deserialize` when needed). This applies to webhook payloads, API responses, event data, and any other structured serialization. Typed structs provide compile-time field name/type safety that `json!()` cannot. The only acceptable uses of `json!()` are for throwaway test fixtures and truly dynamic/schemaless metadata fields.
 - Frontend: functional React components in `apps/ui/app` and `apps/demo_ui/app`, `PascalCase` component names, co-locate styles in `globals.css` or module styles.
 - Comments should help future readers understand the code, not document what changed. Avoid transient comments like "(now always true)" or "(was optional before)" - these become confusing historical artifacts. Write comments as if the code has always been this way.
 
