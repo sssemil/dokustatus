@@ -192,8 +192,17 @@ export function PlanChangeModal({
           "Your payment method was declined. Please update your payment method and try again.",
         );
         setState("error");
-      } else {
+      } else if (!data.payment_intent_status) {
         setState("success");
+      } else {
+        if (data.hosted_invoice_url) {
+          window.location.href = data.hosted_invoice_url;
+          return;
+        }
+        setError(
+          "Payment could not be completed. Please check your payment method in the Stripe portal.",
+        );
+        setState("error");
       }
     } catch {
       setError("Network error");

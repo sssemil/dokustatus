@@ -277,15 +277,40 @@ impl PaymentProviderPort for StripePaymentAdapter {
                 )
                 .await?;
 
+            let mut hosted_invoice_url = upgraded.hosted_invoice_url();
+            let payment_intent_status = upgraded.payment_intent_status();
+            let invoice_id = upgraded.latest_invoice_id();
+
+            // When payment didn't succeed immediately and hosted_invoice_url is
+            // missing from the expanded subscription response, fetch the invoice
+            // directly to get the hosted URL for payment completion.
+            if hosted_invoice_url.is_none() && payment_intent_status.as_deref() != Some("succeeded")
+            {
+                if let Some(inv_id) = &invoice_id {
+                    match self.client.get_invoice_by_id(inv_id).await {
+                        Ok(invoice) => {
+                            hosted_invoice_url = invoice.hosted_invoice_url;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                invoice_id = %inv_id,
+                                "Failed to fetch invoice for hosted_invoice_url fallback"
+                            );
+                        }
+                    }
+                }
+            }
+
             Ok(PlanChangeResult {
                 success: true,
                 change_type,
-                invoice_id: upgraded.latest_invoice_id(),
+                invoice_id,
                 amount_charged_cents: upgraded.latest_invoice_amount(),
                 currency: upgraded.latest_invoice_currency(),
                 client_secret: upgraded.client_secret(),
-                hosted_invoice_url: upgraded.hosted_invoice_url(),
-                payment_intent_status: upgraded.payment_intent_status(),
+                hosted_invoice_url,
+                payment_intent_status,
                 effective_at: Utc::now(),
                 schedule_id: None,
             })

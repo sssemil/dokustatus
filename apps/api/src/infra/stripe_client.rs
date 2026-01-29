@@ -479,6 +479,19 @@ impl StripeClient {
         Ok(list.data)
     }
 
+    /// Fetch a single invoice by ID
+    pub async fn get_invoice_by_id(&self, invoice_id: &str) -> AppResult<StripeInvoice> {
+        let response = self
+            .client
+            .get(format!("{}/invoices/{}", STRIPE_API_BASE, invoice_id))
+            .header("Authorization", self.auth_header())
+            .send()
+            .await
+            .map_err(|e| AppError::Internal(format!("Stripe request failed: {}", e)))?;
+
+        self.handle_response(response).await
+    }
+
     // ========================================================================
     // Webhook Signature Verification
     // ========================================================================
