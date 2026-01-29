@@ -149,11 +149,7 @@ async fn deliver_one(
     match result {
         Ok(response) => {
             let status = response.status().as_u16() as i32;
-            let body = response
-                .text()
-                .await
-                .unwrap_or_default();
-            let truncated_body = &body[..body.len().min(RESPONSE_BODY_CAP)];
+            let body = read_body_capped(response, RESPONSE_BODY_CAP).await;
 
             if (200..300).contains(&status) {
                 if let Err(e) = webhook_uc
@@ -174,7 +170,7 @@ async fn deliver_one(
                         delivery.endpoint_id,
                         delivery.attempt_count + 1,
                         Some(status),
-                        Some(truncated_body),
+                        Some(&body),
                         None,
                         is_terminal,
                     )
@@ -270,6 +266,21 @@ fn is_private_ip(ip: &IpAddr) -> bool {
             || (v6.segments()[0] & 0xffc0) == 0xfe80
         }
     }
+}
+
+async fn read_body_capped(mut response: reqwest::Response, cap: usize) -> String {
+    let mut buf = Vec::with_capacity(cap.min(4096));
+
+    while let Ok(Some(chunk)) = response.chunk().await {
+        let remaining = cap.saturating_sub(buf.len());
+        if remaining == 0 {
+            break;
+        }
+        let take = chunk.len().min(remaining);
+        buf.extend_from_slice(&chunk[..take]);
+    }
+
+    String::from_utf8_lossy(&buf).into_owned()
 }
 
 async fn release_stale(webhook_uc: &WebhookUseCases) {

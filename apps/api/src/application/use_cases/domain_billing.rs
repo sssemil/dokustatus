@@ -1494,8 +1494,8 @@ impl DomainBillingUseCases {
             domain_id,
             crate::domain::entities::webhook::WebhookEventType::SubscriptionCreated,
             serde_json::json!({
-                "user_id": user_id,
-                "plan_id": plan_id,
+                "user_id": user_id.to_string(),
+                "plan_id": plan_id.to_string(),
                 "status": "active",
             }),
         );
@@ -1536,8 +1536,8 @@ impl DomainBillingUseCases {
             domain_id,
             crate::domain::entities::webhook::WebhookEventType::SubscriptionCanceled,
             serde_json::json!({
-                "user_id": user_id,
-                "subscription_id": sub.id,
+                "user_id": user_id.to_string(),
+                "subscription_id": sub.id.to_string(),
             }),
         );
 
@@ -1616,9 +1616,9 @@ impl DomainBillingUseCases {
         let period_start = sub_info.current_period_start.ok_or(AppError::Internal(
             "Subscription missing period start".into(),
         ))?;
-        let period_end = sub_info.current_period_end.ok_or(AppError::Internal(
-            "Subscription missing period end".into(),
-        ))?;
+        let period_end = sub_info
+            .current_period_end
+            .ok_or(AppError::Internal("Subscription missing period end".into()))?;
         let now = Utc::now();
 
         // Determine if subscription is on trial
@@ -1673,9 +1673,7 @@ impl DomainBillingUseCases {
         }
 
         if is_trial {
-            warnings.push(
-                "Your trial will end immediately and you will be charged.".to_string(),
-            );
+            warnings.push("Your trial will end immediately and you will be charged.".to_string());
         }
 
         // When on trial, billing cycle resets to now — compute new period end
@@ -1817,7 +1815,7 @@ impl DomainBillingUseCases {
             domain_id,
             crate::domain::entities::webhook::WebhookEventType::SubscriptionUpdated,
             serde_json::json!({
-                "user_id": user_id,
+                "user_id": user_id.to_string(),
                 "from_plan_code": current_plan.code,
                 "to_plan_code": new_plan.code,
                 "change_type": change_type.as_ref(),
@@ -2090,8 +2088,8 @@ impl DomainBillingUseCases {
                 input.domain_id,
                 crate::domain::entities::webhook::WebhookEventType::SubscriptionUpdated,
                 serde_json::json!({
-                    "user_id": input.end_user_id,
-                    "plan_id": input.plan_id,
+                    "user_id": input.end_user_id.to_string(),
+                    "plan_id": input.plan_id.to_string(),
                     "old_status": old_status.as_str(),
                     "new_status": input.status.as_str(),
                 }),
@@ -2105,8 +2103,8 @@ impl DomainBillingUseCases {
                 input.domain_id,
                 crate::domain::entities::webhook::WebhookEventType::SubscriptionCreated,
                 serde_json::json!({
-                    "user_id": input.end_user_id,
-                    "plan_id": input.plan_id,
+                    "user_id": input.end_user_id.to_string(),
+                    "plan_id": input.plan_id.to_string(),
                     "status": input.status.as_str(),
                 }),
             );
@@ -2239,7 +2237,7 @@ impl DomainBillingUseCases {
                 domain_id,
                 event_type,
                 serde_json::json!({
-                    "user_id": end_user_id,
+                    "user_id": end_user_id.to_string(),
                     "amount_cents": input.amount_cents,
                     "currency": input.currency,
                     "invoice_id": stripe_invoice_id,
@@ -2620,7 +2618,7 @@ mod proration_calculation_tests {
         let now = Utc::now();
 
         let result = calculate_proration(
-            2000, // $20 current
+            2000,  // $20 current
             10000, // $100 new
             period_start,
             period_end,
@@ -2632,7 +2630,11 @@ mod proration_calculation_tests {
         // credit = 2000 * 0.833 = 1666.67
         // charge = 10000 * 0.833 = 8333.33
         // net = 8333.33 - 1666.67 = 6666.67 ≈ 6667
-        assert!(result > 6600 && result < 6700, "Expected ~6667, got {}", result);
+        assert!(
+            result > 6600 && result < 6700,
+            "Expected ~6667, got {}",
+            result
+        );
     }
 
     #[test]
@@ -2655,7 +2657,11 @@ mod proration_calculation_tests {
         // credit = 10000 * 0.833 = 8333.33
         // charge = 2000 * 0.833 = 1666.67
         // net = 1666.67 - 8333.33 = -6666.67 ≈ -6667 (negative = credit)
-        assert!(result < -6600 && result > -6700, "Expected ~-6667, got {}", result);
+        assert!(
+            result < -6600 && result > -6700,
+            "Expected ~-6667, got {}",
+            result
+        );
     }
 
     #[test]
@@ -2678,7 +2684,11 @@ mod proration_calculation_tests {
         // credit = 0 (trial)
         // charge = 10000 * 0.967 = 9667
         // net = 9667
-        assert!(result > 9600 && result < 9700, "Expected ~9667, got {}", result);
+        assert!(
+            result > 9600 && result < 9700,
+            "Expected ~9667, got {}",
+            result
+        );
     }
 
     #[test]
@@ -2719,18 +2729,15 @@ mod proration_calculation_tests {
         let period_end = period_start + Duration::days(30);
         let now = period_start + Duration::seconds(1); // 1 second in
 
-        let result = calculate_proration(
-            2000,
-            10000,
-            period_start,
-            period_end,
-            now,
-            false,
-        );
+        let result = calculate_proration(2000, 10000, period_start, period_end, now, false);
 
         // Nearly full period remaining
         // charge ≈ 10000, credit ≈ 2000, net ≈ 8000
-        assert!(result > 7900 && result < 8100, "Expected ~8000, got {}", result);
+        assert!(
+            result > 7900 && result < 8100,
+            "Expected ~8000, got {}",
+            result
+        );
     }
 
     #[test]
@@ -2740,20 +2747,17 @@ mod proration_calculation_tests {
         let period_end = period_start + Duration::days(30);
         let now = Utc::now(); // 1 day remaining
 
-        let result = calculate_proration(
-            2000,
-            10000,
-            period_start,
-            period_end,
-            now,
-            false,
-        );
+        let result = calculate_proration(2000, 10000, period_start, period_end, now, false);
 
         // remaining = 1/30 = 0.033
         // charge = 10000 * 0.033 = 333
         // credit = 2000 * 0.033 = 67
         // net = 333 - 67 = 267
-        assert!(result > 200 && result < 350, "Expected ~267, got {}", result);
+        assert!(
+            result > 200 && result < 350,
+            "Expected ~267, got {}",
+            result
+        );
     }
 
     #[test]

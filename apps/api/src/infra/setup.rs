@@ -16,8 +16,7 @@ use crate::{
     application::use_cases::domain_roles::DomainRolesUseCases,
     application::use_cases::payment_provider_factory::PaymentProviderFactory,
     application::use_cases::webhook::{
-        WebhookDeliveryRepoTrait, WebhookEndpointRepoTrait, WebhookEventRepoTrait,
-        WebhookUseCases,
+        WebhookDeliveryRepoTrait, WebhookEndpointRepoTrait, WebhookEventRepoTrait, WebhookUseCases,
     },
     infra::{
         InfraError, RateLimiterTrait, config::AppConfig, crypto::ProcessCipher,

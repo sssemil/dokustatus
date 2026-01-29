@@ -259,10 +259,7 @@ impl WebhookUseCases {
         Ok((endpoint, secret_plaintext))
     }
 
-    pub async fn list_endpoints(
-        &self,
-        domain_id: Uuid,
-    ) -> AppResult<Vec<WebhookEndpointProfile>> {
+    pub async fn list_endpoints(&self, domain_id: Uuid) -> AppResult<Vec<WebhookEndpointProfile>> {
         self.endpoint_repo.list_by_domain(domain_id).await
     }
 
@@ -312,20 +309,12 @@ impl WebhookUseCases {
             .await
     }
 
-    pub async fn delete_endpoint(
-        &self,
-        endpoint_id: Uuid,
-        domain_id: Uuid,
-    ) -> AppResult<()> {
+    pub async fn delete_endpoint(&self, endpoint_id: Uuid, domain_id: Uuid) -> AppResult<()> {
         self.get_endpoint(endpoint_id, domain_id).await?;
         self.endpoint_repo.delete(endpoint_id).await
     }
 
-    pub async fn rotate_secret(
-        &self,
-        endpoint_id: Uuid,
-        domain_id: Uuid,
-    ) -> AppResult<String> {
+    pub async fn rotate_secret(&self, endpoint_id: Uuid, domain_id: Uuid) -> AppResult<String> {
         self.get_endpoint(endpoint_id, domain_id).await?;
         let (secret_plaintext, secret_encrypted) = self.generate_secret()?;
         self.endpoint_repo
@@ -442,7 +431,9 @@ impl WebhookUseCases {
         offset: i64,
     ) -> AppResult<Vec<WebhookDeliveryProfile>> {
         self.get_event(event_id, domain_id).await?;
-        self.delivery_repo.list_by_event(event_id, limit, offset).await
+        self.delivery_repo
+            .list_by_event(event_id, limit, offset)
+            .await
     }
 
     pub async fn list_deliveries_for_endpoint(
@@ -501,8 +492,7 @@ impl WebhookUseCases {
                 .await?;
         } else {
             let delay = calculate_backoff_delay(attempt_count);
-            let next_attempt =
-                chrono::Utc::now().naive_utc() + chrono::Duration::seconds(delay);
+            let next_attempt = chrono::Utc::now().naive_utc() + chrono::Duration::seconds(delay);
             let truncated_body = response_body.map(|b| &b[..b.len().min(1024)]);
             self.delivery_repo
                 .mark_failed(
@@ -556,8 +546,8 @@ impl WebhookUseCases {
             .ok_or(AppError::NotFound)?;
 
         let verified_domain = &domain.domain;
-        let is_under_domain = host == verified_domain
-            || host.ends_with(&format!(".{}", verified_domain));
+        let is_under_domain =
+            host == verified_domain || host.ends_with(&format!(".{}", verified_domain));
 
         if !is_under_domain {
             return Err(AppError::InvalidInput(format!(
@@ -585,10 +575,7 @@ impl WebhookUseCases {
         let valid_types = WebhookEventType::all_type_strings();
         for t in &types {
             if !valid_types.contains(&t.as_str()) {
-                return Err(AppError::InvalidInput(format!(
-                    "unknown event type: {}",
-                    t
-                )));
+                return Err(AppError::InvalidInput(format!("unknown event type: {}", t)));
             }
         }
 
@@ -602,9 +589,10 @@ impl WebhookUseCases {
             "whsec_{}",
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(secret_bytes)
         );
-        let secret_encrypted = self.cipher.encrypt(&secret_plaintext).map_err(|e| {
-            AppError::Internal(format!("failed to encrypt webhook secret: {}", e))
-        })?;
+        let secret_encrypted = self
+            .cipher
+            .encrypt(&secret_plaintext)
+            .map_err(|e| AppError::Internal(format!("failed to encrypt webhook secret: {}", e)))?;
         Ok((secret_plaintext, secret_encrypted))
     }
 }

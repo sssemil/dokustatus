@@ -718,6 +718,10 @@ export default function DomainDetailPage() {
 
   const handleCreateWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!webhookUrl.startsWith("https://")) {
+      addToast("Webhook URL must use HTTPS", "error");
+      return;
+    }
     setSavingWebhook(true);
     try {
       const res = await fetch(`/api/domains/${domainId}/webhooks`, {
@@ -753,6 +757,10 @@ export default function DomainDetailPage() {
   const handleUpdateWebhook = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingWebhook) return;
+    if (!webhookUrl.startsWith("https://")) {
+      addToast("Webhook URL must use HTTPS", "error");
+      return;
+    }
     setSavingWebhook(true);
     try {
       const res = await fetch(
@@ -3934,7 +3942,7 @@ export default function DomainDetailPage() {
             <Button
               type="submit"
               variant="primary"
-              disabled={savingWebhook || !webhookUrl.trim()}
+              disabled={savingWebhook || !webhookUrl.startsWith("https://")}
             >
               {savingWebhook
                 ? "Saving..."

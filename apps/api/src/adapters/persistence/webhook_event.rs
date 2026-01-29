@@ -70,41 +70,37 @@ impl WebhookEventRepoTrait for PostgresPersistence {
         offset: i64,
     ) -> AppResult<Vec<WebhookEventProfile>> {
         let rows = match event_type_filter {
-            Some(filter) => {
-                sqlx::query(&format!(
-                    r#"
+            Some(filter) => sqlx::query(&format!(
+                r#"
                     SELECT {} FROM webhook_events
                     WHERE domain_id = $1 AND event_type = $2
                     ORDER BY created_at DESC
                     LIMIT $3 OFFSET $4
                     "#,
-                    SELECT_COLS
-                ))
-                .bind(domain_id)
-                .bind(filter)
-                .bind(limit)
-                .bind(offset)
-                .fetch_all(self.pool())
-                .await
-                .map_err(AppError::from)?
-            }
-            None => {
-                sqlx::query(&format!(
-                    r#"
+                SELECT_COLS
+            ))
+            .bind(domain_id)
+            .bind(filter)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool())
+            .await
+            .map_err(AppError::from)?,
+            None => sqlx::query(&format!(
+                r#"
                     SELECT {} FROM webhook_events
                     WHERE domain_id = $1
                     ORDER BY created_at DESC
                     LIMIT $2 OFFSET $3
                     "#,
-                    SELECT_COLS
-                ))
-                .bind(domain_id)
-                .bind(limit)
-                .bind(offset)
-                .fetch_all(self.pool())
-                .await
-                .map_err(AppError::from)?
-            }
+                SELECT_COLS
+            ))
+            .bind(domain_id)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(self.pool())
+            .await
+            .map_err(AppError::from)?,
         };
 
         Ok(rows.into_iter().map(row_to_profile).collect())

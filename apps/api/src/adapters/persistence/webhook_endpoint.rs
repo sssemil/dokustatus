@@ -138,10 +138,7 @@ impl WebhookEndpointRepoTrait for PostgresPersistence {
         }
 
         if set_clauses.is_empty() {
-            return self
-                .get_by_id(id)
-                .await?
-                .ok_or(AppError::NotFound);
+            return self.get_by_id(id).await?.ok_or(AppError::NotFound);
         }
 
         let sql = format!(
@@ -164,10 +161,7 @@ impl WebhookEndpointRepoTrait for PostgresPersistence {
             query = query.bind(a);
         }
 
-        let row = query
-            .fetch_one(self.pool())
-            .await
-            .map_err(AppError::from)?;
+        let row = query.fetch_one(self.pool()).await.map_err(AppError::from)?;
 
         Ok(row_to_profile(row))
     }
@@ -223,13 +217,12 @@ impl WebhookEndpointRepoTrait for PostgresPersistence {
     }
 
     async fn count_by_domain(&self, domain_id: Uuid) -> AppResult<i64> {
-        let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM webhook_endpoints WHERE domain_id = $1",
-        )
-        .bind(domain_id)
-        .fetch_one(self.pool())
-        .await
-        .map_err(AppError::from)?;
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM webhook_endpoints WHERE domain_id = $1")
+                .bind(domain_id)
+                .fetch_one(self.pool())
+                .await
+                .map_err(AppError::from)?;
         Ok(count)
     }
 }

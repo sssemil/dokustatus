@@ -1955,10 +1955,7 @@ async fn update_webhook_endpoint(
 ) -> AppResult<impl IntoResponse> {
     let (_, _owner_id) = current_user(&jar, &app_state).await?;
 
-    let description_ref = payload
-        .description
-        .as_ref()
-        .map(|d| d.as_deref());
+    let description_ref = payload.description.as_ref().map(|d| d.as_deref());
 
     let endpoint = app_state
         .webhook_use_cases

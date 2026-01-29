@@ -1,9 +1,9 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 
-const SIGNATURE_HEADER = "reauth-webhook-signature";
-const ID_HEADER = "reauth-webhook-id";
-const TIMESTAMP_HEADER = "reauth-webhook-timestamp";
-const DEFAULT_TOLERANCE_SECONDS = 300; // 5 minutes
+export const SIGNATURE_HEADER = "reauth-webhook-signature";
+export const ID_HEADER = "reauth-webhook-id";
+export const TIMESTAMP_HEADER = "reauth-webhook-timestamp";
+const DEFAULT_TOLERANCE_SECONDS = 300;
 
 export type WebhookEvent = {
   id: string;
@@ -43,6 +43,10 @@ function parseSignatureHeader(header: string): { timestamp: string; signatures: 
   }
 
   return { timestamp, signatures };
+}
+
+function isValidHex(value: string): boolean {
+  return /^[0-9a-fA-F]+$/.test(value) && value.length % 2 === 0;
 }
 
 function computeSignature(secret: string, timestamp: string, payload: string): string {
@@ -101,6 +105,9 @@ export function verifyWebhookSignature(options: VerifyWebhookOptions): WebhookEv
   let verified = false;
 
   for (const sig of signatures) {
+    if (!isValidHex(sig)) {
+      continue;
+    }
     const sigBuffer = Buffer.from(sig, "hex");
     if (sigBuffer.length === expectedBuffer.length && timingSafeEqual(sigBuffer, expectedBuffer)) {
       verified = true;

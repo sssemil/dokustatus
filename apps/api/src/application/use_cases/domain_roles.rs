@@ -41,12 +41,7 @@ impl DomainRolesUseCases {
         self.webhook_emitter = Some(emitter);
     }
 
-    fn emit_webhook(
-        &self,
-        domain_id: Uuid,
-        event_type: WebhookEventType,
-        data: serde_json::Value,
-    ) {
+    fn emit_webhook(&self, domain_id: Uuid, event_type: WebhookEventType, data: serde_json::Value) {
         if let Some(emitter) = &self.webhook_emitter {
             let emitter = Arc::clone(emitter);
             tokio::spawn(async move {
@@ -190,7 +185,7 @@ impl DomainRolesUseCases {
             domain_id,
             WebhookEventType::UserRolesChanged,
             serde_json::json!({
-                "user_id": user_id,
+                "user_id": user_id.to_string(),
                 "old_roles": old_roles,
                 "new_roles": roles,
             }),

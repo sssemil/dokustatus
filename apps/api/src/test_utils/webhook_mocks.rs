@@ -119,10 +119,7 @@ impl WebhookDeliveryRepoTrait for StubWebhookDeliveryRepo {
         unimplemented!("not needed for tests")
     }
 
-    async fn claim_pending_batch(
-        &self,
-        _limit: i64,
-    ) -> AppResult<Vec<WebhookDeliveryWithDetails>> {
+    async fn claim_pending_batch(&self, _limit: i64) -> AppResult<Vec<WebhookDeliveryWithDetails>> {
         Ok(vec![])
     }
 

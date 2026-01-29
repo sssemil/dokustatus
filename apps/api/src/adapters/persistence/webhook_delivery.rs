@@ -69,10 +69,7 @@ impl WebhookDeliveryRepoTrait for PostgresPersistence {
         Ok(row_to_profile(row))
     }
 
-    async fn claim_pending_batch(
-        &self,
-        limit: i64,
-    ) -> AppResult<Vec<WebhookDeliveryWithDetails>> {
+    async fn claim_pending_batch(&self, limit: i64) -> AppResult<Vec<WebhookDeliveryWithDetails>> {
         let rows = sqlx::query(
             r#"
             WITH claimed AS (

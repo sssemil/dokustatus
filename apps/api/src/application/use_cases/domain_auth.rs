@@ -1030,13 +1030,17 @@ impl DomainAuthUseCases {
             return Err(AppError::NotFound);
         }
 
+        let was_whitelisted = user.is_whitelisted;
+
         self.end_user_repo.set_whitelisted(user_id, false).await?;
 
-        self.emit_webhook(
-            domain_id,
-            crate::domain::entities::webhook::WebhookEventType::UserUnwhitelisted,
-            serde_json::json!({ "user_id": user_id.to_string() }),
-        );
+        if was_whitelisted {
+            self.emit_webhook(
+                domain_id,
+                crate::domain::entities::webhook::WebhookEventType::UserUnwhitelisted,
+                serde_json::json!({ "user_id": user_id.to_string() }),
+            );
+        }
 
         Ok(())
     }
