@@ -109,6 +109,10 @@ pub fn router() -> Router<AppState> {
             "/{domain_id}/billing/subscribers/{user_id}/revoke",
             delete(revoke_subscription),
         )
+        .route(
+            "/{domain_id}/billing/subscribers/{user_id}/provider-state",
+            get(get_subscriber_provider_state),
+        )
         .route("/{domain_id}/billing/analytics", get(get_billing_analytics))
         .route("/{domain_id}/billing/payments", get(list_billing_payments))
         .route(
@@ -1399,6 +1403,8 @@ struct SubscriberResponse {
     cancel_at_period_end: bool,
     manually_granted: bool,
     created_at: Option<chrono::NaiveDateTime>,
+    stripe_subscription_id: Option<String>,
+    payment_provider: Option<String>,
 }
 
 async fn list_billing_subscribers(
@@ -1430,6 +1436,11 @@ async fn list_billing_subscribers(
             cancel_at_period_end: s.subscription.cancel_at_period_end,
             manually_granted: s.subscription.manually_granted,
             created_at: s.subscription.created_at,
+            stripe_subscription_id: s.subscription.stripe_subscription_id,
+            payment_provider: s
+                .subscription
+                .payment_provider
+                .map(|p| p.display_name().to_string()),
         })
         .collect();
 
@@ -1479,6 +1490,105 @@ async fn revoke_subscription(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn get_subscriber_provider_state(
+    State(app_state): State<AppState>,
+    jar: CookieJar,
+    Path(params): Path<EndUserPathParams>,
+) -> AppResult<impl IntoResponse> {
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
+
+    let result = app_state
+        .billing_use_cases
+        .get_user_subscription_provider_state(owner_id, params.domain_id, params.user_id)
+        .await?;
+
+    #[derive(Serialize)]
+    struct ProviderStateResponse {
+        local: Option<LocalSubscriptionState>,
+        providers: Vec<ProviderStateEntry>,
+        skipped: Vec<SkippedProviderEntry>,
+    }
+
+    #[derive(Serialize)]
+    struct LocalSubscriptionState {
+        status: String,
+        plan_name: Option<String>,
+        plan_code: Option<String>,
+        current_period_start: Option<chrono::NaiveDateTime>,
+        current_period_end: Option<chrono::NaiveDateTime>,
+        cancel_at_period_end: bool,
+        trial_end: Option<chrono::NaiveDateTime>,
+        stripe_subscription_id: Option<String>,
+        stripe_customer_id: String,
+        payment_provider: Option<String>,
+        updated_at: Option<chrono::NaiveDateTime>,
+    }
+
+    #[derive(Serialize)]
+    struct ProviderStateEntry {
+        provider: String,
+        status: Option<String>,
+        current_period_start: Option<chrono::NaiveDateTime>,
+        current_period_end: Option<chrono::NaiveDateTime>,
+        cancel_at_period_end: Option<bool>,
+        canceled_at: Option<chrono::NaiveDateTime>,
+        trial_end: Option<chrono::NaiveDateTime>,
+        price_id: Option<String>,
+        error: Option<String>,
+    }
+
+    #[derive(Serialize)]
+    struct SkippedProviderEntry {
+        provider: String,
+        reason: String,
+    }
+
+    let local = result.subscription.map(|sub| LocalSubscriptionState {
+        status: sub.status.as_str().to_string(),
+        plan_name: result.plan.as_ref().map(|p| p.name.clone()),
+        plan_code: result.plan.as_ref().map(|p| p.code.clone()),
+        current_period_start: sub.current_period_start,
+        current_period_end: sub.current_period_end,
+        cancel_at_period_end: sub.cancel_at_period_end,
+        trial_end: sub.trial_end,
+        stripe_subscription_id: sub.stripe_subscription_id,
+        stripe_customer_id: sub.stripe_customer_id,
+        payment_provider: sub.payment_provider.map(|p| p.display_name().to_string()),
+        updated_at: sub.updated_at,
+    });
+
+    let providers: Vec<ProviderStateEntry> = result
+        .providers
+        .into_iter()
+        .map(|p| ProviderStateEntry {
+            provider: p.provider,
+            status: p.status,
+            current_period_start: p.current_period_start,
+            current_period_end: p.current_period_end,
+            cancel_at_period_end: p.cancel_at_period_end,
+            canceled_at: p.canceled_at,
+            trial_end: p.trial_end,
+            price_id: p.price_id,
+            error: p.error,
+        })
+        .collect();
+
+    let skipped: Vec<SkippedProviderEntry> = result
+        .skipped
+        .into_iter()
+        .map(|s| SkippedProviderEntry {
+            provider: s.provider,
+            reason: s.reason,
+        })
+        .collect();
+
+    Ok(Json(ProviderStateResponse {
+        local,
+        providers,
+        skipped,
+    }))
 }
 
 #[derive(Serialize)]

@@ -301,6 +301,33 @@ pub struct StripeSubscriptionUpdate {
     pub trial_end: Option<NaiveDateTime>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderComparisonResult {
+    pub subscription: Option<UserSubscriptionProfile>,
+    pub plan: Option<SubscriptionPlanProfile>,
+    pub providers: Vec<ProviderSubscriptionResult>,
+    pub skipped: Vec<SkippedProvider>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ProviderSubscriptionResult {
+    pub provider: String,
+    pub status: Option<String>,
+    pub current_period_start: Option<NaiveDateTime>,
+    pub current_period_end: Option<NaiveDateTime>,
+    pub cancel_at_period_end: Option<bool>,
+    pub canceled_at: Option<NaiveDateTime>,
+    pub trial_end: Option<NaiveDateTime>,
+    pub price_id: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SkippedProvider {
+    pub provider: String,
+    pub reason: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct CreateSubscriptionEventInput {
     pub subscription_id: Uuid,
@@ -1415,6 +1442,140 @@ impl DomainBillingUseCases {
         } else {
             Ok(None)
         }
+    }
+
+    /// Get provider-side subscription state for comparison with local DB.
+    /// Read-only — does not update local state.
+    pub async fn get_user_subscription_provider_state(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+        user_id: Uuid,
+    ) -> AppResult<ProviderComparisonResult> {
+        let domain = self.get_domain_verified(owner_id, domain_id).await?;
+        let mode = domain.active_payment_mode;
+
+        let sub = self
+            .subscription_repo
+            .get_by_user_and_mode(domain_id, mode, user_id)
+            .await?;
+
+        let (sub, plan) = match sub {
+            Some(sub) => {
+                let plan = self.plan_repo.get_by_id(sub.plan_id).await?;
+                (Some(sub), plan)
+            }
+            None => {
+                return Ok(ProviderComparisonResult {
+                    subscription: None,
+                    plan: None,
+                    providers: vec![],
+                    skipped: vec![],
+                });
+            }
+        };
+
+        let sub = sub.unwrap();
+        let provider_name = sub
+            .payment_provider
+            .map(|p| p.display_name().to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+
+        let stripe_sub_id = match &sub.stripe_subscription_id {
+            Some(id) if !id.starts_with("manual_") => id.clone(),
+            _ => {
+                return Ok(ProviderComparisonResult {
+                    subscription: Some(sub),
+                    plan,
+                    providers: vec![],
+                    skipped: vec![SkippedProvider {
+                        provider: provider_name,
+                        reason: "no external subscription ID".to_string(),
+                    }],
+                });
+            }
+        };
+
+        let owning_provider = sub.payment_provider.unwrap_or(PaymentProvider::Stripe);
+
+        let provider_result = match self
+            .provider_factory
+            .get(domain_id, owning_provider, mode)
+            .await
+        {
+            Ok(provider) => {
+                let sub_id = SubscriptionId::new(&stripe_sub_id);
+                match provider.get_subscription(&sub_id).await {
+                    Ok(Some(info)) => ProviderSubscriptionResult {
+                        provider: owning_provider.display_name().to_string(),
+                        status: Some(info.status.as_str().to_string()),
+                        current_period_start: info.current_period_start.map(|dt| dt.naive_utc()),
+                        current_period_end: info.current_period_end.map(|dt| dt.naive_utc()),
+                        cancel_at_period_end: Some(info.cancel_at_period_end),
+                        canceled_at: info.canceled_at.map(|dt| dt.naive_utc()),
+                        trial_end: info.trial_end.map(|dt| dt.naive_utc()),
+                        price_id: info.price_id,
+                        error: None,
+                    },
+                    Ok(None) => ProviderSubscriptionResult {
+                        provider: owning_provider.display_name().to_string(),
+                        status: None,
+                        current_period_start: None,
+                        current_period_end: None,
+                        cancel_at_period_end: None,
+                        canceled_at: None,
+                        trial_end: None,
+                        price_id: None,
+                        error: Some("Subscription not found at provider".to_string()),
+                    },
+                    Err(e) => ProviderSubscriptionResult {
+                        provider: owning_provider.display_name().to_string(),
+                        status: None,
+                        current_period_start: None,
+                        current_period_end: None,
+                        cancel_at_period_end: None,
+                        canceled_at: None,
+                        trial_end: None,
+                        price_id: None,
+                        error: Some(format!("Provider error: {}", e)),
+                    },
+                }
+            }
+            Err(e) => ProviderSubscriptionResult {
+                provider: owning_provider.display_name().to_string(),
+                status: None,
+                current_period_start: None,
+                current_period_end: None,
+                cancel_at_period_end: None,
+                canceled_at: None,
+                trial_end: None,
+                price_id: None,
+                error: Some(format!("Failed to initialize provider: {}", e)),
+            },
+        };
+
+        // Other enabled providers go into skipped
+        let enabled = self
+            .enabled_providers_repo
+            .list_active_by_domain(domain_id)
+            .await
+            .unwrap_or_default();
+
+        let skipped: Vec<SkippedProvider> = enabled
+            .iter()
+            .filter(|p| p.provider != owning_provider && p.mode == mode)
+            .map(|p| SkippedProvider {
+                provider: p.provider.display_name().to_string(),
+                reason: "not the owning provider".to_string(),
+            })
+            .collect();
+
+        Ok(ProviderComparisonResult {
+            subscription: Some(sub),
+            plan,
+            providers: vec![provider_result],
+            skipped,
+        })
     }
 
     /// List subscribers in the domain's active mode (dashboard)

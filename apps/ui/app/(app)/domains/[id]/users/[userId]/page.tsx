@@ -13,6 +13,9 @@ import {
   CheckCircle,
   CreditCard,
   DollarSign,
+  RefreshCw,
+  AlertTriangle,
+  Loader2,
 } from "lucide-react";
 import { Card, Button, Badge, HoldButton, Modal, Input } from "@/components/ui";
 import { useToast } from "@/contexts/ToastContext";
@@ -56,6 +59,39 @@ type UserSubscriptionData = {
   cancel_at_period_end: boolean;
   manually_granted: boolean;
   created_at: string | null;
+  stripe_subscription_id: string | null;
+  payment_provider: string | null;
+};
+
+type ProviderStateData = {
+  local: {
+    status: string;
+    plan_name: string | null;
+    plan_code: string | null;
+    current_period_start: string | null;
+    current_period_end: string | null;
+    cancel_at_period_end: boolean;
+    trial_end: string | null;
+    stripe_subscription_id: string | null;
+    stripe_customer_id: string;
+    payment_provider: string | null;
+    updated_at: string | null;
+  } | null;
+  providers: {
+    provider: string;
+    status: string | null;
+    current_period_start: string | null;
+    current_period_end: string | null;
+    cancel_at_period_end: boolean | null;
+    canceled_at: string | null;
+    trial_end: string | null;
+    price_id: string | null;
+    error: string | null;
+  }[];
+  skipped: {
+    provider: string;
+    reason: string;
+  }[];
 };
 
 export default function UserDetailPage() {
@@ -83,6 +119,15 @@ export default function UserDetailPage() {
   const [showGrantModal, setShowGrantModal] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState("");
   const [grantingSubscription, setGrantingSubscription] = useState(false);
+
+  // Provider state comparison
+  const [providerState, setProviderState] = useState<ProviderStateData | null>(
+    null,
+  );
+  const [loadingProviderState, setLoadingProviderState] = useState(false);
+  const [providerStateError, setProviderStateError] = useState<string | null>(
+    null,
+  );
 
   const fetchUser = useCallback(async () => {
     try {
@@ -286,6 +331,27 @@ export default function UserDetailPage() {
       }
     } catch {
       addToast("Network error", "error");
+    }
+  };
+
+  const fetchProviderState = async () => {
+    setLoadingProviderState(true);
+    setProviderStateError(null);
+    try {
+      const res = await fetch(
+        `/api/domains/${domainId}/billing/subscribers/${userId}/provider-state`,
+        { credentials: "include" },
+      );
+      if (res.ok) {
+        const data: ProviderStateData = await res.json();
+        setProviderState(data);
+      } else {
+        setProviderStateError("Failed to fetch provider state");
+      }
+    } catch {
+      setProviderStateError("Network error");
+    } finally {
+      setLoadingProviderState(false);
     }
   };
 
@@ -527,6 +593,204 @@ export default function UserDetailPage() {
           </p>
         )}
       </Card>
+
+      {/* Provider State Comparison */}
+      {subscription && (
+        <Card className="p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-white flex items-center gap-2">
+              <RefreshCw size={20} className="text-blue-400" />
+              Provider State
+            </h2>
+            <Button
+              variant="ghost"
+              onClick={fetchProviderState}
+              disabled={loadingProviderState}
+            >
+              {loadingProviderState ? (
+                <Loader2 size={16} className="animate-spin mr-2" />
+              ) : (
+                <RefreshCw size={16} className="mr-2" />
+              )}
+              {providerState ? "Refresh" : "Fetch Provider State"}
+            </Button>
+          </div>
+
+          {providerStateError && (
+            <div className="p-3 bg-red-500/10 border border-red-500/30 rounded-lg mb-4">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={16} className="text-red-400" />
+                <span className="text-sm text-red-300">
+                  {providerStateError}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {!providerState && !loadingProviderState && !providerStateError && (
+            <p className="text-sm text-zinc-400">
+              Click &quot;Fetch Provider State&quot; to compare local data with
+              what the payment provider reports.
+            </p>
+          )}
+
+          {loadingProviderState && !providerState && (
+            <div className="flex justify-center py-4">
+              <div className="w-5 h-5 border-2 border-zinc-600 border-t-blue-500 rounded-full animate-spin" />
+            </div>
+          )}
+
+          {providerState && (
+            <div className="space-y-3">
+              {providerState.providers.map((p, i) => (
+                <div key={i}>
+                  {p.error ? (
+                    <div className="p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+                      <div className="flex items-center gap-2 mb-1">
+                        <AlertTriangle size={14} className="text-yellow-400" />
+                        <span className="text-sm font-medium text-yellow-300">
+                          {p.provider}
+                        </span>
+                      </div>
+                      <p className="text-sm text-zinc-400">{p.error}</p>
+                    </div>
+                  ) : (
+                    <div className="overflow-hidden rounded-lg border border-zinc-700">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-zinc-800/80">
+                            <th className="text-left px-4 py-2 text-zinc-400 font-medium">
+                              Field
+                            </th>
+                            <th className="text-left px-4 py-2 text-zinc-400 font-medium">
+                              Local (DB)
+                            </th>
+                            <th className="text-left px-4 py-2 text-zinc-400 font-medium">
+                              {p.provider}
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-700/50">
+                          {[
+                            {
+                              field: "Status",
+                              local: providerState.local?.status ?? "—",
+                              provider: p.status ?? "—",
+                            },
+                            {
+                              field: "Period Start",
+                              local: providerState.local?.current_period_start
+                                ? formatDate(
+                                    providerState.local.current_period_start,
+                                  )
+                                : "—",
+                              provider: p.current_period_start
+                                ? formatDate(p.current_period_start)
+                                : "—",
+                            },
+                            {
+                              field: "Period End",
+                              local: providerState.local?.current_period_end
+                                ? formatDate(
+                                    providerState.local.current_period_end,
+                                  )
+                                : "—",
+                              provider: p.current_period_end
+                                ? formatDate(p.current_period_end)
+                                : "—",
+                            },
+                            {
+                              field: "Cancel at End",
+                              local: providerState.local
+                                ? providerState.local.cancel_at_period_end
+                                  ? "Yes"
+                                  : "No"
+                                : "—",
+                              provider:
+                                p.cancel_at_period_end !== null
+                                  ? p.cancel_at_period_end
+                                    ? "Yes"
+                                    : "No"
+                                  : "—",
+                            },
+                            {
+                              field: "Trial End",
+                              local: providerState.local?.trial_end
+                                ? formatDate(providerState.local.trial_end)
+                                : "—",
+                              provider: p.trial_end
+                                ? formatDate(p.trial_end)
+                                : "—",
+                            },
+                            {
+                              field: "Price ID",
+                              local: "—",
+                              provider: p.price_id ?? "—",
+                            },
+                            {
+                              field: "Sub ID",
+                              local:
+                                providerState.local?.stripe_subscription_id ??
+                                "—",
+                              provider:
+                                providerState.local?.stripe_subscription_id ??
+                                "—",
+                            },
+                          ].map((row) => {
+                            const isDrift =
+                              row.local !== "—" &&
+                              row.provider !== "—" &&
+                              row.local !== row.provider;
+                            return (
+                              <tr
+                                key={row.field}
+                                className={
+                                  isDrift ? "bg-yellow-500/5" : "bg-zinc-800/30"
+                                }
+                              >
+                                <td className="px-4 py-2 text-zinc-400">
+                                  {row.field}
+                                </td>
+                                <td
+                                  className={`px-4 py-2 ${isDrift ? "text-yellow-300" : "text-zinc-200"}`}
+                                >
+                                  {row.local}
+                                </td>
+                                <td
+                                  className={`px-4 py-2 ${isDrift ? "text-yellow-300" : "text-zinc-200"}`}
+                                >
+                                  {row.provider}
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              ))}
+
+              {providerState.skipped.length > 0 && (
+                <div className="text-xs text-zinc-500 space-y-1">
+                  {providerState.skipped.map((s, i) => (
+                    <p key={i}>
+                      {s.provider}: <span className="italic">{s.reason}</span>
+                    </p>
+                  ))}
+                </div>
+              )}
+
+              {providerState.local?.updated_at && (
+                <p className="text-xs text-zinc-500">
+                  Local data last updated:{" "}
+                  {formatDate(providerState.local.updated_at)}
+                </p>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
 
       {/* Actions */}
       <Card className="p-6">
