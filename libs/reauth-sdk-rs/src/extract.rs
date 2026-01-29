@@ -44,10 +44,7 @@ pub fn extract_from_cookie(cookie_header: &str) -> Option<String> {
         let cookie = cookie.trim();
         if let Some(value) = cookie.strip_prefix("end_user_access_token=") {
             // URL decode the value
-            return Some(
-                urlencoding_decode(value)
-                    .unwrap_or_else(|_| value.to_string()),
-            );
+            return Some(urlencoding_decode(value).unwrap_or_else(|_| value.to_string()));
         }
     }
     None
@@ -81,10 +78,7 @@ mod tests {
 
     #[test]
     fn test_extract_from_header() {
-        assert_eq!(
-            extract_from_header("Bearer eyJtoken"),
-            Some("eyJtoken")
-        );
+        assert_eq!(extract_from_header("Bearer eyJtoken"), Some("eyJtoken"));
         assert_eq!(extract_from_header("bearer eyJtoken"), None);
         assert_eq!(extract_from_header("Basic xyz"), None);
         assert_eq!(extract_from_header(""), None);
@@ -93,10 +87,7 @@ mod tests {
     #[test]
     fn test_extract_from_cookie() {
         let cookie = "session=abc; end_user_access_token=eyJtoken; other=xyz";
-        assert_eq!(
-            extract_from_cookie(cookie),
-            Some("eyJtoken".to_string())
-        );
+        assert_eq!(extract_from_cookie(cookie), Some("eyJtoken".to_string()));
     }
 
     #[test]
@@ -108,9 +99,6 @@ mod tests {
     #[test]
     fn test_extract_from_cookie_url_encoded() {
         let cookie = "end_user_access_token=eyJ%3Dtoken";
-        assert_eq!(
-            extract_from_cookie(cookie),
-            Some("eyJ=token".to_string())
-        );
+        assert_eq!(extract_from_cookie(cookie), Some("eyJ=token".to_string()));
     }
 }

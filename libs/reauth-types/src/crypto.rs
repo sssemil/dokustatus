@@ -1,5 +1,5 @@
 use hkdf::Hkdf;
-use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode};
 use sha2::Sha256;
 use uuid::Uuid;
 
@@ -76,11 +76,8 @@ pub fn peek_domain_id(token: &str) -> Result<Uuid, JwtError> {
     validation.insecure_disable_signature_validation();
     validation.validate_exp = false;
 
-    let token_data = decode::<DomainEndUserClaims>(
-        token,
-        &DecodingKey::from_secret(b"ignored"),
-        &validation,
-    )?;
+    let token_data =
+        decode::<DomainEndUserClaims>(token, &DecodingKey::from_secret(b"ignored"), &validation)?;
 
     Uuid::parse_str(&token_data.claims.domain_id)
         .map_err(|_| JwtError::InvalidClaims("Invalid domain_id format".into()))

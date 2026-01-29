@@ -1,9 +1,11 @@
 //! Reauth client implementation.
 
-use reauth_types::{derive_jwt_secret, peek_domain_id, verify_jwt, DomainEndUserClaims, UserDetails};
+use reauth_types::{
+    DomainEndUserClaims, UserDetails, derive_jwt_secret, peek_domain_id, verify_jwt,
+};
 
 use crate::error::ReauthError;
-use crate::extract::{extract_from_cookie, extract_from_header, Headers};
+use crate::extract::{Headers, extract_from_cookie, extract_from_header};
 
 /// Configuration for the Reauth client.
 #[derive(Debug, Clone)]
@@ -219,7 +221,7 @@ impl ReauthClient {
     /// Peek at claims without verifying signature.
     /// Used internally for domain validation before secret derivation.
     fn peek_claims(&self, token: &str) -> Result<DomainEndUserClaims, ReauthError> {
-        use jsonwebtoken::{decode, errors::Error as JwtError, Algorithm, DecodingKey, Validation};
+        use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, errors::Error as JwtError};
 
         let mut validation = Validation::new(Algorithm::HS256);
         validation.insecure_disable_signature_validation();
