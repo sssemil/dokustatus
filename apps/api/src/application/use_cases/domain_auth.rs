@@ -15,6 +15,7 @@ use crate::application::email_templates::{
 };
 use crate::application::use_cases::domain::DomainRepoTrait;
 use crate::domain::entities::domain::DomainStatus;
+use crate::domain::entities::webhook::{UserAuthPayload, UserIdPayload};
 use crate::infra::crypto::ProcessCipher;
 
 // ============================================================================
@@ -376,7 +377,7 @@ impl DomainAuthUseCases {
         &self,
         domain_id: Uuid,
         event_type: crate::domain::entities::webhook::WebhookEventType,
-        data: serde_json::Value,
+        data: impl serde::Serialize + Send + 'static,
     ) {
         if let Some(emitter) = &self.webhook_emitter {
             let emitter = Arc::clone(emitter);
@@ -577,19 +578,19 @@ impl DomainAuthUseCases {
                 self.emit_webhook(
                     data.domain_id,
                     WebhookEventType::UserCreated,
-                    serde_json::json!({
-                        "user_id": end_user.id.to_string(),
-                        "auth_method": "magic_link",
-                    }),
+                    UserAuthPayload {
+                        user_id: end_user.id.to_string(),
+                        auth_method: "magic_link".into(),
+                    },
                 );
             }
             self.emit_webhook(
                 data.domain_id,
                 WebhookEventType::UserLogin,
-                serde_json::json!({
-                    "user_id": end_user.id.to_string(),
-                    "auth_method": "magic_link",
-                }),
+                UserAuthPayload {
+                    user_id: end_user.id.to_string(),
+                    auth_method: "magic_link".into(),
+                },
             );
 
             return Ok(Some(end_user));
@@ -846,7 +847,9 @@ impl DomainAuthUseCases {
         self.emit_webhook(
             domain_id,
             crate::domain::entities::webhook::WebhookEventType::UserDeleted,
-            serde_json::json!({ "user_id": user_id.to_string() }),
+            UserIdPayload {
+                user_id: user_id.to_string(),
+            },
         );
 
         Ok(())
@@ -896,7 +899,9 @@ impl DomainAuthUseCases {
             self.emit_webhook(
                 domain_id,
                 crate::domain::entities::webhook::WebhookEventType::UserFrozen,
-                serde_json::json!({ "user_id": user_id.to_string() }),
+                UserIdPayload {
+                    user_id: user_id.to_string(),
+                },
             );
         }
 
@@ -949,7 +954,9 @@ impl DomainAuthUseCases {
             self.emit_webhook(
                 domain_id,
                 crate::domain::entities::webhook::WebhookEventType::UserUnfrozen,
-                serde_json::json!({ "user_id": user_id.to_string() }),
+                UserIdPayload {
+                    user_id: user_id.to_string(),
+                },
             );
         }
 
@@ -1002,7 +1009,9 @@ impl DomainAuthUseCases {
             self.emit_webhook(
                 domain_id,
                 crate::domain::entities::webhook::WebhookEventType::UserWhitelisted,
-                serde_json::json!({ "user_id": user_id.to_string() }),
+                UserIdPayload {
+                    user_id: user_id.to_string(),
+                },
             );
         }
 
@@ -1038,7 +1047,9 @@ impl DomainAuthUseCases {
             self.emit_webhook(
                 domain_id,
                 crate::domain::entities::webhook::WebhookEventType::UserUnwhitelisted,
-                serde_json::json!({ "user_id": user_id.to_string() }),
+                UserIdPayload {
+                    user_id: user_id.to_string(),
+                },
             );
         }
 
@@ -1092,9 +1103,9 @@ impl DomainAuthUseCases {
         self.emit_webhook(
             domain_id,
             crate::domain::entities::webhook::WebhookEventType::UserInvited,
-            serde_json::json!({
-                "user_id": user.id.to_string(),
-            }),
+            UserIdPayload {
+                user_id: user.id.to_string(),
+            },
         );
 
         // Return user with updated whitelist status
@@ -1356,10 +1367,10 @@ impl DomainAuthUseCases {
             self.emit_webhook(
                 domain_id,
                 crate::domain::entities::webhook::WebhookEventType::UserLogin,
-                serde_json::json!({
-                    "user_id": user.id.to_string(),
-                    "auth_method": "google_oauth",
-                }),
+                UserAuthPayload {
+                    user_id: user.id.to_string(),
+                    auth_method: "google_oauth".into(),
+                },
             );
             return Ok(GoogleLoginResult::LoggedIn(user));
         }
@@ -1397,18 +1408,18 @@ impl DomainAuthUseCases {
         self.emit_webhook(
             domain_id,
             WebhookEventType::UserCreated,
-            serde_json::json!({
-                "user_id": user.id.to_string(),
-                "auth_method": "google_oauth",
-            }),
+            UserAuthPayload {
+                user_id: user.id.to_string(),
+                auth_method: "google_oauth".into(),
+            },
         );
         self.emit_webhook(
             domain_id,
             WebhookEventType::UserLogin,
-            serde_json::json!({
-                "user_id": user.id.to_string(),
-                "auth_method": "google_oauth",
-            }),
+            UserAuthPayload {
+                user_id: user.id.to_string(),
+                auth_method: "google_oauth".into(),
+            },
         );
 
         Ok(GoogleLoginResult::LoggedIn(user))

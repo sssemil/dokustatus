@@ -27,6 +27,10 @@ use crate::{
 
 use super::domain::DomainRepoTrait;
 use crate::application::validators::is_valid_plan_code;
+use crate::domain::entities::webhook::{
+    PaymentPayload, SubscriptionCanceledPayload, SubscriptionCreatedPayload,
+    SubscriptionPlanChangedPayload, SubscriptionStatusChangedPayload,
+};
 
 /// Number of months in a year, used for MRR calculations
 const MONTHS_PER_YEAR: i64 = 12;
@@ -666,7 +670,7 @@ impl DomainBillingUseCases {
         &self,
         domain_id: Uuid,
         event_type: crate::domain::entities::webhook::WebhookEventType,
-        data: serde_json::Value,
+        data: impl serde::Serialize + Send + 'static,
     ) {
         if let Some(emitter) = &self.webhook_emitter {
             let emitter = Arc::clone(emitter);
@@ -1493,11 +1497,11 @@ impl DomainBillingUseCases {
         self.emit_webhook(
             domain_id,
             crate::domain::entities::webhook::WebhookEventType::SubscriptionCreated,
-            serde_json::json!({
-                "user_id": user_id.to_string(),
-                "plan_id": plan_id.to_string(),
-                "status": "active",
-            }),
+            SubscriptionCreatedPayload {
+                user_id: user_id.to_string(),
+                plan_id: plan_id.to_string(),
+                status: "active".into(),
+            },
         );
 
         Ok(sub)
@@ -1535,10 +1539,10 @@ impl DomainBillingUseCases {
         self.emit_webhook(
             domain_id,
             crate::domain::entities::webhook::WebhookEventType::SubscriptionCanceled,
-            serde_json::json!({
-                "user_id": user_id.to_string(),
-                "subscription_id": sub.id.to_string(),
-            }),
+            SubscriptionCanceledPayload {
+                user_id: user_id.to_string(),
+                subscription_id: sub.id.to_string(),
+            },
         );
 
         Ok(())
@@ -1814,12 +1818,12 @@ impl DomainBillingUseCases {
         self.emit_webhook(
             domain_id,
             crate::domain::entities::webhook::WebhookEventType::SubscriptionUpdated,
-            serde_json::json!({
-                "user_id": user_id.to_string(),
-                "from_plan_code": current_plan.code,
-                "to_plan_code": new_plan.code,
-                "change_type": change_type.as_ref(),
-            }),
+            SubscriptionPlanChangedPayload {
+                user_id: user_id.to_string(),
+                from_plan_code: current_plan.code.clone(),
+                to_plan_code: new_plan.code.clone(),
+                change_type: change_type.as_ref().to_string(),
+            },
         );
 
         Ok(PlanChangeResult {
@@ -2087,12 +2091,12 @@ impl DomainBillingUseCases {
             self.emit_webhook(
                 input.domain_id,
                 crate::domain::entities::webhook::WebhookEventType::SubscriptionUpdated,
-                serde_json::json!({
-                    "user_id": input.end_user_id.to_string(),
-                    "plan_id": input.plan_id.to_string(),
-                    "old_status": old_status.as_str(),
-                    "new_status": input.status.as_str(),
-                }),
+                SubscriptionStatusChangedPayload {
+                    user_id: input.end_user_id.to_string(),
+                    plan_id: input.plan_id.to_string(),
+                    old_status: old_status.as_str().to_string(),
+                    new_status: input.status.as_str().to_string(),
+                },
             );
 
             Ok(sub)
@@ -2102,11 +2106,11 @@ impl DomainBillingUseCases {
             self.emit_webhook(
                 input.domain_id,
                 crate::domain::entities::webhook::WebhookEventType::SubscriptionCreated,
-                serde_json::json!({
-                    "user_id": input.end_user_id.to_string(),
-                    "plan_id": input.plan_id.to_string(),
-                    "status": input.status.as_str(),
-                }),
+                SubscriptionCreatedPayload {
+                    user_id: input.end_user_id.to_string(),
+                    plan_id: input.plan_id.to_string(),
+                    status: input.status.as_str().to_string(),
+                },
             );
 
             Ok(sub)
@@ -2236,12 +2240,12 @@ impl DomainBillingUseCases {
             self.emit_webhook(
                 domain_id,
                 event_type,
-                serde_json::json!({
-                    "user_id": end_user_id.to_string(),
-                    "amount_cents": input.amount_cents,
-                    "currency": input.currency,
-                    "invoice_id": stripe_invoice_id,
-                }),
+                PaymentPayload {
+                    user_id: end_user_id.to_string(),
+                    amount_cents: input.amount_cents as i64,
+                    currency: input.currency.clone(),
+                    invoice_id: stripe_invoice_id.to_string(),
+                },
             );
         }
 

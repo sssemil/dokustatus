@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::app_error::{AppError, AppResult};
 use crate::application::use_cases::domain::DomainRepoTrait;
-use crate::domain::entities::webhook::WebhookEventType;
+use crate::domain::entities::webhook::{WebhookEnvelope, WebhookEventType, WebhookTestPayload};
 use crate::infra::crypto::ProcessCipher;
 
 // ============================================================================
@@ -331,23 +331,26 @@ impl WebhookUseCases {
         &self,
         domain_id: Uuid,
         event_type: WebhookEventType,
-        data: JsonValue,
+        data: impl Serialize,
     ) -> AppResult<WebhookEventProfile> {
         let event_id = Uuid::new_v4();
         let now = chrono::Utc::now();
 
-        let payload = serde_json::json!({
-            "id": format!("evt_{}", event_id),
-            "type": event_type.as_str(),
-            "api_version": WEBHOOK_API_VERSION,
-            "created_at": now.to_rfc3339(),
-            "domain_id": domain_id.to_string(),
-            "data": data,
-        });
+        let envelope = WebhookEnvelope {
+            id: format!("evt_{}", event_id),
+            event_type: event_type.as_str().to_string(),
+            api_version: WEBHOOK_API_VERSION.to_string(),
+            created_at: now.to_rfc3339(),
+            domain_id: domain_id.to_string(),
+            data,
+        };
 
-        let payload_raw = serde_json::to_string(&payload).map_err(|e| {
+        let payload_raw = serde_json::to_string(&envelope).map_err(|e| {
             AppError::Internal(format!("failed to serialize webhook payload: {}", e))
         })?;
+
+        let payload: JsonValue = serde_json::from_str(&payload_raw)
+            .map_err(|e| AppError::Internal(format!("failed to parse webhook payload: {}", e)))?;
 
         let event = self
             .event_repo
@@ -380,15 +383,12 @@ impl WebhookUseCases {
     ) -> AppResult<WebhookEventProfile> {
         self.get_endpoint(endpoint_id, domain_id).await?;
 
-        let data = serde_json::json!({
-            "endpoint_id": endpoint_id.to_string(),
-        });
+        let data = WebhookTestPayload {
+            endpoint_id: endpoint_id.to_string(),
+        };
 
-        let event = self
-            .emit_event(domain_id, WebhookEventType::WebhookTest, data)
-            .await?;
-
-        Ok(event)
+        self.emit_event(domain_id, WebhookEventType::WebhookTest, data)
+            .await
     }
 
     // ========================================================================
