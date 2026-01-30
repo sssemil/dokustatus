@@ -661,6 +661,10 @@ pub fn calculate_backoff_delay(attempt_count: i32) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_utils::{
+        InMemoryDomainRepo, InMemoryWebhookDeliveryRepo, InMemoryWebhookEndpointRepo,
+        InMemoryWebhookEventRepo, create_test_domain,
+    };
 
     #[test]
     fn backoff_delay_increases_exponentially() {
@@ -677,5 +681,341 @@ mod tests {
     fn backoff_delay_is_capped() {
         let d = calculate_backoff_delay(10);
         assert!(d <= 20_060);
+    }
+
+    // =========================================================================
+    // Helpers
+    // =========================================================================
+
+    fn test_cipher() -> ProcessCipher {
+        let test_key_b64 = "QkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkI=";
+        ProcessCipher::new_from_base64(test_key_b64).unwrap()
+    }
+
+    fn build_webhook_use_cases(
+        domains: Vec<crate::application::use_cases::domain::DomainProfile>,
+    ) -> WebhookUseCases {
+        WebhookUseCases::new(
+            Arc::new(InMemoryDomainRepo::with_domains(domains)),
+            Arc::new(InMemoryWebhookEndpointRepo::new()),
+            Arc::new(InMemoryWebhookEventRepo::new()),
+            Arc::new(InMemoryWebhookDeliveryRepo::new()),
+            test_cipher(),
+        )
+    }
+
+    // =========================================================================
+    // Domain ownership verification — IDOR prevention
+    // =========================================================================
+
+    #[tokio::test]
+    async fn create_endpoint_rejects_non_owner() {
+        let owner_id = Uuid::new_v4();
+        let attacker_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        let domain_id = domain.id;
+
+        let uc = build_webhook_use_cases(vec![domain]);
+
+        let result = uc
+            .create_endpoint(
+                attacker_id,
+                domain_id,
+                "https://example.com/webhook",
+                None,
+                None,
+            )
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn create_endpoint_allows_owner() {
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.domain = "example.com".to_string();
+        });
+        let domain_id = domain.id;
+
+        let uc = build_webhook_use_cases(vec![domain]);
+
+        let result = uc
+            .create_endpoint(
+                owner_id,
+                domain_id,
+                "https://example.com/webhook",
+                None,
+                None,
+            )
+            .await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn list_endpoints_rejects_non_owner() {
+        let owner_id = Uuid::new_v4();
+        let attacker_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        let domain_id = domain.id;
+
+        let uc = build_webhook_use_cases(vec![domain]);
+
+        let result = uc.list_endpoints(attacker_id, domain_id).await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn list_endpoints_allows_owner() {
+        let owner_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        let domain_id = domain.id;
+
+        let uc = build_webhook_use_cases(vec![domain]);
+
+        let result = uc.list_endpoints(owner_id, domain_id).await;
+
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test]
+    async fn list_events_rejects_non_owner() {
+        let owner_id = Uuid::new_v4();
+        let attacker_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+        });
+        let domain_id = domain.id;
+
+        let uc = build_webhook_use_cases(vec![domain]);
+
+        let result = uc.list_events(attacker_id, domain_id, None, 50, 0).await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn get_endpoint_rejects_non_owner() {
+        let owner_id = Uuid::new_v4();
+        let attacker_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.domain = "example.com".to_string();
+        });
+        let domain_id = domain.id;
+
+        let uc = build_webhook_use_cases(vec![domain]);
+
+        let (endpoint, _secret) = uc
+            .create_endpoint(
+                owner_id,
+                domain_id,
+                "https://example.com/webhook",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let result = uc.get_endpoint(attacker_id, endpoint.id, domain_id).await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn delete_endpoint_rejects_non_owner() {
+        let owner_id = Uuid::new_v4();
+        let attacker_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.domain = "example.com".to_string();
+        });
+        let domain_id = domain.id;
+
+        let uc = build_webhook_use_cases(vec![domain]);
+
+        let (endpoint, _secret) = uc
+            .create_endpoint(
+                owner_id,
+                domain_id,
+                "https://example.com/webhook",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let result = uc
+            .delete_endpoint(attacker_id, endpoint.id, domain_id)
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn rotate_secret_rejects_non_owner() {
+        let owner_id = Uuid::new_v4();
+        let attacker_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.domain = "example.com".to_string();
+        });
+        let domain_id = domain.id;
+
+        let uc = build_webhook_use_cases(vec![domain]);
+
+        let (endpoint, _secret) = uc
+            .create_endpoint(
+                owner_id,
+                domain_id,
+                "https://example.com/webhook",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let result = uc
+            .rotate_secret(attacker_id, endpoint.id, domain_id)
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn send_test_event_rejects_non_owner() {
+        let owner_id = Uuid::new_v4();
+        let attacker_id = Uuid::new_v4();
+        let domain = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_id);
+            d.domain = "example.com".to_string();
+        });
+        let domain_id = domain.id;
+
+        let uc = build_webhook_use_cases(vec![domain]);
+
+        let (endpoint, _secret) = uc
+            .create_endpoint(
+                owner_id,
+                domain_id,
+                "https://example.com/webhook",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let result = uc
+            .send_test_event(attacker_id, endpoint.id, domain_id)
+            .await;
+
+        assert!(matches!(result, Err(AppError::Forbidden)));
+    }
+
+    #[tokio::test]
+    async fn nonexistent_domain_returns_not_found() {
+        let attacker_id = Uuid::new_v4();
+        let fake_domain_id = Uuid::new_v4();
+
+        let uc = build_webhook_use_cases(vec![]);
+
+        let result = uc.list_endpoints(attacker_id, fake_domain_id).await;
+
+        assert!(matches!(result, Err(AppError::NotFound)));
+    }
+
+    #[tokio::test]
+    async fn cross_domain_access_blocked_for_all_operations() {
+        let owner_a = Uuid::new_v4();
+        let owner_b = Uuid::new_v4();
+
+        let domain_a = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_a);
+            d.domain = "domain-a.com".to_string();
+        });
+        let domain_b = create_test_domain(|d| {
+            d.owner_end_user_id = Some(owner_b);
+            d.domain = "domain-b.com".to_string();
+        });
+        let domain_a_id = domain_a.id;
+        let domain_b_id = domain_b.id;
+
+        let uc = build_webhook_use_cases(vec![domain_a, domain_b]);
+
+        let (endpoint_a, _) = uc
+            .create_endpoint(
+                owner_a,
+                domain_a_id,
+                "https://domain-a.com/webhook",
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        assert!(
+            matches!(
+                uc.list_endpoints(owner_a, domain_b_id).await,
+                Err(AppError::Forbidden)
+            ),
+            "owner_a should not list domain_b endpoints"
+        );
+
+        assert!(
+            matches!(
+                uc.get_endpoint(owner_a, endpoint_a.id, domain_b_id).await,
+                Err(AppError::Forbidden)
+            ),
+            "owner_a should not get endpoints via domain_b"
+        );
+
+        assert!(
+            matches!(
+                uc.create_endpoint(
+                    owner_b,
+                    domain_a_id,
+                    "https://domain-a.com/hook",
+                    None,
+                    None
+                )
+                    .await,
+                Err(AppError::Forbidden)
+            ),
+            "owner_b should not create endpoints on domain_a"
+        );
+
+        assert!(
+            matches!(
+                uc.delete_endpoint(owner_b, endpoint_a.id, domain_a_id)
+                    .await,
+                Err(AppError::Forbidden)
+            ),
+            "owner_b should not delete domain_a endpoints"
+        );
+
+        assert!(
+            matches!(
+                uc.rotate_secret(owner_b, endpoint_a.id, domain_a_id).await,
+                Err(AppError::Forbidden)
+            ),
+            "owner_b should not rotate domain_a secrets"
+        );
+
+        assert!(
+            matches!(
+                uc.list_events(owner_b, domain_a_id, None, 50, 0).await,
+                Err(AppError::Forbidden)
+            ),
+            "owner_b should not list domain_a events"
+        );
     }
 }
