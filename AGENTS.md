@@ -67,6 +67,22 @@ This project pairs a Rust backend (Axum + SQLx) with a Next.js UI, a TypeScript 
 - `infra`: deploy compose, Caddy config, secrets, and deploy scripts.
 - `docker-compose.yml`: local dev services (postgres, redis, coredns, caddy).
 - `run`: local command runner (see `./run help`).
+- `docs/billing/`: billing system specification (data model, state machines, flows, API surface, decisions, edge cases).
+
+## Billing System Specification
+
+The billing subsystem has a dedicated spec suite in `docs/billing/`. These are living documents that drive implementation:
+
+- `docs/billing/README.md` — Reading order and relationship to existing code
+- `docs/billing/OVERVIEW.md` — Goals, provider strategy, v1 scope
+- `docs/billing/DATA_MODEL.md` — Schema, enums, constraints
+- `docs/billing/STATE_MACHINES.md` — Subscription/payment lifecycle states
+- `docs/billing/FLOWS.md` — End-to-end checkout, renewal, cancellation flows
+- `docs/billing/DECISIONS.md` — Architecture decisions with rationale (25 decisions)
+- `docs/billing/EDGE_CASES.md` — Failure modes and acceptance criteria (60+ cases)
+- `docs/billing/API_SURFACE.md` — HTTP endpoints, internal functions, webhooks, events
+
+When working on billing features, consult these specs first. Existing billing code predates the spec — where they conflict, the spec is authoritative (pre-production project, no real users).
 
 ## Build, Test, and Development Commands
 Prefer `./run` (see `./run help`). Common flows:
