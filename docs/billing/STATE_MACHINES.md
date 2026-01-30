@@ -12,8 +12,7 @@ stateDiagram-v2
     [*] --> active: new_subscription(trial=false) + payment_success
 
     trialing --> active: trial_ends + payment_success
-    trialing --> paused: trial_ends + no_payment (crypto)
-    trialing --> past_due: trial_ends + payment_failed (card)
+    trialing --> paused: trial_ends + no_payment_or_payment_failed
     trialing --> canceled: user_cancels
 
     active --> past_due: renewal_payment_failed
@@ -37,8 +36,7 @@ stateDiagram-v2
 | `[init]` | `trialing` | `create_subscription` | `plan.trial_days > 0` |
 | `[init]` | `active` | `create_subscription` | `plan.trial_days = 0` AND payment succeeded |
 | `trialing` | `active` | `trial_conversion` | Payment succeeded |
-| `trialing` | `paused` | `trial_expired` | `auto_renew = false` AND no payment |
-| `trialing` | `past_due` | `trial_conversion_failed` | `auto_renew = true` AND payment failed |
+| `trialing` | `paused` | `trial_expired` | No payment or payment failed (D01: no grace for trials) |
 | `trialing` | `canceled` | `user_cancel` | User initiated |
 | `active` | `past_due` | `renewal_failed` | `auto_renew = true` AND payment failed |
 | `active` | `paused` | `renewal_expired` | `auto_renew = false` AND invoice not paid by due date |
@@ -243,6 +241,7 @@ These rules must hold across entities:
 | `past_due` | `active` (with grace_end_at) | Yes |
 | `paused` | `ended` OR `revoked` | Yes |
 | `canceled` | `ended` OR `revoked` | Yes |
+| `canceled` | `active` (access until period.end_at per D04) | Yes (paid cancel only) |
 | `active` | `ended` | INVALID |
 | `trialing` | `ended` | INVALID |
 
@@ -262,6 +261,7 @@ These rules must hold across entities:
 | Invoice Status | Period Status | Valid? |
 |----------------|---------------|--------|
 | `paid` | `active` OR `ended` | Yes |
+| `paid` | `revoked` | Yes (dispute won per D10: invoice restored to paid, period stays revoked) |
 | `refunded` | `revoked` | Yes |
 | `disputed` | `revoked` | Yes |
 | `open` | `active` | INVALID (shouldn't grant before paid) |
@@ -277,7 +277,7 @@ Valid transitions for each entity type. Implementation must validate before any 
 
 | Current Status | Allowed Next States |
 |---------------|-------------------|
-| `trialing` | `active`, `paused`, `past_due`, `canceled` |
+| `trialing` | `active`, `paused`, `canceled` |
 | `active` | `past_due`, `paused`, `canceled` |
 | `past_due` | `active`, `paused`, `canceled` |
 | `paused` | `active`, `canceled` |

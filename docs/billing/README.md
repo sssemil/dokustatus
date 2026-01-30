@@ -76,6 +76,6 @@ All paths relative to `apps/api/src/`.
 
 **Domain scoping**: The spec references `app_id` as the tenant key. The existing codebase uses `domain_id`. These are equivalent concepts; use `domain_id` in implementation.
 
-**Money storage**: Both spec and codebase agree: all money in integer cents, no decimals.
+**Money and credits storage**: All monetary amounts and credit balances are **purely integer**. Money is stored in cents (e.g., $10.00 = 1000), credits as raw integers. The billing system never formats or converts values for display — developers present them however they like.
 
 **Timestamps**: Both agree: `TIMESTAMPTZ` (UTC) everywhere.

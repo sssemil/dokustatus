@@ -620,14 +620,16 @@ CREATE INDEX idx_billing_event_created ON billing_event(created_at);
 
 ## Notes
 
-1. **All money in cents** - No decimals, avoids floating point issues. $10.00 = 1000.
+1. **All money in integer cents** - No decimals, no floats. $10.00 = 1000. The billing system never converts to display currency; developers present values however they like.
 
-2. **All timestamps in UTC** - Use `TIMESTAMPTZ`, never `TIMESTAMP`.
+2. **All credits are integers** - `credits_balance`, `credits_grant_amount`, and `delta` are always integers. The billing system stores and returns raw integers; display formatting (e.g., "1,000 credits") is the developer's responsibility.
 
-3. **Soft delete via status** - Plans/bundles use `status = 'archived'`, not deletion.
+3. **All timestamps in UTC** - Use `TIMESTAMPTZ`, never `TIMESTAMP`.
 
-4. **JSONB metadata** - Flexible storage for invoice details, features, etc.
+4. **Soft delete via status** - Plans/bundles use `status = 'archived'`, not deletion.
 
-5. **Credits can go negative** - Required for refund/dispute reversals after spend.
+5. **JSONB metadata** - Flexible storage for invoice details, features, etc.
 
-6. **No cascading deletes on business entities** - Only on identity mappings.
+6. **Credits can go negative** - Required for refund/dispute reversals after spend.
+
+7. **No cascading deletes on business entities** - Only on identity mappings.

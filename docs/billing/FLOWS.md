@@ -50,9 +50,10 @@ Step-by-step implementation flows with pseudocode. Implement in this order.
    - app_id: plan.app_id
    - billing_customer_id: billing_customer_id
    - plan_id: plan_id
-   - status: 'active'  // optimistic, will be confirmed by payment
+   - status: 'active'  // set to active in same transaction as payment creation;
+                        // if payment fails via webhook, subscription transitions to paused
    - auto_renew: true
-   - current_period_id: null  // set after period created
+   - current_period_id: null  // set after period created via webhook
    - cancel_at_period_end: false
 
 5. CREATE invoice:
@@ -70,7 +71,14 @@ Step-by-step implementation flows with pseudocode. Implement in this order.
        period_end: now() + plan.billing_interval
      }
 
-6. CALL stripe_adapter.create_payment_intent(
+6. IF invoice.amount_due = 0:
+   - SKIP payment creation (free tier or 100% discount)
+   - UPDATE invoice.status = 'paid', paid_at = now()
+   - Proceed directly to period/entitlement/credit grant (same as webhook success)
+   - GOTO step 8 (COMMIT), then run "On Payment Success" logic inline
+
+   ELSE:
+   CALL stripe_adapter.create_payment_intent(
      amount: invoice.amount_due,
      currency: invoice.currency,
      customer: provider_customer_ref.provider_customer_id,
@@ -112,23 +120,39 @@ Step-by-step implementation flows with pseudocode. Implement in this order.
 
 6. CREATE subscription_period:
    - subscription_id: invoice.metadata.subscription_id
-   - start_at: invoice.metadata.period_start
-   - end_at: invoice.metadata.period_end
+   - IF subscription.status = 'past_due' (recovery per D02):
+     - start_at: now()
+     - end_at: now() + billing_interval
+   - ELSE (initial or normal renewal):
+     - start_at: invoice.metadata.period_start
+     - end_at: invoice.metadata.period_end
    - status: 'active'
    - invoice_id: invoice.id
    - is_trial: false
 
 7. UPDATE subscription:
    - current_period_id: subscription_period.id
-   - status: 'active'  // confirm optimistic status
+   - status: 'active'
 
-8. IF plan.credits_grant_amount > 0:
+8. CREDIT GRANT (if applicable):
+   - SKIP if plan.credits_grant_amount = 0
+   - CHECK cadence:
+     - IF plan.credits_grant_cadence = 'on_start':
+       - QUERY: does customer have any previous paid period for this subscription?
+       - IF yes: SKIP credit grant (on_start = first period only)
+     - IF plan.credits_grant_cadence = 'per_period': always grant
+   - CALCULATE amount:
+     - base = plan.credits_grant_amount
+     - IF plan.billing_interval = 'year' AND plan.credits_yearly_multiply = true:
+       - amount = base * 12  (per D13)
+     - ELSE:
+       - amount = base
    - CREATE credit_ledger_entry:
      - source_type: 'subscription_period'
      - source_id: subscription_period.id
-     - delta: plan.credits_grant_amount
-   - UPDATE subscription_period.credits_granted = plan.credits_grant_amount
-   - UPDATE billing_customer.credits_balance += plan.credits_grant_amount
+     - delta: amount
+   - UPDATE subscription_period.credits_granted = amount
+   - UPDATE billing_customer.credits_balance += amount
 
 9. UPSERT entitlement:
    - kind: 'plan_access'
@@ -161,7 +185,7 @@ Step-by-step implementation flows with pseudocode. Implement in this order.
 3. BEGIN TRANSACTION
 
 4. CREATE subscription:
-   - status: 'active'  // will stay pending until payment
+   - status: 'active'  // set active; if payment never arrives, period expiry job pauses it
    - auto_renew: false  // crypto = manual renewal
    - (rest same as card flow)
 
@@ -369,6 +393,7 @@ Same flow but:
 2. IF subscription.pending_plan_id:
    - UPDATE subscription.plan_id = pending_plan_id
    - UPDATE subscription.pending_plan_id = null
+   - UPDATE subscription.locked_price_amount = null  // reset to new plan's current price
    - EMIT event: 'subscription.plan_changed'
 
 3. UPDATE old period.status = 'ended'
@@ -433,10 +458,10 @@ Same flow but:
    - UPDATE current_period.grace_end_at = now() + grace_days (e.g., 7 days)
    - // Entitlement remains active until grace_end_at
 
-8. SCHEDULE retry:
-   - retry_1: now() + 3 days
-   - retry_2: now() + 5 days
-   - retry_3: now() + 7 days (final)
+8. SCHEDULE retries per D21 (RETRY_SCHEDULE = [0, 3, 7] days from initial failure):
+   - Day 0: initial attempt (this failure)
+   - Day 3: retry 1
+   - Day 7: retry 2 (final)
 
 9. EMIT event: 'invoice.payment_failed'
 10. Send email: "Payment failed, please update your card"
@@ -447,15 +472,16 @@ Same flow but:
 ### Retry Logic
 
 ```
-1. QUERY invoices WHERE status = 'open' AND due_at < now() AND retry_count < max_retries
+1. QUERY invoices WHERE status = 'open' AND has failed payment AND retry_count < 3
 
 2. FOR EACH invoice:
+   - CHECK retry_schedule: [0, 3, 7] days from initial failure (per D21)
+   - IF not yet time for next retry: SKIP
    - ATTEMPT off-session charge
-   - IF success: webhook handles
+   - IF success: webhook handles (subscription -> active, grant credits, etc.)
    - IF failure:
-     - INCREMENT retry_count in metadata
-     - SCHEDULE next retry
-     - IF final retry failed:
+     - INCREMENT retry_count
+     - IF final retry (attempt 3) failed:
        - UPDATE invoice.status = 'uncollectible'
        - UPDATE subscription.status = 'paused'
        - UPDATE entitlement.status = 'inactive'
@@ -701,7 +727,7 @@ If developer configures immediate downgrades:
 ### Subscription Period Refund
 
 ```
-1. INPUT: invoice_id
+1. INPUT: invoice_id, reason (required)
 
 2. VALIDATE:
    - invoice.status = 'paid'
@@ -716,6 +742,7 @@ If developer configures immediate downgrades:
    - status: 'refunded'
    - refund_amount: invoice.amount_due
    - refunded_at: now()
+   - refund_reason: reason
 
 7. GET subscription_period by invoice_id
 
@@ -756,7 +783,7 @@ Same pattern:
 **v1: Manual handling only.**
 
 ```
-1. INPUT: invoice_id, refund_amount
+1. INPUT: invoice_id, refund_amount, reason (required)
 
 2. VALIDATE: refund_amount < invoice.amount_due
 
@@ -974,20 +1001,30 @@ If row found: customer has active plan access.
 ### Check Feature Access
 
 ```
-1. Get active subscription for billing_customer_id
-   WHERE status IN ('trialing', 'active', 'past_due')
-
-2. If subscription found, check plan.features for the requested feature key
+1. Check plan features via active entitlement (not subscription status):
+   Query entitlement WHERE:
+     - billing_customer_id = target customer
+     - kind = 'plan_access'
+     - status = 'active'
+     - active_from <= now()
+     - active_to IS NULL OR active_to > now()
+   If found, get subscription -> plan.features for the requested feature key
    - If feature present: return true
 
-3. Check bundle entitlements:
+   NOTE: This uses entitlements, not subscription.status. A canceled subscription
+   with D04 access (paid period not yet ended) still has an active entitlement,
+   so feature checks work correctly.
+
+2. Check bundle entitlements:
    Query entitlement WHERE:
      - billing_customer_id = target customer
      - kind = 'bundle_unlock'
      - status = 'active'
+     - active_from <= now()
+     - active_to IS NULL OR active_to > now()
    Join to invoice and bundle to check bundle.features for the feature key
 
-4. If found in any source: return true
+3. If found in any source: return true
    Otherwise: return false
 ```
 

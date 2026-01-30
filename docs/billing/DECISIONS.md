@@ -180,6 +180,12 @@ ON plan.price_amount changes:
 OPTIONAL: subscription.locked_price_amount
   - If set, overrides plan.price_amount for renewals
   - Used for special deals, grandfathering
+  - Lifecycle:
+    - SET on subscription creation (to plan.price_amount at time of signup)
+    - PRESERVED through renewals (this is the grandfathering mechanism)
+    - CLEARED on plan change (upgrade or downgrade resets to new plan's current price)
+    - CLEARED on cancel (D18: reactivation uses current plan price)
+    - Admin can SET manually for special deals
 ```
 
 ---

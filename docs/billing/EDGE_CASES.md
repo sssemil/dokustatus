@@ -263,7 +263,7 @@ THEN:
   - subscription.status = 'past_due'
   - current_period.grace_end_at = now() + 7 days
   - entitlement remains active until grace_end_at
-  - Schedule retry in 3 days
+  - Schedule retries per D21: day 0 (initial), day 3 (retry 1), day 7 (retry 2/final)
 ```
 
 ### EC-602: Payment recovered during grace
@@ -828,13 +828,67 @@ THEN:
   - Don't immediately mark uncollectible
 ```
 
-### EC-1606: Entitlement active_to exactly now
+### EC-1606: Initial payment failure on new subscription
+```
+GIVEN: User creates new subscription (no trial, card)
+  AND: Payment intent created and sent to Stripe
+WHEN: Webhook reports payment_intent.payment_failed
+THEN:
+  - payment.status = 'failed'
+  - subscription.status = 'paused' (no grace for initial payment, similar to D01)
+  - NO subscription_period created (never paid)
+  - NO entitlement granted
+  - NO credits granted
+  - User sees: "Payment failed. Please try again."
+```
+
+### EC-1607: Canceled subscription with active entitlement (D04)
+```
+GIVEN: User cancels immediately (subscription.status = 'canceled')
+  AND: User paid for current period
+WHEN: Checking entitlement before period.end_at
+THEN:
+  - entitlement.status = 'active' (they paid for it per D04)
+  - hasActivePlan() returns true
+  - subscription.status remains 'canceled'
+  - At period.end_at: entitlement.status = 'inactive'
+```
+
+### EC-1608: Dispute won with negative credit balance
+```
+GIVEN: User had 1000 credits from subscription period
+  AND: User spent 800 credits (balance = 200)
+  AND: Dispute opened: credits reversed (-1000), balance = -800
+WHEN: Dispute won (merchant wins)
+THEN:
+  - credit_ledger_entry: delta = +1000 (restore original grant)
+  - credits_balance = -800 + 1000 = 200
+  - invoice.status = 'paid', payment.status = 'paid'
+  - subscription_period stays 'revoked' (per D10: no time restoration)
+  - subscription stays 'paused' (user must renew)
+```
+
+### EC-1609: Late payment after grace period expired
+```
+GIVEN: subscription.status = 'paused' (grace expired)
+  AND: Invoice still 'open' (not yet uncollectible)
+WHEN: User updates card and retry succeeds
+THEN:
+  - payment.status = 'paid'
+  - invoice.status = 'paid'
+  - subscription.status = 'active'
+  - New period starts now (per D02, not backdated)
+  - Credits granted for new period
+  - Entitlement restored
+```
+
+### EC-1610: Entitlement active_to exactly now
 ```
 GIVEN: entitlement.active_to = now() (exact millisecond)
 WHEN: hasActivePlan() check
 THEN:
-  - Return false (active_to must be > now, not >=)
-  - Consistent: expired at the second it hits active_to
+  - Return false (active_to must be strictly > now, not >=)
+  - Consistent: expired at the instant it hits active_to
 ```
 
 ---
