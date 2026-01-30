@@ -1997,11 +1997,12 @@ async fn create_webhook_endpoint(
     Path(domain_id): Path<Uuid>,
     Json(payload): Json<CreateWebhookPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let (endpoint, secret) = app_state
         .webhook_use_cases
         .create_endpoint(
+            owner_id,
             domain_id,
             &payload.url,
             payload.description.as_deref(),
@@ -2023,11 +2024,11 @@ async fn list_webhook_endpoints(
     jar: CookieJar,
     Path(domain_id): Path<Uuid>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let endpoints = app_state
         .webhook_use_cases
-        .list_endpoints(domain_id)
+        .list_endpoints(owner_id, domain_id)
         .await?;
 
     let response: Vec<_> = endpoints.iter().map(endpoint_to_response).collect();
@@ -2039,11 +2040,11 @@ async fn get_webhook_endpoint(
     jar: CookieJar,
     Path(params): Path<WebhookPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let endpoint = app_state
         .webhook_use_cases
-        .get_endpoint(params.webhook_id, params.domain_id)
+        .get_endpoint(owner_id, params.webhook_id, params.domain_id)
         .await?;
 
     Ok(Json(endpoint_to_response(&endpoint)))
@@ -2063,13 +2064,14 @@ async fn update_webhook_endpoint(
     Path(params): Path<WebhookPathParams>,
     Json(payload): Json<UpdateWebhookPayload>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let description_ref = payload.description.as_ref().map(|d| d.as_deref());
 
     let endpoint = app_state
         .webhook_use_cases
         .update_endpoint(
+            owner_id,
             params.webhook_id,
             params.domain_id,
             payload.url.as_deref(),
@@ -2087,11 +2089,11 @@ async fn delete_webhook_endpoint(
     jar: CookieJar,
     Path(params): Path<WebhookPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     app_state
         .webhook_use_cases
-        .delete_endpoint(params.webhook_id, params.domain_id)
+        .delete_endpoint(owner_id, params.webhook_id, params.domain_id)
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
@@ -2102,11 +2104,11 @@ async fn rotate_webhook_secret(
     jar: CookieJar,
     Path(params): Path<WebhookPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let new_secret = app_state
         .webhook_use_cases
-        .rotate_secret(params.webhook_id, params.domain_id)
+        .rotate_secret(owner_id, params.webhook_id, params.domain_id)
         .await?;
 
     Ok(Json(serde_json::json!({ "secret": new_secret })))
@@ -2117,11 +2119,11 @@ async fn test_webhook_endpoint(
     jar: CookieJar,
     Path(params): Path<WebhookPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let event = app_state
         .webhook_use_cases
-        .send_test_event(params.webhook_id, params.domain_id)
+        .send_test_event(owner_id, params.webhook_id, params.domain_id)
         .await?;
 
     Ok((
@@ -2139,14 +2141,14 @@ async fn list_endpoint_deliveries(
     Path(params): Path<WebhookPathParams>,
     Query(pagination): Query<PaginationParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let limit = pagination.limit.unwrap_or(50).min(100);
     let offset = pagination.offset.unwrap_or(0);
 
     let deliveries = app_state
         .webhook_use_cases
-        .list_deliveries_for_endpoint(params.webhook_id, params.domain_id, limit, offset)
+        .list_deliveries_for_endpoint(owner_id, params.webhook_id, params.domain_id, limit, offset)
         .await?;
 
     Ok(Json(deliveries))
@@ -2181,14 +2183,14 @@ async fn list_webhook_events(
     Path(domain_id): Path<Uuid>,
     Query(query): Query<WebhookEventsQuery>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let limit = query.limit.unwrap_or(50).min(100);
     let offset = query.offset.unwrap_or(0);
 
     let events = app_state
         .webhook_use_cases
-        .list_events(domain_id, query.event_type.as_deref(), limit, offset)
+        .list_events(owner_id, domain_id, query.event_type.as_deref(), limit, offset)
         .await?;
 
     Ok(Json(events))
@@ -2199,11 +2201,11 @@ async fn get_webhook_event(
     jar: CookieJar,
     Path(params): Path<WebhookEventPathParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let event = app_state
         .webhook_use_cases
-        .get_event(params.event_id, params.domain_id)
+        .get_event(owner_id, params.event_id, params.domain_id)
         .await?;
 
     Ok(Json(event))
@@ -2215,14 +2217,14 @@ async fn list_event_deliveries(
     Path(params): Path<WebhookEventPathParams>,
     Query(pagination): Query<PaginationParams>,
 ) -> AppResult<impl IntoResponse> {
-    let (_, _owner_id) = current_user(&jar, &app_state).await?;
+    let (_, owner_id) = current_user(&jar, &app_state).await?;
 
     let limit = pagination.limit.unwrap_or(50).min(100);
     let offset = pagination.offset.unwrap_or(0);
 
     let deliveries = app_state
         .webhook_use_cases
-        .list_deliveries_for_event(params.event_id, params.domain_id, limit, offset)
+        .list_deliveries_for_event(owner_id, params.event_id, params.domain_id, limit, offset)
         .await?;
 
     Ok(Json(deliveries))

@@ -221,16 +221,39 @@ impl WebhookUseCases {
     }
 
     // ========================================================================
+    // Domain Ownership Verification
+    // ========================================================================
+
+    async fn verify_domain_ownership(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<()> {
+        let domain = self
+            .domain_repo
+            .get_by_id(domain_id)
+            .await?
+            .ok_or(AppError::NotFound)?;
+        if domain.owner_end_user_id != Some(owner_id) {
+            return Err(AppError::Forbidden);
+        }
+        Ok(())
+    }
+
+    // ========================================================================
     // Endpoint CRUD
     // ========================================================================
 
     pub async fn create_endpoint(
         &self,
+        owner_id: Uuid,
         domain_id: Uuid,
         url: &str,
         description: Option<&str>,
         event_types: Option<Vec<String>>,
     ) -> AppResult<(WebhookEndpointProfile, String)> {
+        self.verify_domain_ownership(owner_id, domain_id).await?;
+
         let count = self.endpoint_repo.count_by_domain(domain_id).await?;
         if count >= MAX_WEBHOOK_ENDPOINTS_PER_DOMAIN {
             return Err(AppError::InvalidInput(format!(
@@ -259,15 +282,22 @@ impl WebhookUseCases {
         Ok((endpoint, secret_plaintext))
     }
 
-    pub async fn list_endpoints(&self, domain_id: Uuid) -> AppResult<Vec<WebhookEndpointProfile>> {
+    pub async fn list_endpoints(
+        &self,
+        owner_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<Vec<WebhookEndpointProfile>> {
+        self.verify_domain_ownership(owner_id, domain_id).await?;
         self.endpoint_repo.list_by_domain(domain_id).await
     }
 
     pub async fn get_endpoint(
         &self,
+        owner_id: Uuid,
         endpoint_id: Uuid,
         domain_id: Uuid,
     ) -> AppResult<WebhookEndpointProfile> {
+        self.verify_domain_ownership(owner_id, domain_id).await?;
         let endpoint = self
             .endpoint_repo
             .get_by_id(endpoint_id)
@@ -281,6 +311,7 @@ impl WebhookUseCases {
 
     pub async fn update_endpoint(
         &self,
+        owner_id: Uuid,
         endpoint_id: Uuid,
         domain_id: Uuid,
         url: Option<&str>,
@@ -288,7 +319,7 @@ impl WebhookUseCases {
         event_types: Option<Vec<String>>,
         is_active: Option<bool>,
     ) -> AppResult<WebhookEndpointProfile> {
-        let existing = self.get_endpoint(endpoint_id, domain_id).await?;
+        let existing = self.get_endpoint(owner_id, endpoint_id, domain_id).await?;
 
         if let Some(new_url) = url {
             self.validate_url(new_url, existing.domain_id).await?;
@@ -309,13 +340,23 @@ impl WebhookUseCases {
             .await
     }
 
-    pub async fn delete_endpoint(&self, endpoint_id: Uuid, domain_id: Uuid) -> AppResult<()> {
-        self.get_endpoint(endpoint_id, domain_id).await?;
+    pub async fn delete_endpoint(
+        &self,
+        owner_id: Uuid,
+        endpoint_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<()> {
+        self.get_endpoint(owner_id, endpoint_id, domain_id).await?;
         self.endpoint_repo.delete(endpoint_id).await
     }
 
-    pub async fn rotate_secret(&self, endpoint_id: Uuid, domain_id: Uuid) -> AppResult<String> {
-        self.get_endpoint(endpoint_id, domain_id).await?;
+    pub async fn rotate_secret(
+        &self,
+        owner_id: Uuid,
+        endpoint_id: Uuid,
+        domain_id: Uuid,
+    ) -> AppResult<String> {
+        self.get_endpoint(owner_id, endpoint_id, domain_id).await?;
         let (secret_plaintext, secret_encrypted) = self.generate_secret()?;
         self.endpoint_repo
             .update_secret(endpoint_id, &secret_encrypted)
@@ -378,10 +419,11 @@ impl WebhookUseCases {
 
     pub async fn send_test_event(
         &self,
+        owner_id: Uuid,
         endpoint_id: Uuid,
         domain_id: Uuid,
     ) -> AppResult<WebhookEventProfile> {
-        self.get_endpoint(endpoint_id, domain_id).await?;
+        self.get_endpoint(owner_id, endpoint_id, domain_id).await?;
 
         let data = WebhookTestPayload {
             endpoint_id: endpoint_id.to_string(),
@@ -397,11 +439,13 @@ impl WebhookUseCases {
 
     pub async fn list_events(
         &self,
+        owner_id: Uuid,
         domain_id: Uuid,
         event_type_filter: Option<&str>,
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<WebhookEventProfile>> {
+        self.verify_domain_ownership(owner_id, domain_id).await?;
         self.event_repo
             .list_by_domain(domain_id, event_type_filter, limit, offset)
             .await
@@ -409,9 +453,11 @@ impl WebhookUseCases {
 
     pub async fn get_event(
         &self,
+        owner_id: Uuid,
         event_id: Uuid,
         domain_id: Uuid,
     ) -> AppResult<WebhookEventProfile> {
+        self.verify_domain_ownership(owner_id, domain_id).await?;
         let event = self
             .event_repo
             .get_by_id(event_id)
@@ -425,12 +471,13 @@ impl WebhookUseCases {
 
     pub async fn list_deliveries_for_event(
         &self,
+        owner_id: Uuid,
         event_id: Uuid,
         domain_id: Uuid,
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<WebhookDeliveryProfile>> {
-        self.get_event(event_id, domain_id).await?;
+        self.get_event(owner_id, event_id, domain_id).await?;
         self.delivery_repo
             .list_by_event(event_id, limit, offset)
             .await
@@ -438,12 +485,13 @@ impl WebhookUseCases {
 
     pub async fn list_deliveries_for_endpoint(
         &self,
+        owner_id: Uuid,
         endpoint_id: Uuid,
         domain_id: Uuid,
         limit: i64,
         offset: i64,
     ) -> AppResult<Vec<WebhookDeliveryProfile>> {
-        self.get_endpoint(endpoint_id, domain_id).await?;
+        self.get_endpoint(owner_id, endpoint_id, domain_id).await?;
         self.delivery_repo
             .list_by_endpoint(endpoint_id, limit, offset)
             .await
